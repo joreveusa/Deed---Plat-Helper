@@ -7,7 +7,10 @@
   <meta http-equiv="Expires" content="0">
   <title>Deed & Plat Helper</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=1774890000">
+  <link rel="stylesheet" href="style.css?v=1774895000">
+  <!-- Leaflet map for KML parcel picker -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 </head>
 <body>
   <!-- TOP NAVIGATION BAR -->
@@ -184,8 +187,22 @@
          <div class="s3-three-col mt-3">
            <!-- Col 1: Local Cabinets -->
            <div class="flex-col">
-              <h3 class="section-heading">📁 Local Cabinet Plats <span class="badge badge-local">Cabinet Scans</span></h3>
-              <div class="glass-card plat-list-card flex-1" id="s3LocalPlats">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:0">
+                <h3 class="section-heading" style="margin-bottom:0">📁 Local Cabinet Plats <span class="badge badge-local">Cabinet Scans</span></h3>
+                <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+                  <label for="s3CabinetSelect" style="font-size:11px;color:var(--text3);white-space:nowrap;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Cabinet:</label>
+                  <select id="s3CabinetSelect" class="inp" style="padding:4px 8px;font-size:12px;font-family:'JetBrains Mono',monospace;font-weight:700;width:auto;min-width:110px;height:28px;border-radius:6px;cursor:pointer" onchange="onCabinetSelectChange(this.value)">
+                    <option value="">Auto</option>
+                    <option value="A">Cabinet A</option>
+                    <option value="B">Cabinet B</option>
+                    <option value="C">Cabinet C</option>
+                    <option value="D">Cabinet D</option>
+                    <option value="E">Cabinet E</option>
+                    <option value="F">Cabinet F</option>
+                  </select>
+                </div>
+              </div>
+              <div class="glass-card plat-list-card flex-1" id="s3LocalPlats" style="margin-top:6px">
                 <div class="loading-state">Scanning cabinets...</div>
               </div>
            </div>
@@ -231,11 +248,16 @@
           <div class="row-layout justify-between">
             <div>
               <h2 class="card-title">Discover Adjoiners</h2>
-              <p class="card-desc">Auto-extract neighboring property owners from the saved plat and online records.</p>
+              <p class="card-desc">Auto-extract neighboring property owners from the saved plat and online records. Or pick visually from the KML parcel map.</p>
             </div>
-            <button class="btn btn-primary" id="btnDiscoverAdjoiners" onclick="runAdjoinerDiscovery()">
-              ⚡ Run Discovery Scan
-            </button>
+            <div class="row-layout gap-2">
+              <button class="btn btn-outline" id="btnKmlMapPicker" onclick="showKmlMapPicker()" title="Pick adjoiners visually on a parcel map">
+                🗺️ Map Picker
+              </button>
+              <button class="btn btn-primary" id="btnDiscoverAdjoiners" onclick="runAdjoinerDiscovery()">
+                ⚡ Run Discovery Scan
+              </button>
+            </div>
           </div>
         </div>
 
@@ -387,7 +409,7 @@
     </div>
   </footer>
 
-  <!-- GLOBAL CABINET BROWSER MODAL (Reused from previous) -->
+  <!-- GLOBAL CABINET BROWSER MODAL -->
   <div class="modal-overlay hidden" id="cabinetOverlay" onclick="if(event.target===this) closeCabinetBrowser()">
     <div class="modal glass-card" id="cabinetPanel">
       <div class="modal-header">
@@ -412,6 +434,89 @@
         </div>
         <div id="cabinetBody" class="p-3">
           <!-- Populated by JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- KML MAP PICKER MODAL -->
+  <div class="modal-overlay hidden" id="kmlMapPickerOverlay" onclick="if(event.target===this) closeKmlMapPicker()">
+    <div class="glass-card" id="kmlMapPickerPanel" style="
+      position:fixed; top:5vh; left:4vw; right:4vw; bottom:5vh;
+      display:flex; flex-direction:column; z-index:1100;
+      border-radius:16px; overflow:hidden; box-shadow:0 24px 80px rgba(0,0,0,.7);
+    ">
+      <!-- Header -->
+      <div class="modal-header" style="flex-shrink:0; padding:14px 20px">
+        <div style="display:flex; align-items:center; gap:12px">
+          <span style="font-size:22px">🗺️</span>
+          <div>
+            <div style="font-size:16px;font-weight:800;font-family:'Outfit',sans-serif">KML Parcel Map Picker</div>
+            <div style="font-size:11px;color:var(--text3)">Click a parcel to inspect it. Use the buttons to add adjoiners or mark the client property.</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
+          <input id="kmlMapSearch" class="inp" style="width:200px;font-size:12px;padding:6px 10px" placeholder="Search owner name..." oninput="kmlMapOwnerSearch(this.value)">
+          <button class="btn btn-outline btn-sm" onclick="kmlMapResetView()" title="Reset map zoom">⟳ Reset</button>
+          <button class="close-btn" onclick="closeKmlMapPicker()">✕</button>
+        </div>
+      </div>
+
+      <!-- Toolbar -->
+      <div id="kmlMapToolbar" style="
+        flex-shrink:0; background:var(--bg3);
+        border-bottom:1px solid var(--border);
+        display:flex; align-items:center; gap:10px; padding:8px 16px; flex-wrap:wrap;
+      ">
+        <span style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Legend:</span>
+        <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px">
+          <span style="width:14px;height:14px;background:#e3c55a;border-radius:3px;opacity:.8;display:inline-block"></span> Client / Highlighted
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px">
+          <span style="width:14px;height:14px;background:#b080e0;border-radius:3px;opacity:.7;display:inline-block"></span> On Research Board
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px">
+          <span style="width:14px;height:14px;background:rgba(79,172,254,.5);border-radius:3px;display:inline-block"></span> Other Parcel
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px">
+          <span style="width:14px;height:14px;background:#56d3a0;border-radius:3px;display:inline-block;opacity:.9"></span> Selected
+        </span>
+        <div id="kmlMapStatus" style="margin-left:auto;font-size:11px;color:var(--text3)">Loading map data...</div>
+      </div>
+
+      <!-- Body: map + info panel side by side -->
+      <div style="flex:1;display:flex;overflow:hidden;min-height:0">
+        <!-- Leaflet map -->
+        <div id="kmlLeafletMap" style="flex:1;background:#0d1117"></div>
+
+        <!-- Info panel -->
+        <div id="kmlMapInfoPanel" style="
+          width:300px;flex-shrink:0;
+          background:var(--bg2);border-left:1px solid var(--border);
+          display:flex;flex-direction:column;overflow:hidden;
+        ">
+          <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:8px">Selected Parcel</div>
+            <div id="kmlInfoOwner" style="font-size:15px;font-weight:700;color:var(--text1);margin-bottom:6px">—</div>
+            <div id="kmlInfoDetails" style="font-size:11px;color:var(--text3);line-height:1.7">Click a parcel on the map.</div>
+          </div>
+          <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px">
+            <button id="btnKmlAddAdjoiner" class="btn btn-primary w-full" onclick="kmlAddSelectedAsAdjoiner()" disabled
+              style="font-size:13px;padding:10px">
+              + Add as Adjoiner
+            </button>
+            <button id="btnKmlMarkClient" class="btn btn-outline w-full" onclick="kmlMarkSelectedAsClient()" disabled
+              style="font-size:12px;padding:8px;border-color:var(--accent2);color:var(--accent2)">
+              ★ Mark as Client Parcel
+            </button>
+          </div>
+          <!-- Recently added list -->
+          <div style="flex:1;overflow-y:auto;padding:0 16px 12px">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px">Added This Session</div>
+            <div id="kmlMapAddedList" style="display:flex;flex-direction:column;gap:4px">
+              <div style="font-size:11px;color:var(--text3);font-style:italic">None yet</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -510,7 +615,7 @@
       }, 2000);
     });
   </script>
-  <script src="app.js?v=1774891000" onerror="
+  <script src="app.js?v=1774895000" onerror="
     var box = document.createElement('div');
     box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a0505;border-bottom:2px solid #ff3333;color:#ff7b72;font-family:monospace;font-size:14px;padding:16px;text-align:center';
     box.textContent = '❌ Failed to load app.js - server may be down';

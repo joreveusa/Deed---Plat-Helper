@@ -1109,15 +1109,117 @@ def parse_cabinet_refs(detail: dict) -> list[dict]:
     return refs
 
 
+def _extract_target_cabinets(detail: dict, kml_matches: list = None) -> tuple[list[str], str]:
+    """
+    Determine which cabinet letter(s) to search for a plat, using:
+
+    Priority 1 — KML matches already returned by /find-plat-kml.
+                  Extract cab_refs from those hits (most reliable since
+                  the KML PLAT field is tied to the parcel, not the owner name).
+
+    Priority 2 — Deed Location (book/page) → query KML index directly.
+                  The recording book/page is a stable reference that doesn't
+                  change with ownership, unlike owner names on deeds/KML.
+
+    Priority 3 — Cabinet refs embedded in the deed text itself (e.g. "Cabinet C-191A").
+
+    Fallback    — Search all cabinets if none of the above yield a cabinet letter.
+
+    Returns (cabinet_letters, reason_string) so callers can log / display why.
+
+    NOTE: Name-based KML targeting is intentionally skipped — deeds and KML may
+    reflect different eras of ownership, making name matches unreliable for targeting.
+    """
+    all_cabs = list(CABINET_FOLDERS.keys())
+
+    # ── Priority 1: cab_refs from KML matches already resolved ─────────────────
+    if kml_matches:
+        letters = set()
+        for hit in kml_matches:
+            for cr in hit.get("cab_refs", []):
+                letter = cr.split("-")[0].upper()
+                if letter in CABINET_FOLDERS:
+                    letters.add(letter)
+        if letters:
+            return sorted(letters), f"KML parcel cab_refs → Cabinet(s) {', '.join(sorted(letters))}"
+
+    # ── Priority 2: deed Location book/page → KML index lookup ─────────────────
+    location = detail.get("Location", "")
+    if location:
+        m = re.match(r'^[A-Za-z]?(\d+)-(\d+)', location.strip())
+        if m:
+            book_num = m.group(1)
+            page_num = m.group(2)
+            idx = xml_processor._cached_index
+            if idx is None:
+                try:
+                    survey = get_survey_data_path()
+                    idx = xml_processor.load_index(survey)
+                except Exception:
+                    idx = None
+            if idx:
+                hits = xml_processor.search_parcels_in_index(idx, book=book_num, page=page_num, limit=10)
+                letters = set()
+                for h in hits:
+                    for cr in h.get("cab_refs", []):
+                        letter = cr.split("-")[0].upper()
+                        if letter in CABINET_FOLDERS:
+                            letters.add(letter)
+                if letters:
+                    return sorted(letters), f"Deed location {book_num}-{page_num} → KML → Cabinet(s) {', '.join(sorted(letters))}"
+
+    # ── Priority 3: cabinet refs directly in deed text ──────────────────────────
+    deed_refs = parse_cabinet_refs(detail)
+    if deed_refs:
+        letters = list(dict.fromkeys(r["cabinet"] for r in deed_refs if r["cabinet"] in CABINET_FOLDERS))
+        if letters:
+            return letters, f"Deed text ref(s) → Cabinet(s) {', '.join(letters)}"
+
+    # ── Fallback: search all ─────────────────────────────────────────────────────
+    return all_cabs, "No cabinet target found — searching all cabinets"
+
+
+
+def _extract_cabinet_display_name(filename: str) -> str:
+    """
+    Strip the leading numeric index prefix from a cabinet filename to expose
+    just the owner name portion, which is the only meaningful part.
+
+    Filename pattern:  195554.001   Adela Rael.PDF
+                       ^^^^^^^^^^   ^^^^^^^^^^^^^^^
+                       file index   owner name  ← this is what we want
+
+    Examples:
+      '195554.001   Adela Rael.PDF'  → 'Adela Rael'
+      '100191.001 Rael Adela.pdf'    → 'Rael Adela'
+      '003721 Torres C-191A.pdf'     → 'Torres C-191A'
+      'Rael Adela.PDF'               → 'Rael Adela'   (no prefix — unchanged)
+    """
+    # Strip extension
+    stem = Path(filename).stem.strip()
+    # Remove leading numeric block:  digits, optional dots/digits, optional spaces
+    # Pattern: one or more digit groups separated by dots (e.g. 195554.001 or 003721)
+    clean = re.sub(r'^\d+(?:\.\d+)?\s+', '', stem).strip()
+    return clean or stem   # fall back to full stem if nothing left
+
+
 def search_local_cabinet(cabinet: str, doc_num: str,
                           grantor: str = "", grantee: str = "") -> list[dict]:
     """
-    Walk the cabinet folder and return files whose name matches `doc_num`.
-    Three search strategies:
-      A) Leading numeric prefix match  (Cabinet A–E: "100191.001 Name.PDF")
-      B) Cabinet page ref in filename  (Cabinet F:   "L3721 Name F-101A.pdf")
-      C) Name-based match — last name of grantor or grantee appears in filename
-         (fallback when no doc_num reference is known)
+    Walk the cabinet folder and return files matching either an owner name
+    or a cabinet page-ref (e.g. C-191A embedded in the filename).
+
+    Cabinet files follow the naming convention:
+        195554.001   Adela Rael.PDF
+                     ^^^^^^^^^^^^^^  ← owner name (only relevant part)
+
+    PRIMARY  — Name-based:  token appears in the filename's name portion.
+               e.g. "Rael"     matches "195554.001   Adela Rael.PDF"
+               e.g. "Adela Rael" matches "195554.001   Adela Rael.PDF"
+    SECONDARY — Page-ref:   cabinet letter + doc_num found in filename,
+               e.g. "C-191A" matches "L3721 Torres C-191A.pdf".
+
+    At least one of doc_num or grantor/grantee must be provided.
     """
     folder_name = CABINET_FOLDERS.get(cabinet)
     if not folder_name:
@@ -1126,118 +1228,331 @@ def search_local_cabinet(cabinet: str, doc_num: str,
     if not cab_dir.exists():
         return []
 
-    results = []
-    doc_clean    = (doc_num or "").strip()
-    doc_num_only = re.sub(r'[A-Za-z]+$', '', doc_clean) if doc_clean else ""
+    results   = []
+    doc_clean = (doc_num or "").strip()
 
-    # Page-ref pattern: e.g. "C-191A" or "F-191A"
+    # Pattern for cabinet page-ref embedded in filename, e.g. "C-191A" or "C 191A"
     page_ref_pat = re.compile(
-        r'(?<![A-Za-z])' + re.escape(cabinet) + r'[-\s]?' + re.escape(doc_clean) + r'(?![A-Za-z0-9])',
+        r'(?<![A-Za-z])' + re.escape(cabinet) + r'[\-\s]?' + re.escape(doc_clean) + r'(?![A-Za-z0-9])',
         re.I
     ) if doc_clean else None
 
-    # Strategy C: extract last names for name-based matching
-    name_tokens = set()
+    # Name tokens — accept either "last" from "Last, First" format OR full raw token
+    name_tokens = []
     for person in [grantor, grantee]:
-        if person:
-            last = person.split(',')[0].strip()
-            if last and len(last) >= 3:
-                name_tokens.add(last.lower())
+        if not person:
+            continue
+        person = person.strip()
+        # Add the full token (handles "Adela Rael", "RAEL UNITY LLC", etc.)
+        if len(person) >= 3 and person.lower() not in [t.lower() for t in name_tokens]:
+            name_tokens.append(person)
+        # Also add last-name portion from "Last, First" format
+        last = person.split(',')[0].strip()
+        if last and last != person and len(last) >= 3 and last.lower() not in [t.lower() for t in name_tokens]:
+            name_tokens.append(last)
+        # Add individual words >= 4 chars
+        for w in re.split(r'[\s,]+', person):
+            if len(w) >= 4 and w.lower() not in [t.lower() for t in name_tokens]:
+                name_tokens.append(w)
+
+    if not doc_clean and not name_tokens:
+        return []   # nothing to search with
 
     for f in cab_dir.iterdir():
         if not f.is_file() or f.suffix.lower() not in ('.pdf',):
             continue
-        name = f.name
-        name_lower = name.lower()
+        fname        = f.name
+        fname_lower  = fname.lower()
+        display_name = _extract_cabinet_display_name(fname)
+        name_lower   = display_name.lower()   # just the owner-name portion
 
-        matched = False
         match_strategy = ""
+        tok_len        = 0
 
-        # Strategy A: leading doc-number prefix
-        if doc_clean:
-            m_num    = re.match(r'^(\d+)', name)
-            m_letter = re.match(r'^[A-Za-z](\d+)', name)
-            prefix   = (m_num or m_letter)
-            if prefix:
-                p = prefix.group(1)
-                if p == doc_num_only or p.lstrip('0') == doc_num_only.lstrip('0'):
-                    matched = True
-                    match_strategy = "doc_prefix"
+        # PRIMARY: token appears anywhere in filename (both full and name-stripped)
+        for tok in name_tokens:
+            tok_l = tok.lower()
+            if tok_l in fname_lower or tok_l in name_lower:
+                match_strategy = "name_match"
+                tok_len = len(tok)
+                break
 
-        # Strategy B: cabinet page reference embedded in filename
-        if not matched and page_ref_pat and page_ref_pat.search(name):
-            matched = True
+        # SECONDARY: cabinet page-ref like "C-191A" in filename
+        if not match_strategy and page_ref_pat and page_ref_pat.search(fname):
             match_strategy = "page_ref"
 
-        # Strategy C: name-based match
-        if not matched and name_tokens:
-            for tok in name_tokens:
-                if tok in name_lower:
-                    matched = True
-                    match_strategy = "name_match"
-                    _tok_len = len(tok)   # longer token = more specific match
-                    break
-
-        if matched:
+        if match_strategy:
             results.append({
-                "file":     f.name,
-                "path":     str(f),
-                "cabinet":  cabinet,
-                "doc":      doc_clean,
-                "size_kb":  round(f.stat().st_size / 1024),
-                "strategy": match_strategy,
-                "_tok_len": locals().get('_tok_len', 0),
+                "file":         fname,
+                "display_name": display_name,   # e.g. "Adela Rael"
+                "path":         str(f),
+                "cabinet":      cabinet,
+                "doc":          doc_clean,
+                "size_kb":      round(f.stat().st_size / 1024),
+                "strategy":     match_strategy,
+                "_tok_len":     tok_len,
             })
 
-    # Sort: doc_prefix/page_ref first; within name_match, longer token = more specific
-    results.sort(key=lambda r: (0 if r['strategy'] in ('doc_prefix','page_ref') else 1,
+    # Sort: name_match (longer token = more specific) first; page_ref after
+    results.sort(key=lambda r: (0 if r['strategy'] == 'name_match' else 1,
                                 -r.get('_tok_len', 0)))
     return results
+
+
 
 
 @app.route("/api/find-plat", methods=["POST"])
 def api_find_plat():
     """
-    Given a deed's detail dict (already fetched), find the related plat(s).
-    Strategy:
-      1. Parse CAB X-NNN references → search local cabinet folders
-      2. Search online records for SURVEY / PLAT type docs matching same grantor or location
-      3. Cross-reference KML parcel index by name, book/page, cabinet refs
+    INSTANT: Returns parsed cabinet refs from deed text — zero I/O.
+    All slow I/O work is split into separate async endpoints:
+      /api/find-plat-kml   — KML parcel index lookup
+      /api/find-plat-local — local cabinet folder scan (name-based primary)
+      /api/find-plat-online— online survey record search
     """
     try:
-        data       = request.get_json()
-        detail     = data.get("detail", {})
-        grantor    = data.get("grantor", "") or detail.get("Grantor", "")
-        grantee    = data.get("grantee", "") or detail.get("Grantee", "")
-        location   = data.get("location", "") or detail.get("Location", "")
+        data   = request.get_json() or {}
+        detail = data.get("detail", {})
+        cab_refs_list = parse_cabinet_refs(detail)
+        return jsonify({
+            "success":      True,
+            "cabinet_refs": cab_refs_list,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
 
-        # ── 1. Local cabinet search ──────────────────────────────────────
-        cab_refs   = parse_cabinet_refs(detail)
-        local_hits = []
-        for ref in cab_refs:
-            hits = search_local_cabinet(ref["cabinet"], ref["doc"], grantor, grantee)
-            for h in hits:
-                h["ref"]    = ref["raw"]
-                h["source"] = "local"
-            local_hits.extend(hits)
-        # If no hits from explicit refs, try name-only search across all cabinets
-        if not local_hits and (grantor or grantee):
-            for cab_letter in CABINET_FOLDERS:
-                hits = search_local_cabinet(cab_letter, "", grantor, grantee)
-                for h in hits:
-                    h["ref"]    = "(name match)"
-                    h["source"] = "local"
-                local_hits.extend(hits[:5])  # limit per cabinet
 
-        # ── 2. Online survey/plat search ─────────────────────────────────
-        online_hits = []
+@app.route("/api/find-plat-kml", methods=["POST"])
+def api_find_plat_kml():
+    """
+    KML parcel index cross-reference.
+    Requires the index to be built first (via /api/xml/build-index).
+    """
+    try:
+        data   = request.get_json() or {}
+        detail = data.get("detail", {})
+        kml_matches = []
+        idx = xml_processor._cached_index
+        if idx is None:
+            survey = get_survey_data_path()
+            idx    = xml_processor.load_index(survey)
+        if idx:
+            survey      = get_survey_data_path()
+            kml_results = xml_processor.cross_reference_deed(survey, detail)
+            for p in kml_results:
+                kml_matches.append({
+                    "owner":        p.get("owner", ""),
+                    "upc":          p.get("upc", ""),
+                    "plat":         p.get("plat", ""),
+                    "book":         p.get("book", ""),
+                    "page":         p.get("page", ""),
+                    "cab_refs":     p.get("cab_refs", []),
+                    "cab_refs_str": ", ".join(p.get("cab_refs", [])) or p.get("plat", ""),
+                    "centroid":     p.get("centroid"),
+                    "match_reason": p.get("_match_reason", ""),
+                    "local_files":  [],
+                    "source":       "kml",
+                })
+        return jsonify({"success": True, "kml_matches": kml_matches})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e), "kml_matches": []})
+
+
+@app.route("/api/find-plat-local", methods=["POST"])
+def api_find_plat_local():
+    """
+    Targeted cabinet scan — locates plat PDFs by finding the correct cabinet
+    first via KML parcel data or deed book/page, then scanning only there.
+
+    Search priority:
+      1. KML kml_matches.cab_refs  → target specific cabinet letter(s)
+      2. Deed Location book/page   → KML index lookup → cabinet letter(s)
+      3. Deed text cabinet refs    → cabinet letter(s) from deed itself
+      4. Fallback                  → all cabinets (same as before)
+
+    Within targeted cabinet(s), files are matched by:
+      a. Exact cab_ref string  (e.g. "C-191A" in filename)   — most precise
+      b. Client name token     (job subject name in filename) — owner-aware
+      c. Deed grantor/grantee name in filename               — secondary
+    """
+    try:
+        data           = request.get_json() or {}
+        detail         = data.get("detail", {})
+        grantor        = data.get("grantor", "") or detail.get("Grantor", "")
+        grantee        = data.get("grantee", "") or detail.get("Grantee", "")
+        client_name    = data.get("client_name", "")
+        kml_matches    = data.get("kml_matches", [])   # may be populated if frontend chains requests
+        forced_cabinets = [c.upper() for c in data.get("forced_cabinets", []) if c]
+
+        # ── Determine which cabinet(s) to search ────────────────────────────────
+        if forced_cabinets:
+            # User explicitly selected a cabinet from the dropdown — override everything
+            target_cabs    = forced_cabinets
+            targeting_reason = f"Manual selection: Cabinet{'s' if len(forced_cabinets) > 1 else ''} {', '.join(forced_cabinets)}"
+        else:
+            target_cabs, targeting_reason = _extract_target_cabinets(detail, kml_matches)
+        print(f"[local] {targeting_reason}", flush=True)
+
+
+        local_hits       = []
+        seen_local_paths = set()
+
+        # ── Build cab_ref → doc map from KML hits for precise filename matching ─
+        # e.g. kml says "C-191A" → we can look for "191A" in Cabinet C filenames
+        kml_cab_refs = {}   # {"C": ["191A", "84"], ...}
+        for hit in kml_matches:
+            for cr in hit.get("cab_refs", []):
+                parts = cr.split("-", 1)
+                if len(parts) == 2:
+                    letter, doc = parts[0].upper(), parts[1]
+                    kml_cab_refs.setdefault(letter, [])
+                    if doc not in kml_cab_refs[letter]:
+                        kml_cab_refs[letter].append(doc)
+
+        # ── Also pull cab_refs from deed text for the targeted cabinets ─────────
+        deed_refs = parse_cabinet_refs(detail)
+        deed_cab_refs = {}  # {"C": ["191A"], ...}
+        for r in deed_refs:
+            deed_cab_refs.setdefault(r["cabinet"], [])
+            if r["doc"] not in deed_cab_refs[r["cabinet"]]:
+                deed_cab_refs[r["cabinet"]].append(r["doc"])
+
+        # ── Scan each target cabinet ─────────────────────────────────────────────
+        # NOTE: client_name (e.g. "garza, veronica") is the survey CLIENT, not the
+        # property owner whose name appears in cabinet filenames (e.g. "Rael Adela.pdf").
+        # Do NOT use client_name for filename matching — it causes false hits.
+        # Name tokens come from: KML owner/PLAT field, then deed grantor/grantee.
+        for cab_letter in target_cabs:
+            if not CABINET_FOLDERS.get(cab_letter):
+                continue
+
+            # a) Exact cab_ref match from KML or deed text
+            #    NOTE: Most cabinet files do NOT embed the cabinet ref in their
+            #    filename (e.g. files are named "Rael Adela.pdf", not "C-191A.pdf").
+            #    kml_cab_refs are used exclusively for cabinet *targeting* above;
+            #    name-based strategies below are what actually find the file.
+            for doc in kml_cab_refs.get(cab_letter, []):
+                try:
+                    for h in search_local_cabinet(cab_letter, doc, "", ""):
+                        if h["path"] not in seen_local_paths:
+                            seen_local_paths.add(h["path"])
+                            h["source"]   = "local"
+                            h["ref"]      = f"{cab_letter}-{doc}"
+                            h["strategy"] = "kml_cab_ref"
+                            h["_tok_len"] = 200
+                            local_hits.append(h)
+                except Exception:
+                    pass
+
+            for doc in deed_cab_refs.get(cab_letter, []):
+                try:
+                    for h in search_local_cabinet(cab_letter, doc, "", ""):
+                        if h["path"] not in seen_local_paths:
+                            seen_local_paths.add(h["path"])
+                            h["source"]   = "local"
+                            h["ref"]      = f"{cab_letter}-{doc}"
+                            h["strategy"] = "deed_cab_ref"
+                            h["_tok_len"] = 150
+                            local_hits.append(h)
+                except Exception:
+                    pass
+
+            # b) KML owner name — the current owner whose name IS on cabinet files.
+            #    e.g. KML parcel owner = "ADELA RAEL" → matches "Rael Adela.pdf"
+            for hit in kml_matches:
+                owner = hit.get("owner", "").strip()
+                if not owner:
+                    continue
+                # Try full owner string, then each word >= 4 chars
+                owner_tokens = [owner]
+                for w in re.split(r'[\s,]+', owner):
+                    if len(w) >= 4 and w not in owner_tokens:
+                        owner_tokens.append(w)
+                for tok in owner_tokens:
+                    try:
+                        for h in search_local_cabinet(cab_letter, "", tok, ""):
+                            if h["path"] not in seen_local_paths:
+                                seen_local_paths.add(h["path"])
+                                h["source"]   = "local"
+                                h["ref"]      = "kml_owner"
+                                h["strategy"] = "kml_cab_ref"   # top-priority display
+                                h["_tok_len"] = len(tok) + 190
+                                local_hits.append(h)
+                    except Exception:
+                        pass
+
+            # b2) KML PLAT field name tokens — secondary name-based strategy.
+            #     Cabinet filenames (e.g. "Rael Adela.pdf") do NOT contain
+            #     cabinet refs, so we strip the ref prefix from the KML PLAT
+            #     string and use the remaining name for matching.
+            #     Example: "C-191-A ADELA RAEL" → tokens ["ADELA RAEL", "ADELA", "RAEL"]
+            for hit in kml_matches:
+                plat_tokens = _extract_plat_name_tokens(hit.get("plat", ""))
+                for tok in plat_tokens:
+                    try:
+                        for h in search_local_cabinet(cab_letter, "", tok, ""):
+                            if h["path"] not in seen_local_paths:
+                                seen_local_paths.add(h["path"])
+                                h["source"]   = "local"
+                                h["ref"]      = "kml_plat_name"
+                                h["strategy"] = "kml_cab_ref"   # top-priority display
+                                h["_tok_len"] = len(tok) + 180  # rank below owner hits
+                                local_hits.append(h)
+                    except Exception:
+                        pass
+
+            # c) Grantor/grantee name from deed — lowest priority, may not match
+            #    if ownership has changed since the deed was recorded.
+            if grantor or grantee:
+                try:
+                    for h in search_local_cabinet(cab_letter, "", grantor, grantee):
+                        if h["path"] not in seen_local_paths:
+                            seen_local_paths.add(h["path"])
+                            h["source"] = "local"
+                            h["ref"]    = "name_search"
+                            local_hits.append(h)
+                except Exception:
+                    pass
+
+        # ── Sort: kml_cab_ref → deed_cab_ref → client_name → name_match ─────────
+        strategy_order = {"kml_cab_ref": 0, "deed_cab_ref": 1, "client_name": 2,
+                          "name_match": 3, "page_ref": 4}
+        local_hits.sort(key=lambda r: (
+            strategy_order.get(r.get("strategy", ""), 9),
+            -(r.get("_tok_len") or 0)
+        ))
+
+        return jsonify({
+            "success":          True,
+            "local":            local_hits,
+            "target_cabinets":  target_cabs,
+            "targeting_reason": targeting_reason,
+            "kml_matches":      [],   # KML enrichment now handled by find-plat-kml
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e), "local": [], "kml_matches": []})
+
+
+
+@app.route("/api/find-plat-online", methods=["POST"])
+def api_find_plat_online():
+    """
+    Slow online survey search (separate endpoint so it doesn't block the UI).
+    """
+    try:
+        data    = request.get_json() or {}
+        detail  = data.get("detail", {})
+        grantor = data.get("grantor", "") or detail.get("Grantor", "")
+        hits    = []
         try:
-            search_url  = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
-            resp        = web_session.get(search_url, timeout=15)
-
+            search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+            resp       = web_session.get(search_url, timeout=8)
             if 'CROSSNAMEFIELD' in resp.text or 'FIELD14' in resp.text:
-                soup  = BeautifulSoup(resp.text, "html.parser")
-                form  = soup.find("form")
+                soup = BeautifulSoup(resp.text, "html.parser")
+                form = soup.find("form")
                 if form:
                     fd = {}
                     for inp in form.find_all("input"):
@@ -1248,14 +1563,12 @@ def api_find_plat():
                         if nm:
                             opt = sel.find("option", selected=True) or sel.find("option")
                             fd[nm] = opt["value"] if opt and opt.get("value") else ""
-
                     last = grantor.split(",")[0].strip() if grantor else ""
                     if last:
                         fd["CROSSNAMEFIELD"] = last
                         fd["CROSSNAMETYPE"]  = "begin"
                         fd["FIELD7"] = "SUR"
-
-                        post  = web_session.post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=20)
+                        post  = web_session.post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=10)
                         soup2 = BeautifulSoup(post.text, "html.parser")
                         for row in soup2.find_all("tr"):
                             cells = row.find_all("td")
@@ -1268,7 +1581,7 @@ def api_find_plat():
                             itype  = cells[5].text.strip() if len(cells) > 5 else ""
                             if not re.search(r'survey|plat|map|lot.?line|replat|subdiv', itype, re.I):
                                 continue
-                            online_hits.append({
+                            hits.append({
                                 "doc_no":          doc_no,
                                 "instrument_type": itype,
                                 "location":        cells[2].text.strip() if len(cells) > 2 else "",
@@ -1279,77 +1592,11 @@ def api_find_plat():
                                 "source":          "online",
                             })
         except Exception:
-            pass  # online search is best-effort
-
-        # ── 3. KML parcel index cross-reference ──────────────────────────
-        kml_matches = []
-        try:
-            survey = get_survey_data_path()
-            kml_results = xml_processor.cross_reference_deed(survey, detail)
-            for p in kml_results:
-                # Build cab_ref strings for display
-                cab_refs_str = ", ".join(p.get("cab_refs", [])) or p.get("plat", "")
-                # Find local cabinet files — two-stage search:
-                #  1) Use cab_refs from parcel record (or re-parse from PLAT if index
-                #     was built before the improved short-form parser).
-                #  2) Fallback: use names extracted from the PLAT string.
-                local_files = []
-                seen_lf     = set()
-                plat_str    = p.get('plat', '')
-                plat_names  = _extract_plat_name_tokens(plat_str)
-
-                # Re-parse any short-form cab refs the old index may have missed
-                stored_refs = p.get('cab_refs') or []
-                live_refs   = stored_refs if stored_refs else xml_processor._parse_cab_refs_from_plat(plat_str)
-
-                for cr in live_refs:
-                    parts = cr.split('-', 1)
-                    if len(parts) != 2:
-                        continue
-                    cab_let, doc_num = parts
-                    # PLAT-specific names first (most relevant), then deed names
-                    # Fallback: names parsed from PLAT field (e.g. 'ADELA RAEL')
-                    for pn in plat_names:
-                        for h in search_local_cabinet(cab_let, doc_num, grantor=pn, grantee=''):
-                            h['cab_ref'] = cr
-                            if h['path'] not in seen_lf:
-                                seen_lf.add(h['path'])
-                                local_files.append(h)
-
-                    # Primary: deed grantor/grantee names
-                    for h in search_local_cabinet(cab_let, doc_num, grantor, grantee):
-                        h['cab_ref'] = cr
-                        if h['path'] not in seen_lf:
-                            seen_lf.add(h['path'])
-                            local_files.append(h)
-                local_files = local_files[:5]  # cap per parcel
-
-                kml_matches.append({
-                    "owner":        p.get("owner", ""),
-                    "upc":          p.get("upc", ""),
-                    "plat":         p.get("plat", ""),
-                    "book":         p.get("book", ""),
-                    "page":         p.get("page", ""),
-                    "cab_refs":     p.get("cab_refs", []),
-                    "cab_refs_str": cab_refs_str,
-                    "centroid":     p.get("centroid"),
-                    "match_reason": p.get("_match_reason", ""),
-                    "local_files":  local_files,
-                    "source":       "kml",
-                })
-        except Exception as kml_err:
-            print(f"[find-plat] KML cross-reference error: {kml_err}")
-
-        return jsonify({
-            "success":      True,
-            "cabinet_refs": cab_refs,
-            "local":        local_hits,
-            "online":       online_hits,
-            "kml_matches":  kml_matches,
-        })
+            pass
+        return jsonify({"success": True, "online": hits})
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)})
+        return jsonify({"success": False, "error": str(e), "online": []})
+
 
 
 # ── save plat to project folder ────────────────────────────────────────────────

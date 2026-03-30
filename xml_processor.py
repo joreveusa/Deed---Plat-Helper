@@ -1,4 +1,4 @@
-﻿"""
+"""
 xml_processor.py  — KML / KMZ Parcel Data Engine
 =================================================
 Parses Taos County KML / KMZ parcel files and builds a fast-search JSON index.
@@ -20,8 +20,13 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
-# KML namespace
-KML_NS = "{http://www.opengis.net/kml/2.2}"
+# KML namespaces — Taos County files use 2.2; some KMZ files omit the namespace entirely
+_KML_NAMESPACES = [
+    "{http://www.opengis.net/kml/2.2}",
+    "{http://www.opengis.net/kml/2.1}",
+    "",  # no namespace
+]
+KML_NS = "{http://www.opengis.net/kml/2.2}"  # default, overridden per-file
 
 # ── Index file location ────────────────────────────────────────────────────────
 
@@ -55,32 +60,111 @@ def discover_xml_files(survey_data_path: str) -> list[dict]:
 
 # ── KML parsing  (memory-efficient iterparse) ─────────────────────────────────
 
+def _detect_kml_ns(file_obj) -> str:
+    """
+    Peek at the first 2KB of a KML stream to detect the KML namespace.
+    Returns the namespace string (e.g. '{http://www.opengis.net/kml/2.2}') or ''.
+    """
+    try:
+        start = file_obj.read(2048)
+        if hasattr(file_obj, 'seek'):
+            file_obj.seek(0)
+        if isinstance(start, bytes):
+            start = start.decode('utf-8', errors='ignore')
+        import re
+        # Look for xmlns="..." or xmlns:kml="..."
+        m = re.search(r'xmlns(?::\w+)?="(http://www\.opengis\.net/kml/[^"]+)"', start)
+        if m:
+            return '{' + m.group(1) + '}'
+        # If <Placemark> appears without namespace prefix, use empty
+        if '<Placemark' in start:
+            return ''
+    except Exception:
+        pass
+    return '{http://www.opengis.net/kml/2.2}'
+
+
+def _sanitize_kml_bytes(data: bytes) -> bytes:
+    """
+    Fix KML files that use namespace prefixes without declaring them,
+    causing an 'unbound prefix' ParseError in ElementTree.
+
+    Strategy: strip all 'prefix:' from tag names (e.g. 'kml:Placemark' → 'Placemark')
+    and remove xmlns:prefix declarations so the file parses as plain XML.
+    This is safe for our use case since we only care about tag names, not namespaces.
+    """
+    import re as _re
+    # Remove namespace declarations to avoid conflicts
+    data = _re.sub(rb'\s+xmlns:\w+="[^"]*"', b'', data)
+    data = _re.sub(rb"\s+xmlns:\w+='[^']*'", b'', data)
+    # Strip prefix from opening/closing tags: <kml:Foo → <Foo, </kml:Foo → </Foo
+    data = _re.sub(rb'<(\w+):(\w)', lambda m: b'<' + m.group(2), data)
+    data = _re.sub(rb'</(\w+):(\w)', lambda m: b'</' + m.group(2), data)
+    # Strip prefix from attributes: kml:attr="..." → attr="..."
+    data = _re.sub(rb'(?<= )(\w+):(\w+)=', lambda m: m.group(2) + b'=', data)
+    return data
+
+
 def _parse_kml_stream(file_obj, source_name: str = "") -> list[dict]:
     """
     Parse a KML file stream and extract Placemark records.
     Uses iterparse for memory efficiency on large files.
+    Auto-detects the KML namespace so it works for both namespaced and plain KML.
+    Falls back to prefix-stripping for ArcGIS-style KML with unbound namespace prefixes.
     """
-    records = []
-    context = ET.iterparse(file_obj, events=("end",))
+    import io as _io
 
-    for event, elem in context:
-        if elem.tag == f"{KML_NS}Placemark":
-            record = _extract_placemark(elem, source_name)
-            if record:
-                records.append(record)
-            # Free memory immediately
-            elem.clear()
+    # Read all bytes so we can retry with sanitization if needed
+    raw = file_obj.read() if hasattr(file_obj, 'read') else file_obj
+    if not isinstance(raw, bytes):
+        raw = raw.encode('utf-8')
 
-    return records
+    # Auto-detect namespace before parsing
+    ns = _detect_kml_ns(_io.BytesIO(raw))
+    placemark_tag = f"{ns}Placemark"
+
+    def _do_parse(data: bytes, ptag: str) -> list[dict]:
+        records = []
+        try:
+            context = ET.iterparse(_io.BytesIO(data), events=("end",))
+            for event, elem in context:
+                if elem.tag == ptag:
+                    record = _extract_placemark(elem, source_name, ns)
+                    if record:
+                        records.append(record)
+                    elem.clear()
+        except ET.ParseError as e:
+            raise e
+        return records
+
+    try:
+        return _do_parse(raw, placemark_tag)
+    except ET.ParseError as e:
+        print(f"[xml] ParseError in {source_name}: {e} — retrying with prefix sanitization")
+        try:
+            sanitized = _sanitize_kml_bytes(raw)
+            # After sanitization tags have no namespace prefix → use empty ns
+            result = _do_parse(sanitized, "Placemark")
+            if result:
+                print(f"[xml] Sanitized parse succeeded: {len(result)} records from {source_name}")
+            else:
+                # Try to detect new namespace after sanitization
+                ns2 = _detect_kml_ns(_io.BytesIO(sanitized))
+                result = _do_parse(sanitized, f"{ns2}Placemark")
+            return result
+        except Exception as e2:
+            print(f"[xml] Sanitized parse also failed for {source_name}: {e2}")
+            return []
 
 
-def _extract_placemark(elem, source_name: str) -> Optional[dict]:
+
+def _extract_placemark(elem, source_name: str, ns: str = "{http://www.opengis.net/kml/2.2}") -> Optional[dict]:
     """Extract a single Placemark's data into a record dict."""
-    # Owner name
-    name_el = elem.find(f"{KML_NS}name")
+    # Owner name — try both namespaced and plain tags
+    name_el = elem.find(f"{ns}name") if ns else elem.find("name")
+    if name_el is None and ns:
+        name_el = elem.find("name")  # fallback: no namespace
     owner = name_el.text.strip() if name_el is not None and name_el.text else ""
-    if not owner:
-        return None
 
     # Extended data (UPC, PLAT, BOOK, PAGE)
     upc = ""
@@ -88,7 +172,9 @@ def _extract_placemark(elem, source_name: str) -> Optional[dict]:
     book = ""
     page = ""
 
-    ext_data = elem.find(f"{KML_NS}ExtendedData")
+    ext_data = elem.find(f"{ns}ExtendedData") if ns else elem.find("ExtendedData")
+    if ext_data is None and ns:
+        ext_data = elem.find("ExtendedData")  # fallback: no namespace
     if ext_data is not None:
         for sd in ext_data.iter():
             if sd.tag.endswith("SimpleData") or sd.tag == "SimpleData":
@@ -96,6 +182,9 @@ def _extract_placemark(elem, source_name: str) -> Optional[dict]:
                 val = (sd.text or "").strip()
                 if attr_name == "UPC":
                     upc = val
+                elif attr_name == "OWNER" and not owner:
+                    # Some KMZ files store owner in ExtendedData
+                    owner = val
                 elif attr_name == "PLAT":
                     plat = val
                 elif attr_name == "BOOK":
@@ -103,15 +192,35 @@ def _extract_placemark(elem, source_name: str) -> Optional[dict]:
                 elif attr_name == "PAGE":
                     page = val
 
-    # Coordinates — extract centroid from first polygon
+    # If still no owner, use UPC as a fallback label (don't skip the record)
+    if not owner:
+        if upc:
+            owner = f"UPC {upc}"
+        else:
+            owner = "Unknown Owner"  # include in index so geometry isn't lost
+
+    # Coordinates — extract centroid and full polygon from first polygon
+    # Try both namespaced and plain coordinate elements
     centroid = None
+    polygon = None
     coords_raw = []
-    for coord_el in elem.iter(f"{KML_NS}coordinates"):
+    coord_tag = f"{ns}coordinates" if ns else "coordinates"
+    for coord_el in elem.iter(coord_tag):
         if coord_el.text:
             coords_raw.append(coord_el.text.strip())
+    if not coords_raw and ns:
+        # Fallback: try without namespace
+        for coord_el in elem.iter("coordinates"):
+            if coord_el.text:
+                coords_raw.append(coord_el.text.strip())
 
     if coords_raw:
         centroid = _compute_centroid(coords_raw[0])
+        polygon = _parse_polygon_coords(coords_raw[0])
+
+    # Skip records with literally no geometry at all (they'd be invisible)
+    if not centroid and not polygon:
+        return None
 
     # Parse cabinet references from PLAT field
     cab_refs = _parse_cab_refs_from_plat(plat)
@@ -123,6 +232,7 @@ def _extract_placemark(elem, source_name: str) -> Optional[dict]:
         "book":      book,
         "page":      page,
         "centroid":  centroid,     # [lng, lat] or None
+        "polygon":   polygon,     # [[lng, lat], ...] ring for Leaflet
         "cab_refs":  cab_refs,    # ["C-191A", "E-139-A", ...]
         "source":    source_name,
     }
@@ -143,6 +253,19 @@ def _compute_centroid(coords_text: str) -> Optional[list]:
         avg_lng = sum(p[0] for p in points) / len(points)
         avg_lat = sum(p[1] for p in points) / len(points)
         return [round(avg_lng, 8), round(avg_lat, 8)]
+    except (ValueError, IndexError):
+        return None
+
+
+def _parse_polygon_coords(coords_text: str) -> Optional[list]:
+    """Parse a KML coordinates string into a [[lng, lat], ...] list."""
+    try:
+        points = []
+        for chunk in coords_text.split():
+            parts = chunk.split(",")
+            if len(parts) >= 2:
+                points.append([round(float(parts[0]), 6), round(float(parts[1]), 6)])
+        return points if len(points) >= 3 else None
     except (ValueError, IndexError):
         return None
 
@@ -200,10 +323,18 @@ def _parse_kmz_file(kmz_path: str) -> list[dict]:
     source = Path(kmz_path).name
     try:
         with zipfile.ZipFile(kmz_path, 'r') as zf:
-            kml_names = [n for n in zf.namelist() if n.lower().endswith('.kml')]
+            all_files = zf.namelist()
+            kml_names = [n for n in all_files if n.lower().endswith('.kml')]
+            print(f"[xml] KMZ {source}: found files: {all_files[:10]}")
+            print(f"[xml] KMZ {source}: KML files: {kml_names}")
             for kml_name in kml_names:
                 with zf.open(kml_name) as kml_file:
-                    records.extend(_parse_kml_stream(kml_file, source))
+                    # Read into BytesIO so we can seek for namespace detection
+                    import io
+                    kml_bytes = io.BytesIO(kml_file.read())
+                    parsed = _parse_kml_stream(kml_bytes, f"{source}/{kml_name}")
+                    print(f"[xml] KMZ {source}/{kml_name}: {len(parsed)} parcels")
+                    records.extend(parsed)
     except Exception as e:
         print(f"[xml] Error reading KMZ {kmz_path}: {e}")
     return records
@@ -416,6 +547,87 @@ def index_status(survey_data_path: str) -> dict:
 # SEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 
+def search_parcels_in_index(
+    index: dict,
+    owner: str = "",
+    upc: str = "",
+    book: str = "",
+    page: str = "",
+    cabinet_ref: str = "",
+    operator: str = "contains",
+    limit: int = 50,
+) -> list[dict]:
+    """
+    Search an already-loaded parcel index dict — no disk I/O.
+
+    Same parameters as search_parcels() but accepts the index dict directly,
+    which avoids redundant file reads when the caller already has it in memory.
+    """
+    if not index:
+        return []
+    parcels = index.get("parcels", [])
+    return _filter_parcels(parcels, owner=owner, upc=upc, book=book, page=page,
+                           cabinet_ref=cabinet_ref, operator=operator, limit=limit)
+
+
+def _filter_parcels(
+    parcels: list,
+    owner: str = "",
+    upc: str = "",
+    book: str = "",
+    page: str = "",
+    cabinet_ref: str = "",
+    operator: str = "contains",
+    limit: int = 50,
+) -> list[dict]:
+    """Core filtering logic shared by search_parcels and search_parcels_in_index."""
+    results = []
+    owner_q    = owner.strip().upper()
+    upc_q      = upc.strip()
+    book_q     = book.strip()
+    page_q     = page.strip()
+    cab_q      = cabinet_ref.strip().upper()
+
+    for p in parcels:
+        match = True
+
+        if owner_q:
+            p_owner = p.get("owner", "").upper()
+            if operator == "exact":
+                if p_owner != owner_q:
+                    match = False
+            elif operator == "begins":
+                if not p_owner.startswith(owner_q):
+                    match = False
+            else:
+                if owner_q not in p_owner:
+                    match = False
+
+        if match and upc_q:
+            if p.get("upc", "") != upc_q:
+                match = False
+
+        if match and book_q:
+            if p.get("book", "") != book_q:
+                match = False
+        if match and page_q:
+            if p.get("page", "") != page_q:
+                match = False
+
+        if match and cab_q:
+            p_refs = p.get("cab_refs", [])
+            if cab_q not in p_refs:
+                if cab_q not in p.get("plat", "").upper():
+                    match = False
+
+        if match:
+            results.append(p)
+            if len(results) >= limit:
+                break
+
+    return results
+
+
 def search_parcels(
     survey_data_path: str,
     owner: str = "",
@@ -427,7 +639,7 @@ def search_parcels(
     limit: int = 50,
 ) -> list[dict]:
     """
-    Search the parcel index.
+    Search the parcel index (loads from disk).
 
     Parameters:
         owner:       Owner name to search
@@ -442,59 +654,11 @@ def search_parcels(
     idx = load_index(survey_data_path)
     if not idx:
         return []
-
-    parcels = idx.get("parcels", [])
-    results = []
-
-    owner_q     = owner.strip().upper()
-    upc_q       = upc.strip()
-    book_q      = book.strip()
-    page_q      = page.strip()
-    cab_q       = cabinet_ref.strip().upper()
-
-    for p in parcels:
-        match = True
-
-        # Owner name match
-        if owner_q:
-            p_owner = p.get("owner", "").upper()
-            if operator == "exact":
-                if p_owner != owner_q:
-                    match = False
-            elif operator == "begins":
-                if not p_owner.startswith(owner_q):
-                    match = False
-            else:  # contains
-                if owner_q not in p_owner:
-                    match = False
-
-        # UPC exact match
-        if match and upc_q:
-            if p.get("upc", "") != upc_q:
-                match = False
-
-        # Book/page match
-        if match and book_q:
-            if p.get("book", "") != book_q:
-                match = False
-        if match and page_q:
-            if p.get("page", "") != page_q:
-                match = False
-
-        # Cabinet reference match
-        if match and cab_q:
-            p_refs = p.get("cab_refs", [])
-            if cab_q not in p_refs:
-                # Also try substring match in the PLAT field
-                if cab_q not in p.get("plat", "").upper():
-                    match = False
-
-        if match:
-            results.append(p)
-            if len(results) >= limit:
-                break
-
-    return results
+    return _filter_parcels(
+        idx.get("parcels", []),
+        owner=owner, upc=upc, book=book, page=page,
+        cabinet_ref=cabinet_ref, operator=operator, limit=limit,
+    )
 
 
 def cross_reference_deed(survey_data_path: str, deed_detail: dict) -> list[dict]:
@@ -555,3 +719,66 @@ def cross_reference_deed(survey_data_path: str, deed_detail: dict) -> list[dict]
                     seen_upcs.add(h["upc"])
 
     return results[:30]  # cap total results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GEOJSON MAP EXPORT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_map_geojson(
+    survey_data_path: str,
+    highlight_upcs: list[str] | None = None,
+    max_features: int = 100000,
+) -> dict:
+    """
+    Return a GeoJSON FeatureCollection of all parcels in the index.
+
+    Each Feature has geometry (Polygon) and properties:
+      - owner, upc, book, page, plat, cab_refs_str
+      - highlight: True if the parcel UPC is in highlight_upcs
+
+    Parcels without polygon data are emitted as Point (centroid).
+    """
+    idx = load_index(survey_data_path)
+    if not idx:
+        return {"type": "FeatureCollection", "features": []}
+
+    highlight_set = set(highlight_upcs or [])
+    features = []
+
+    for p in idx.get("parcels", [])[:max_features]:
+        upc = p.get("upc", "")
+        owner = p.get("owner", "")
+        polygon = p.get("polygon")
+        centroid = p.get("centroid")
+        cab_refs_str = ", ".join(p.get("cab_refs", []))
+
+        props = {
+            "owner":        owner,
+            "upc":          upc,
+            "book":         p.get("book", ""),
+            "page":         p.get("page", ""),
+            "plat":         p.get("plat", ""),
+            "cab_refs_str": cab_refs_str,
+            "highlight":    upc in highlight_set if upc else False,
+        }
+
+        if polygon and len(polygon) >= 3:
+            # GeoJSON polygon rings need to be closed (first == last)
+            ring = polygon if polygon[0] == polygon[-1] else polygon + [polygon[0]]
+            geometry = {"type": "Polygon", "coordinates": [ring]}
+        elif centroid:
+            geometry = {"type": "Point", "coordinates": centroid}
+        else:
+            continue  # skip parcels with no geometry
+
+        features.append({
+            "type":       "Feature",
+            "geometry":   geometry,
+            "properties": props,
+        })
+
+    return {
+        "type":     "FeatureCollection",
+        "features": features,
+    }

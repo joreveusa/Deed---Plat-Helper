@@ -555,6 +555,8 @@ select.inp option { background: var(--bg2); color: var(--text); }
 .plat-list-card { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .plat-item { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: flex-start; transition: background var(--trans); }
 .plat-item:hover { background: rgba(255,255,255,0.03); }
+.plat-item-client { background: rgba(201,162,39,0.08); border-left: 3px solid var(--gold); }
+.plat-item-client:hover { background: rgba(201,162,39,0.14); }
 .plat-info { display: flex; flex-direction: column; gap: 4px; }
 .plat-name { font-size: 13px; font-weight: 600; color: var(--text); }
 .plat-meta { font-size: 11px; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
@@ -671,6 +673,118 @@ select.inp option { background: var(--bg2); color: var(--text); }
 .kml-ok   { background: rgba(45,138,110,0.12); border: 1px solid rgba(45,138,110,0.3); }
 .kml-warn { background: rgba(218,54,51,0.10);  border: 1px solid rgba(218,54,51,0.3); }
 
+/* KML parcel ▶ Search Cabinet button */
+.kml-search-cab-btn {
+  background: rgba(64,194,159,0.08);
+  color: var(--accent2);
+  border: 1px solid rgba(64,194,159,0.3);
+  font-size: 11px;
+  padding: 4px 9px;
+  transition: all var(--trans);
+  white-space: nowrap;
+}
+.kml-search-cab-btn:hover {
+  background: rgba(64,194,159,0.2);
+  border-color: var(--accent2);
+  transform: translateY(-1px);
+}
+.kml-search-cab-active {
+  background: rgba(64,194,159,0.22) !important;
+  border-color: var(--accent2) !important;
+  color: #fff !important;
+  box-shadow: 0 0 8px rgba(64,194,159,0.35);
+}
+.kml-parcel-selected {
+  background: rgba(64,194,159,0.06) !important;
+  border-left: 3px solid var(--accent2) !important;
+}
+.kml-parcel-selected:hover {
+  background: rgba(64,194,159,0.1) !important;
+}
+
+/* ─── Cabinet Search Filter Panel ──────────────────────────────────────────── */
+.cab-filter-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: rgba(0,0,0,0.15);
+}
+.cab-filter-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(64,194,159,0.07), rgba(0,0,0,0.05));
+}
+.cab-filter-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--accent2);
+}
+.cab-filter-subtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'JetBrains Mono', monospace;
+}
+.cab-filter-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  flex: 1;
+}
+.cab-filter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cab-filter-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text3);
+}
+.cab-filter-inp {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  padding: 8px 11px;
+}
+.cab-filter-hint {
+  font-size: 10px;
+  color: var(--text3);
+  opacity: 0.7;
+  font-style: italic;
+}
+.cab-filter-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: rgba(0,0,0,0.1);
+  flex-shrink: 0;
+}
+/* Small "↩ Adjust" link shown in results header */
+.cab-filter-adj-btn {
+  background: rgba(255,255,255,0.04);
+  color: var(--text3);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+}
+.cab-filter-adj-btn:hover {
+  background: rgba(255,255,255,0.09);
+  color: var(--text);
+}
+
 /* Spinner variants */
 .spinner {
   width: 18px; height: 18px;
@@ -708,3 +822,42 @@ select.inp option { background: var(--bg2); color: var(--text); }
 /* Parcel list reuse */
 .parcel-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex: 1; }
 .area-stats { font-size: 12px; color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+
+/* ─── KML Map Picker ─────────────────────────────────────────────────────── */
+
+/* Ensure map picker sits above everything */
+#kmlMapPickerOverlay { z-index: 1050; }
+
+/* Dark-themed Leaflet tooltips */
+.kml-tooltip {
+  background: rgba(13, 17, 23, 0.95) !important;
+  border: 1px solid rgba(64, 194, 159, 0.4) !important;
+  border-radius: 8px !important;
+  color: #e6edf3 !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
+  font-size: 12px !important;
+  padding: 6px 10px !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5) !important;
+  pointer-events: none !important;
+}
+.kml-tooltip::before {
+  border-top-color: rgba(64, 194, 159, 0.4) !important;
+}
+
+/* Override Leaflet's default light controls to match dark theme */
+.leaflet-control-zoom a {
+  background: rgba(22, 27, 34, 0.9) !important;
+  color: #e6edf3 !important;
+  border-color: rgba(100, 110, 120, 0.25) !important;
+}
+.leaflet-control-zoom a:hover {
+  background: rgba(45, 138, 110, 0.6) !important;
+  color: #fff !important;
+}
+.leaflet-bar { border: 1px solid rgba(100, 110, 120, 0.25) !important; }
+.leaflet-control-attribution {
+  background: rgba(13, 17, 23, 0.7) !important;
+  color: rgba(110, 118, 129, 0.8) !important;
+  font-size: 10px !important;
+}
+.leaflet-control-attribution a { color: rgba(64, 194, 159, 0.8) !important; }
