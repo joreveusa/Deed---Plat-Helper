@@ -142,9 +142,10 @@ def api_config():
     if request.method == "GET":
         cfg = load_config()
         return jsonify({
-            "username": cfg.get("username", ""),
+            "username":     cfg.get("username", ""),
             "has_password": bool(cfg.get("password")),
-            "job_types": JOB_TYPES
+            "job_types":    JOB_TYPES,
+            "last_session": cfg.get("last_session"),   # {job_number, client_name, job_type}
         })
     data = request.get_json()
     cfg = load_config()
@@ -152,6 +153,8 @@ def api_config():
         cfg["username"] = data["username"]
     if "password" in data:
         cfg["password"] = data["password"]
+    if "last_session" in data:
+        cfg["last_session"] = data["last_session"]      # persist last open job
     save_config(cfg)
     return jsonify({"success": True})
 
@@ -686,13 +689,15 @@ def parse_cabinet_refs(detail: dict) -> list[dict]:
     return refs
 
 
-def search_local_cabinet(cabinet: str, doc_num: str) -> list[dict]:
+def search_local_cabinet(cabinet: str, doc_num: str,
+                          grantor: str = "", grantee: str = "") -> list[dict]:
     """
     Walk the cabinet folder and return files whose name matches `doc_num`.
-    Two search strategies:
+    Three search strategies:
       A) Leading numeric prefix match  (Cabinet A–E: "100191.001 Name.PDF")
       B) Cabinet page ref in filename  (Cabinet F:   "L3721 Name F-101A.pdf")
-         and same pattern for A–E in case filenames carry the ref.
+      C) Name-based match — last name of grantor or grantee appears in filename
+         (fallback when no doc_num reference is known)
     """
     folder_name = CABINET_FOLDERS.get(cabinet)
     if not folder_name:
@@ -702,44 +707,68 @@ def search_local_cabinet(cabinet: str, doc_num: str) -> list[dict]:
         return []
 
     results = []
-    doc_clean    = doc_num.strip()
-    # Numeric part only: "191A" → "191"
-    doc_num_only = re.sub(r'[A-Za-z]+$', '', doc_clean)
-    # Page-ref pattern to look for anywhere in filename: e.g. "C-191A" or "F-191A"
+    doc_clean    = (doc_num or "").strip()
+    doc_num_only = re.sub(r'[A-Za-z]+$', '', doc_clean) if doc_clean else ""
+
+    # Page-ref pattern: e.g. "C-191A" or "F-191A"
     page_ref_pat = re.compile(
         r'(?<![A-Za-z])' + re.escape(cabinet) + r'[-\s]?' + re.escape(doc_clean) + r'(?![A-Za-z0-9])',
         re.I
-    )
+    ) if doc_clean else None
+
+    # Strategy C: extract last names for name-based matching
+    name_tokens = set()
+    for person in [grantor, grantee]:
+        if person:
+            last = person.split(',')[0].strip()
+            if last and len(last) >= 3:
+                name_tokens.add(last.lower())
 
     for f in cab_dir.iterdir():
         if not f.is_file() or f.suffix.lower() not in ('.pdf',):
             continue
         name = f.name
+        name_lower = name.lower()
 
         matched = False
+        match_strategy = ""
 
         # Strategy A: leading doc-number prefix
-        m_num    = re.match(r'^(\d+)', name)
-        m_letter = re.match(r'^[A-Za-z](\d+)', name)
-        prefix   = (m_num or m_letter)
-        if prefix:
-            prefix = prefix.group(1)
-            if prefix == doc_num_only or prefix.lstrip('0') == doc_num_only.lstrip('0'):
-                matched = True
+        if doc_clean:
+            m_num    = re.match(r'^(\d+)', name)
+            m_letter = re.match(r'^[A-Za-z](\d+)', name)
+            prefix   = (m_num or m_letter)
+            if prefix:
+                p = prefix.group(1)
+                if p == doc_num_only or p.lstrip('0') == doc_num_only.lstrip('0'):
+                    matched = True
+                    match_strategy = "doc_prefix"
 
         # Strategy B: cabinet page reference embedded in filename
-        if not matched and page_ref_pat.search(name):
+        if not matched and page_ref_pat and page_ref_pat.search(name):
             matched = True
+            match_strategy = "page_ref"
+
+        # Strategy C: name-based match
+        if not matched and name_tokens:
+            for tok in name_tokens:
+                if tok in name_lower:
+                    matched = True
+                    match_strategy = "name_match"
+                    break
 
         if matched:
             results.append({
-                "file":    f.name,
-                "path":    str(f),
-                "cabinet": cabinet,
-                "doc":     doc_clean,
-                "size_kb": round(f.stat().st_size / 1024),
+                "file":     f.name,
+                "path":     str(f),
+                "cabinet":  cabinet,
+                "doc":      doc_clean,
+                "size_kb":  round(f.stat().st_size / 1024),
+                "strategy": match_strategy,
             })
 
+    # Sort: doc_prefix and page_ref first, name_match last
+    results.sort(key=lambda r: 0 if r["strategy"] in ("doc_prefix", "page_ref") else 1)
     return results
 
 
@@ -760,12 +789,22 @@ def api_find_plat():
         # ── 1. Local cabinet search ──────────────────────────────────────
         cab_refs   = parse_cabinet_refs(detail)
         local_hits = []
+        # Search all cabinets by name if no explicit CAB refs found
+        search_cabinets = [r["cabinet"] for r in cab_refs] if cab_refs else list(CABINET_FOLDERS.keys())
         for ref in cab_refs:
-            hits = search_local_cabinet(ref["cabinet"], ref["doc"])
+            hits = search_local_cabinet(ref["cabinet"], ref["doc"], grantor, grantee)
             for h in hits:
-                h["ref"]  = ref["raw"]
+                h["ref"]    = ref["raw"]
                 h["source"] = "local"
             local_hits.extend(hits)
+        # If no hits from refs, try name-only search across all cabinets
+        if not local_hits and (grantor or grantee):
+            for cab_letter in CABINET_FOLDERS:
+                hits = search_local_cabinet(cab_letter, "", grantor, grantee)
+                for h in hits:
+                    h["ref"]    = "(name match)"
+                    h["source"] = "local"
+                local_hits.extend(hits[:5])  # limit per cabinet
 
         # ── 2. Online survey/plat search ─────────────────────────────────
         online_hits = []
@@ -1608,6 +1647,61 @@ def api_generate_dxf():
             "saved_to":       saved_path,
             "filename":       filename,
             "closure_errors": closure_errs,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ── cabinet browser ────────────────────────────────────────────────────────────
+
+@app.route("/api/cabinet-browse")
+def api_cabinet_browse():
+    """
+    List files in a cabinet folder, with optional name filter.
+    Query params: cabinet (A-F), filter (substring, case-insensitive), page, per_page
+    """
+    try:
+        cabinet  = (request.args.get("cabinet") or "").upper().strip()
+        filt     = (request.args.get("filter") or "").lower().strip()
+        page     = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 50))
+
+        if not cabinet:
+            # Return list of available cabinets
+            return jsonify({"success": True, "cabinets": list(CABINET_FOLDERS.keys())})
+
+        folder_name = CABINET_FOLDERS.get(cabinet)
+        if not folder_name:
+            return jsonify({"success": False, "error": f"Unknown cabinet '{cabinet}'"})
+
+        cab_dir = Path(CABINET_PATH) / folder_name
+        if not cab_dir.exists():
+            return jsonify({"success": False, "error": "Cabinet folder not found on disk"})
+
+        files = []
+        for f in sorted(cab_dir.iterdir()):
+            if not f.is_file() or f.suffix.lower() != '.pdf':
+                continue
+            if filt and filt not in f.name.lower():
+                continue
+            files.append({
+                "file":    f.name,
+                "path":    str(f),
+                "size_kb": round(f.stat().st_size / 1024),
+            })
+
+        total = len(files)
+        start = (page - 1) * per_page
+        paged = files[start:start + per_page]
+
+        return jsonify({
+            "success":  True,
+            "cabinet":  cabinet,
+            "total":    total,
+            "page":     page,
+            "per_page": per_page,
+            "files":    paged,
         })
     except Exception as e:
         traceback.print_exc()

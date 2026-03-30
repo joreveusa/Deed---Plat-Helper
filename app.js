@@ -59,6 +59,23 @@ async function loadConfig() {
         sel.appendChild(opt);
       });
     });
+    // ♥ Feature 4: restore last session on startup
+    if (cfg.last_session?.job_number && cfg.last_session?.client_name) {
+      const ls = cfg.last_session;
+      document.getElementById("boardJobNum").value     = ls.job_number;
+      document.getElementById("boardClientName").value = ls.client_name;
+      document.getElementById("boardJobType").value    = ls.job_type || "BDY";
+      try {
+        const res = await apiFetch(
+          `/research-session?job_number=${ls.job_number}&client_name=${encodeURIComponent(ls.client_name)}&job_type=${ls.job_type || "BDY"}`
+        );
+        if (res.success) {
+          state.researchSession = res.session;
+          document.getElementById("boardJobLabel").textContent = `Job #${ls.job_number}`;
+          showToast(`Session restored: Job #${ls.job_number} — ${ls.client_name}`, "info");
+        }
+      } catch (_) {}
+    }
   } catch (_) {}
 }
 
@@ -749,6 +766,14 @@ async function doSave() {
       btn.innerHTML = res.skipped ? "⚠️ Already Existed" : "✅ Saved!";
       state.nextJobNum = res.job_number + 1;
 
+      // ♥ Feature 2: auto-open PDF if checkbox is checked and we have a path
+      if (!res.skipped && res.saved_path) {
+        const autoOpen = document.getElementById("autoOpenPdf")?.checked ?? false;
+        if (autoOpen) {
+          setTimeout(() => openSavedFile(res.saved_path), 600);
+        }
+      }
+
       // Auto-create/sync research session
       if (!state.researchSession && res.job_number) {
         state.researchSession = null; // will load fresh
@@ -848,6 +873,10 @@ async function loadResearchSession() {
     document.getElementById("boardJobLabel").textContent = `Job #${jobNum}`;
     renderBoard();
     showToast(`Research session loaded — Job #${jobNum}`, "success");
+    // ♥ Feature 4: persist last session so it restores on next app start
+    apiFetch("/config", "POST", {
+      last_session: { job_number: parseInt(jobNum), client_name: client, job_type: jobType }
+    }).catch(() => {});
   } catch (e) {
     showToast("Error loading session: " + e.message, "error");
   }
@@ -1104,6 +1133,184 @@ async function quickLoadJob(num, client, type) {
   document.getElementById("boardJobType").value   = type;
   document.getElementById("recentJobsPicker")?.remove();
   await loadResearchSession();
+}
+
+
+// ♥ Feature 3: Bulk adjoiner search ───────────────────────────────────────────
+async function bulkSearchAdjoiners() {
+  if (!state.researchSession) { showToast("Load a session first", "warn"); return; }
+  const adjoiners = state.researchSession.subjects.filter(s => s.type === "adjoiner" && !s.deed_saved);
+  if (!adjoiners.length) { showToast("No pending adjoiners to search", "info"); return; }
+  if (!state.loggedIn) { showToast("Connect to records first", "warn"); return; }
+
+  showToast(`Searching ${adjoiners.length} adjoiner${adjoiners.length !== 1 ? "s" : ""}…`, "info");
+
+  // Show a results summary panel inside board body
+  const summaryId = "bulkSearchResults";
+  let summaryEl = document.getElementById(summaryId);
+  if (!summaryEl) {
+    summaryEl = document.createElement("div");
+    summaryEl.id = summaryId;
+    summaryEl.style.cssText = "background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px;max-height:260px;overflow-y:auto";
+    const body = document.getElementById("boardBody");
+    body.insertBefore(summaryEl, body.firstChild);
+  }
+  summaryEl.innerHTML = `<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px">🔍 Bulk Search Results</div><div id="bulkResultRows"></div>`;
+  const rowsEl = document.getElementById("bulkResultRows");
+
+  for (const subj of adjoiners) {
+    const lastName = subj.name.split(",")[0].trim();
+    rowsEl.innerHTML += `<div style="font-size:11px;color:var(--text3);padding:3px 0">⏳ Searching: <strong style="color:var(--text)">${escHtml(subj.name)}</strong>…</div>`;
+    rowsEl.scrollTop = rowsEl.scrollHeight;
+    try {
+      const res = await apiFetch("/search", "POST", { name: lastName, operator: "begins with" });
+      const count = res.results?.length ?? 0;
+      const color = count > 0 ? "#56d3a0" : "#888";
+      // Replace last row with result
+      const rows = rowsEl.querySelectorAll("div");
+      if (rows.length) rows[rows.length - 1].remove();
+      rowsEl.innerHTML += `
+        <div style="font-size:11px;padding:3px 0;display:flex;justify-content:space-between">
+          <strong style="color:var(--text)">${escHtml(subj.name)}</strong>
+          <span style="color:${color}">${count} record${count !== 1 ? "s" : ""}</span>
+        </div>`;
+      // If results found, pre-fill search and offer quick jump
+      if (count > 0) {
+        const lastRow = rowsEl.lastElementChild;
+        lastRow.style.cursor = "pointer";
+        lastRow.title = "Click to jump to search results";
+        lastRow.onclick = () => {
+          document.getElementById("searchName").value = lastName;
+          document.getElementById("searchOperator").value = "begins with";
+          closeResearchBoard();
+          if (!document.getElementById("searchBtn").disabled) doSearch();
+        };
+        lastRow.style.borderRadius = "4px";
+        lastRow.onmouseover = () => lastRow.style.background = "var(--bg2)";
+        lastRow.onmouseout  = () => lastRow.style.background = "transparent";
+      }
+    } catch (e) {
+      rowsEl.innerHTML += `<div style="font-size:11px;color:#ff7b72;padding:2px 0">❌ Error searching ${escHtml(subj.name)}</div>`;
+    }
+    await new Promise(r => setTimeout(r, 300)); // small delay between requests
+  }
+  showToast("Bulk search complete", "success");
+}
+
+
+// ♥ Feature 5: Cabinet browser ──────────────────────────────────────────────
+
+let _cabinetState = { cabinet: "C", filter: "", page: 1, total: 0 };
+
+function openCabinetBrowser() {
+  const panel = document.getElementById("cabinetPanel");
+  const overlay = document.getElementById("cabinetOverlay");
+  panel.classList.remove("hidden");
+  overlay.classList.remove("hidden");
+  requestAnimationFrame(() => panel.classList.add("open"));
+  browseCabinet(_cabinetState.cabinet);
+}
+
+function closeCabinetBrowser() {
+  const panel = document.getElementById("cabinetPanel");
+  const overlay = document.getElementById("cabinetOverlay");
+  panel.classList.remove("open");
+  setTimeout(() => { panel.classList.add("hidden"); overlay.classList.add("hidden"); }, 260);
+}
+
+async function browseCabinet(cabinet, page = 1) {
+  _cabinetState.cabinet = cabinet;
+  _cabinetState.page    = page;
+  const filt = _cabinetState.filter;
+
+  // Highlight active cabinet button
+  document.querySelectorAll(".cab-tab").forEach(b => b.classList.toggle("active", b.dataset.cab === cabinet));
+
+  const body = document.getElementById("cabinetBody");
+  body.innerHTML = `<div class="detail-loading"><div class="spinner"></div><p>Loading Cabinet ${escHtml(cabinet)}…</p></div>`;
+
+  try {
+    const res = await apiFetch(`/cabinet-browse?cabinet=${cabinet}&filter=${encodeURIComponent(filt)}&page=${page}&per_page=60`);
+    if (!res.success) { body.innerHTML = `<p style="color:var(--danger);padding:20px">${escHtml(res.error)}</p>`; return; }
+    _cabinetState.total = res.total;
+    renderCabinetFiles(res);
+  } catch (e) {
+    body.innerHTML = `<p style="color:var(--danger);padding:20px">Error: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function filterCabinet() {
+  _cabinetState.filter = document.getElementById("cabinetFilter").value.trim();
+  _cabinetState.page   = 1;
+  browseCabinet(_cabinetState.cabinet, 1);
+}
+
+function renderCabinetFiles(res) {
+  const body = document.getElementById("cabinetBody");
+  if (!res.files.length) {
+    body.innerHTML = `<div class="plat-empty">${res.total === 0 ? "No files in this cabinet." : "No files match your filter."}</div>`;
+    document.getElementById("cabinetCount").textContent = "";
+    return;
+  }
+
+  const totalPages = Math.ceil(res.total / res.per_page);
+  document.getElementById("cabinetCount").textContent = `${res.total} file${res.total !== 1 ? "s" : ""}`;
+
+  let html = `<table class="results-table" style="font-size:11px">`;
+  html += `<thead><tr><th style="width:55%">Filename</th><th>Size</th><th style="width:120px">Actions</th></tr></thead><tbody>`;
+
+  res.files.forEach(f => {
+    const shortName = f.file.length > 50 ? f.file.substring(0, 47) + "…" : f.file;
+    html += `
+      <tr>
+        <td title="${escHtml(f.file)}">${escHtml(shortName)}</td>
+        <td style="white-space:nowrap;color:var(--text3)">${f.size_kb} KB</td>
+        <td>
+          <button class="btn btn-outline" style="font-size:10px;padding:3px 8px;margin-right:4px"
+            onclick="openSavedFile('${escHtml(f.path).replace(/\\/g,'\\\\')}')">Open</button>
+          <button class="btn btn-success" style="font-size:10px;padding:3px 8px"
+            onclick="savePlatFromBrowser('${escHtml(f.path).replace(/\\/g,'\\\\')}','${escHtml(f.file).replace(/'/g,"\\'")}')">Save</button>
+        </td>
+      </tr>`;
+  });
+  html += `</tbody></table>`;
+
+  // Pagination
+  if (totalPages > 1) {
+    html += `<div style="display:flex;justify-content:center;gap:8px;padding:12px;font-size:11px">`;
+    if (res.page > 1)
+      html += `<button class="btn btn-outline" style="font-size:11px;padding:4px 10px" onclick="browseCabinet('${res.cabinet}',${res.page - 1})">← Prev</button>`;
+    html += `<span style="line-height:28px;color:var(--text3)">Page ${res.page} / ${totalPages}</span>`;
+    if (res.page < totalPages)
+      html += `<button class="btn btn-outline" style="font-size:11px;padding:4px 10px" onclick="browseCabinet('${res.cabinet}',${res.page + 1})">Next →</button>`;
+    html += `</div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+async function savePlatFromBrowser(filePath, fileName) {
+  // Need a loaded session or save modal job info
+  const jobNum  = state.researchSession?.job_number ||
+                  parseInt(document.getElementById("modalJobNum")?.value) || state.nextJobNum;
+  const client  = state.researchSession?.client_name ||
+                  document.getElementById("modalClientName")?.value?.trim();
+  const jobType = state.researchSession?.job_type || "BDY";
+
+  if (!client) {
+    showToast("Open the Research Board and load a session first, or open the Save modal", "warn");
+    return;
+  }
+  try {
+    const res = await apiFetch("/save-plat", "POST", {
+      source: "local", file_path: filePath, filename: fileName,
+      job_number: jobNum, client_name: client, job_type: jobType,
+    });
+    if (res.success) showToast(`Plat saved → ${res.filename}`, "success");
+    else showToast("Save failed: " + res.error, "error");
+  } catch (e) {
+    showToast("Error: " + e.message, "error");
+  }
 }
 
 

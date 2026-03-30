@@ -1000,3 +1000,28 @@ select.inp option { background: var(--bg3); }
   flex-shrink: 0;
 }
 
+/* ═══════════════════════════ CABINET BROWSER ═══════════════════════════ */
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+
+.cab-tab {
+  background: var(--bg3);
+  color: var(--text3);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+  transition: all var(--trans);
+}
+.cab-tab:hover { background: var(--bg2); color: var(--text); }
+.cab-tab.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* Modal footer: wrap so auto-open checkbox doesn't squish buttons */
+.modal-footer { flex-wrap: wrap; align-items: center; }
