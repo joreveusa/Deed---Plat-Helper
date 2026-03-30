@@ -1,535 +1,520 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Deed &amp; Plat Helper — Red Tail Surveying</title>
-  <meta name="description" content="Search and download Taos County property deeds and automatically organize them into project folders." />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Deed & Plat Helper</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=1774890000">
 </head>
 <body>
-
-<!-- ═══════════════════════════ SIDEBAR ═══════════════════════════ -->
-<aside class="sidebar" id="sidebar">
-  <div class="sidebar-brand">
-    <div class="brand-icon">🦅</div>
-    <div class="brand-text">
-      <span class="brand-title">Deed &amp; Plat</span>
-      <span class="brand-sub">Helper</span>
-    </div>
-  </div>
-
-  <div class="sidebar-section" id="loginSection">
-    <h3 class="section-label">Records Account</h3>
-    <div class="login-status" id="loginStatus">
-      <span class="status-dot offline"></span>
-      <span id="statusText">Not connected</span>
-    </div>
-
-    <div id="loginForm">
-      <div class="form-group">
-        <label for="username">Username</label>
-        <input type="text" id="username" class="inp" placeholder="e.g. redtail" autocomplete="username" />
-      </div>
-      <div class="form-group">
-        <label for="password">Password</label>
-        <input type="password" id="password" class="inp" placeholder="••••••••" autocomplete="current-password" />
-      </div>
-      <div class="form-check">
-        <input type="checkbox" id="remember" />
-        <label for="remember">Remember credentials</label>
-      </div>
-      <button class="btn btn-primary w-full" id="loginBtn" onclick="doLogin()">
-        <span class="btn-icon">🔑</span> Connect
-      </button>
-    </div>
-
-    <div id="loggedInPanel" class="hidden">
-      <div class="logged-in-info">
-        <span id="loggedInUser"></span>
-        <button class="btn-link" onclick="doLogout()">Logout</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="sidebar-section">
-    <h3 class="section-label">Search</h3>
-    <div class="form-group">
-      <label for="searchName">Name <span class="hint">(Last, First)</span></label>
-      <input type="text" id="searchName" class="inp" placeholder="e.g. Garza, Veronica" />
-    </div>
-    <div class="form-group">
-      <label for="searchAddress">Address <span class="hint">(optional)</span></label>
-      <input type="text" id="searchAddress" class="inp" placeholder="e.g. 2486 old highway 3" />
-    </div>
-    <div class="form-group">
-      <label for="searchOperator">Match Mode</label>
-      <select id="searchOperator" class="inp">
-        <option value="contains">Contains</option>
-        <option value="begins with">Begins With</option>
-        <option value="equals">Exact Match</option>
-      </select>
-    </div>
-    <button class="btn btn-primary w-full" id="searchBtn" onclick="doSearch()" disabled>
-      <span class="btn-icon">🔍</span> Search Records
-    </button>
-  </div>
-
-  <div class="sidebar-footer">
-    <span>Taos County On-Line via 1st NM Title</span>
-  </div>
-</aside>
-
-<!-- ═══════════════════════════ MAIN ═══════════════════════════ -->
-<main class="main">
-
-  <!-- Top bar -->
+  <!-- TOP NAVIGATION BAR -->
   <header class="topbar">
-    <div class="topbar-left">
-      <span class="topbar-title" id="topbarTitle">Property Records Search</span>
-      <span class="result-count hidden" id="resultCount"></span>
+    <div class="brand">
+      <span class="brand-icon">🦅</span>
+      <div class="brand-text">
+        <h1 class="brand-title">Deed & Plat Helper</h1>
+        <span class="brand-sub">Red Tail Surveying</span>
+      </div>
     </div>
+    
+    <div class="job-context hidden" id="jobContextBar">
+      <div class="job-badge">Job #<span id="ctxJobNum">----</span></div>
+      <div class="job-client" id="ctxClient">No Session</div>
+      <div class="job-type" id="ctxType">---</div>
+    </div>
+
     <div class="topbar-right">
-      <span class="site-tag">records.1stnmtitle.com</span>
-      <button class="btn btn-outline" id="cabinetBtn" onclick="openCabinetBrowser()" title="Browse cabinet files" style="font-size:12px;padding:6px 12px">
-        🗂️ Cabinets
-      </button>
-      <button class="btn btn-board" id="boardBtn" onclick="toggleResearchBoard()" title="Research Board">
-        🗾️ Research Board
-      </button>
+      <div class="login-status" id="loginStatusIndicator">
+        <div class="status-dot offline"></div>
+        <span id="statusText">Offline</span>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="showSettingsModal()">⚙️ Settings</button>
     </div>
   </header>
 
-  <!-- Empty state -->
-  <div class="empty-state" id="emptyState">
-    <div class="empty-icon">📋</div>
-    <h2>Search for Property Records</h2>
-    <p>Log in with your Taos County On-Line credentials, then enter a name or address to find deeds, mortgages, and other recorded documents.</p>
-    <div class="empty-steps">
-      <div class="step"><span class="step-num">1</span><span>Connect with your account</span></div>
-      <div class="step"><span class="step-num">2</span><span>Enter a name or address</span></div>
-      <div class="step"><span class="step-num">3</span><span>Click a document to view &amp; save</span></div>
-    </div>
-  </div>
-
-  <!-- Loading -->
-  <div class="loading hidden" id="loadingState">
-    <div class="spinner"></div>
-    <p id="loadingText">Searching records…</p>
-  </div>
-
-  <!-- Results table -->
-  <div class="results-wrap hidden" id="resultsWrap">
-    <table class="results-table" id="resultsTable">
-      <thead>
-        <tr>
-          <th>DOC #</th>
-          <th>Type</th>
-          <th>Location</th>
-          <th>Recorded</th>
-          <th>Grantor</th>
-          <th>Grantee</th>
-          <th>GF #</th>
-        </tr>
-      </thead>
-      <tbody id="resultsBody"></tbody>
-    </table>
-  </div>
-
-</main>
-
-<!-- ═══════════════════════════ DETAIL PANEL ═══════════════════════════ -->
-<div class="detail-overlay hidden" id="detailOverlay" onclick="closeDetail()"></div>
-<aside class="detail-panel hidden" id="detailPanel">
-  <div class="detail-header">
-    <div>
-      <h2 class="detail-title" id="detailTitle">Document Detail</h2>
-      <span class="detail-docno" id="detailDocNo"></span>
-    </div>
-    <button class="close-btn" onclick="closeDetail()">✕</button>
-  </div>
-
-  <div class="detail-body" id="detailBody">
-    <div class="detail-loading">
-      <div class="spinner"></div>
-      <p>Loading document…</p>
-    </div>
-  </div>
-
-  <div class="detail-footer">
-    <button class="btn btn-outline" onclick="openPdfNewTab()" id="viewPdfBtn">
-      <span>📄</span> View PDF
-    </button>
-    <button class="btn btn-outline" onclick="doChainSearch()" id="chainBtn">
-      <span>🔗</span> Chain
-    </button>
-    <button class="btn btn-purple" onclick="doFindAdjoiners()" id="findAdjBtn">
-      <span>🏘️</span> Find Adjoiners
-    </button>
-    <button class="btn btn-accent" onclick="doFindPlat()" id="findPlatBtn">
-      <span>🗺️</span> Find Plat
-    </button>
-    <button class="btn btn-success" onclick="openSaveModal()" id="saveBtn">
-      <span>💾</span> Save
-    </button>
-  </div>
-</aside>
-
-<!-- ═══════════════════════════ BOUNDARY PANEL ═══════════════════════════ -->
-<div class="boundary-overlay hidden" id="boundaryOverlay" onclick="closeBoundaryPanel()"></div>
-<aside class="boundary-panel hidden" id="boundaryPanel">
-  <div class="detail-header">
-    <div>
-      <h2 class="detail-title">📐 Boundary Lines</h2>
-      <span class="detail-docno" id="boundaryDocRef"></span>
-    </div>
-    <button class="close-btn" onclick="closeBoundaryPanel()">✕</button>
-  </div>
-
-  <!-- Tabs -->
-  <div class="bnd-tabs" id="bndTabs">
-    <button class="bnd-tab active" id="bndTabCalls"   onclick="switchBndTab('calls')">📋 Calls</button>
-    <button class="bnd-tab"        id="bndTabParcels" onclick="switchBndTab('parcels')">🏠 Parcels</button>
-    <button class="bnd-tab"        id="bndTabOptions" onclick="switchBndTab('options')">⚙️ Options</button>
-  </div>
-
-  <!-- ── TAB: Calls ── -->
-  <div class="bnd-tab-content" id="bndPaneCalls">
-    <div style="padding:8px 16px 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <span style="font-size:11px;color:var(--text3);flex:1">
-        Calls auto-parsed from deed text. Edit, add, or delete rows as needed.
-      </span>
-      <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" onclick="addManualCall()">+ Add Call</button>
-      <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" onclick="clearAllCalls()">🗑 Clear</button>
-      <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" onclick="reparseCalls()">🔄 Re-Parse</button>
-    </div>
-
-    <!-- Paste text box for manual text entry -->
-    <div style="padding:0 16px 8px">
-      <textarea id="bndPasteText" class="inp" rows="3"
-        style="width:100%;resize:vertical;font-size:11px;font-family:monospace"
-        placeholder="Paste deed description text here to parse…"></textarea>
-      <button class="btn btn-primary" style="font-size:11px;padding:5px 12px;margin-top:4px;width:100%"
-        onclick="parseFromTextbox()">Parse Pasted Text</button>
-    </div>
-
-    <!-- Closure summary -->
-    <div class="bnd-closure-bar" id="bndClosureBar" style="display:none">
-      <span id="bndClosureText"></span>
-    </div>
-
-    <!-- Calls table -->
-    <div class="bnd-calls-wrap" id="bndCallsWrap">
-      <div class="plat-empty">No calls yet — parse deed text or add manually.</div>
-    </div>
-  </div>
-
-  <!-- ── TAB: Parcels ── -->
-  <div class="bnd-tab-content hidden" id="bndPaneParcels">
-    <div style="padding:12px 16px 8px;font-size:11px;color:var(--text3)">
-      Define parcels for the DXF. The <strong style="color:var(--text)">Client</strong> parcel uses the calls
-      from the Calls tab. Add adjoiner parcels with their own calls.
-    </div>
-
-    <!-- Parcel list -->
-    <div id="bndParcelList" style="padding:0 16px 8px"></div>
-
-    <div style="padding:0 16px 12px;display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-accent" style="font-size:11px;padding:6px 12px" onclick="addAdjoinerParcel()">
-        + Add Adjoiner Parcel
+  <main class="workflow-container">
+    <!-- WORKFLOW STEPPER -->
+    <nav class="stepper">
+      <div class="step-progress-track">
+        <div class="step-progress-fill" id="stepProgressFill"></div>
+      </div>
+      <button class="step-btn active" data-step="1" onclick="goToStep(1)">
+        <div class="step-num">1</div>
+        <div class="step-label">Job Setup</div>
       </button>
-    </div>
+      <button class="step-btn" data-step="2" onclick="goToStep(2)" id="btnStep2" disabled>
+        <div class="step-num">2</div>
+        <div class="step-label">Client Deed</div>
+      </button>
+      <button class="step-btn" data-step="3" onclick="goToStep(3)" id="btnStep3" disabled>
+        <div class="step-num">3</div>
+        <div class="step-label">Client Plat</div>
+      </button>
+      <button class="step-btn" data-step="4" onclick="goToStep(4)" id="btnStep4" disabled>
+        <div class="step-num">4</div>
+        <div class="step-label">Adjoiners</div>
+      </button>
+      <button class="step-btn" data-step="5" onclick="goToStep(5)" id="btnStep5" disabled>
+        <div class="step-num">5</div>
+        <div class="step-label">Research</div>
+      </button>
+      <button class="step-btn" data-step="6" onclick="goToStep(6)" id="btnStep6" disabled>
+        <div class="step-num">6</div>
+        <div class="step-label">Boundary</div>
+      </button>
+    </nav>
 
-    <!-- Job context for save -->
-    <div style="padding:8px 16px;border-top:1px solid var(--border)">
-      <h4 style="font-size:11px;font-weight:600;color:var(--text3);margin:0 0 8px;text-transform:uppercase;letter-spacing:.07em">Job Info (for save path)</h4>
-      <div class="form-row" style="gap:8px">
-        <div class="form-group" style="flex:0 0 80px">
-          <label>Job #</label>
-          <input type="number" id="bndJobNum" class="inp" placeholder="Auto" />
+    <div class="step-content-area">
+      
+      <!-- STEP 1: JOB SETUP -->
+      <section class="step-panel active" id="step1Panel">
+        <div class="glass-card setup-card">
+          <h2 class="card-title">Initialize Research Session</h2>
+          <p class="card-desc">Enter a new job number or load an existing session to map folders and track your progress.</p>
+          
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Job Number <span class="hint">(e.g. 3001)</span></label>
+              <input type="number" id="setupJobNum" class="inp" placeholder="Auto-detect next...">
+            </div>
+            <div class="form-group">
+              <label>Job Type</label>
+              <select id="setupJobType" class="inp">
+                <option value="BDY">Boundary (BDY)</option>
+                <option value="ILR">ILR</option>
+                <option value="SE">Subdivision Exemption (SE)</option>
+                <option value="SUB">Subdivision (SUB)</option>
+                <option value="TIE">Tie (TIE)</option>
+                <option value="TOPO">Topo (TOPO)</option>
+                <option value="ELEV">Elevation Cert (ELEV)</option>
+                <option value="ALTA">ALTA</option>
+                <option value="CONS">Consultation (CONS)</option>
+              </select>
+            </div>
+            <div class="form-group full-width">
+              <label>Client Name <span class="hint">(e.g. Garza, Veronica)</span></label>
+              <input type="text" id="setupClient" class="inp" placeholder="Last, First">
+            </div>
+          </div>
+          
+          <div class="setup-actions">
+            <button class="btn btn-primary w-full" id="btnStartSession" onclick="startSession()">Start Research Session →</button>
+          </div>
         </div>
-        <div class="form-group" style="flex:1">
-          <label>Client Name</label>
-          <input type="text" id="bndClientName" class="inp" placeholder="Last, First" />
+
+        <div class="glass-card recent-jobs-card">
+          <h3 class="card-title">🕒 Recent & Pinned Jobs</h3>
+          <div id="setupRecentJobs" class="recent-jobs-list">
+            <div class="loading-state">Loading recent jobs...</div>
+          </div>
         </div>
-        <div class="form-group" style="flex:0 0 80px">
-          <label>Type</label>
-          <select id="bndJobType" class="inp"></select>
+      </section>
+
+      <!-- STEP 2: CLIENT DEED -->
+      <section class="step-panel hidden" id="step2Panel">
+        <div class="split-layout">
+          
+          <!-- Left: Search & Results -->
+          <div class="split-left">
+            <div class="glass-card search-card">
+              <div class="form-row">
+                <div class="form-group" style="flex:2">
+                  <label>Search Name / Grantor / Grantee</label>
+                  <input type="text" id="s2SearchName" class="inp" placeholder="e.g. Rael, Carlos" onkeyup="if(event.key==='Enter') doStep2Search()">
+                </div>
+                <div class="form-group" style="flex:1">
+                  <label>Operator</label>
+                  <select id="s2SearchOp" class="inp">
+                    <option value="begins with">Begins With</option>
+                    <option value="contains" selected>Contains</option>
+                    <option value="exactly">Exactly Matches</option>
+                  </select>
+                </div>
+                <button class="btn btn-accent btn-search" id="btnS2Search" onclick="doStep2Search()">Search</button>
+              </div>
+            </div>
+
+            <div class="results-container glass-card mt-3">
+              <div class="results-header">
+                <h3 class="card-title text-sm">Search Results <span id="s2ResultCount" class="result-badge">0</span></h3>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table" id="s2ResultsTable">
+                  <thead>
+                    <tr><th>Doc #</th><th>Grantor</th><th>Type</th><th>Loc</th><th>Year</th></tr>
+                  </thead>
+                  <tbody id="s2ResultsBody">
+                    <tr><td colspan="5" class="empty-cell">Enter a search above or start session.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Deed Detail & Actions -->
+          <div class="split-right">
+            <div class="glass-card detail-card flex-col" id="s2DetailContainer">
+              <div class="empty-state">
+                <div class="empty-icon">📄</div>
+                <p>Select a deed from the results list to view its details and save it to the client folder.</p>
+              </div>
+            </div>
+          </div>
+
         </div>
-      </div>
-    </div>
-  </div>
+      </section>
 
-  <!-- ── TAB: Options ── -->
-  <div class="bnd-tab-content hidden" id="bndPaneOptions">
-    <div style="padding:14px 16px">
-      <h4 style="font-size:11px;font-weight:600;color:var(--text3);margin:0 0 14px;text-transform:uppercase;letter-spacing:.07em">DXF Output Options</h4>
+      <!-- STEP 3: CLIENT PLAT -->
+      <section class="step-panel hidden" id="step3Panel">
+         <div class="glass-card header-card row-layout">
+           <div class="plat-context">
+             <h2 class="card-title">Find Client Plat</h2>
+             <p class="card-desc text-sm">Searching local cabinets, county KML parcel records, and online records for plats referenced in the client's deed.</p>
+           </div>
+           <div class="plat-tools">
+             <button class="btn btn-outline" onclick="openGlobalCabinetBrowser()">🗄️ Cabinet Browser</button>
+             <button class="btn btn-outline" onclick="showKmlIndexModal()">🗺️ KML Index</button>
+             <button class="btn btn-primary" onclick="doStep3Search()">⟳ Refresh</button>
+           </div>
+         </div>
 
-      <div class="bnd-option-row">
-        <label class="bnd-opt-label">
-          <input type="checkbox" id="optDrawBoundary" checked /> Draw boundary polylines
-        </label>
-        <span class="bnd-opt-hint">Closed lines for each parcel</span>
-      </div>
-      <div class="bnd-option-row">
-        <label class="bnd-opt-label">
-          <input type="checkbox" id="optDrawLabels" checked /> Bearing &amp; distance labels
-        </label>
-        <span class="bnd-opt-hint">MTEXT at midpoint of each course</span>
-      </div>
-      <div class="bnd-option-row">
-        <label class="bnd-opt-label">
-          <input type="checkbox" id="optDrawEndpoints" /> Corner point markers
-        </label>
-        <span class="bnd-opt-hint">POINT entity at each vertex</span>
-      </div>
+         <div class="s3-three-col mt-3">
+           <!-- Col 1: Local Cabinets -->
+           <div class="flex-col">
+              <h3 class="section-heading">📁 Local Cabinet Plats <span class="badge badge-local">Cabinet Scans</span></h3>
+              <div class="glass-card plat-list-card flex-1" id="s3LocalPlats">
+                <div class="loading-state">Scanning cabinets...</div>
+              </div>
+           </div>
 
-      <div class="bnd-option-row" style="margin-top:14px">
-        <label class="bnd-opt-label">Label text height (ft)</label>
-        <input type="number" id="optLabelSize" class="inp" value="2.0" min="0.1" step="0.5"
-               style="width:80px;padding:4px 8px;font-size:12px" />
-      </div>
-      <div class="bnd-option-row">
-        <label class="bnd-opt-label">Closure tolerance (ft)</label>
-        <input type="number" id="optCloseTol" class="inp" value="0.5" min="0" step="0.1"
-               style="width:80px;padding:4px 8px;font-size:12px" />
-      </div>
+           <!-- Col 2: KML Parcel Records -->
+           <div class="flex-col">
+              <h3 class="section-heading">🗺️ KML Parcel Records <span class="badge badge-kml">Taos County</span></h3>
+              <div class="glass-card plat-list-card flex-1" id="s3KmlPlats">
+                <div class="loading-state">Querying parcel index...</div>
+              </div>
+           </div>
 
-      <div style="margin-top:18px;padding-top:12px;border-top:1px solid var(--border)">
-        <h4 style="font-size:11px;font-weight:600;color:var(--text3);margin:0 0 10px;text-transform:uppercase;letter-spacing:.07em">DXF Layers</h4>
-        <div style="font-size:11px;color:var(--text3);display:grid;grid-template-columns:auto 1fr;gap:4px 12px;align-items:center">
-          <span style="color:#ffee00;font-weight:600">CLIENT</span>      <span>Client boundary (yellow)</span>
-          <span style="color:#00aa00;font-weight:600">ADJOINERS</span>   <span>Adjoiner parcels (green, dashed)</span>
-          <span style="color:#aaaaaa;font-weight:600">LABELS</span>       <span>Bearing &amp; distance text (white)</span>
-          <span style="color:#888;font-weight:600">INFO</span>           <span>Job info &amp; closure notes (grey)</span>
-          <span style="color:#ff00ff;font-weight:600">ENDPOINTS</span>    <span>Corner points (magenta)</span>
+           <!-- Col 3: Online Survey Records -->
+           <div class="flex-col">
+              <h3 class="section-heading">🌐 Online Survey Records <span class="badge badge-online">1stnmtitle.com</span></h3>
+              <div class="glass-card plat-list-card flex-1" id="s3OnlinePlats">
+                <div class="loading-state">Searching online...</div>
+              </div>
+           </div>
+         </div>
+      </section>
+
+      <!-- KML Index Status Modal -->
+      <div class="modal-overlay hidden" id="kmlIndexOverlay" onclick="if(event.target===this) closeKmlModal()">
+        <div class="modal glass-card" style="max-width:520px">
+          <div class="modal-header">
+            <h2>🗺️ KML Parcel Index</h2>
+            <button class="close-btn" onclick="closeKmlModal()">✕</button>
+          </div>
+          <div class="modal-body" id="kmlIndexBody">
+            <div class="loading-state">Loading index status...</div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-outline" onclick="closeKmlModal()">Close</button>
+            <button class="btn btn-primary" id="btnBuildIndex" onclick="buildKmlIndex()">⚡ Build / Rebuild Index</button>
+          </div>
         </div>
       </div>
-    </div>
-  </div>
 
-  <!-- Footer -->
-  <div class="detail-footer" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
-    <div style="display:flex;gap:6px;align-items:center">
-      <span class="bnd-status" id="bndStatus"></span>
-    </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-outline" onclick="closeBoundaryPanel()">Close</button>
-      <button class="btn btn-teal" id="bndGenerateBtn" onclick="doGenerateDxf()">
-        <span>💾</span> Generate &amp; Save DXF
-      </button>
-    </div>
-  </div>
-</aside>
+      <!-- STEP 4: ADJOINER DISCOVERY -->
+      <section class="step-panel hidden" id="step4Panel">
+        <div class="glass-card header-card">
+          <div class="row-layout justify-between">
+            <div>
+              <h2 class="card-title">Discover Adjoiners</h2>
+              <p class="card-desc">Auto-extract neighboring property owners from the saved plat and online records.</p>
+            </div>
+            <button class="btn btn-primary" id="btnDiscoverAdjoiners" onclick="runAdjoinerDiscovery()">
+              ⚡ Run Discovery Scan
+            </button>
+          </div>
+        </div>
 
+        <div class="discovery-results mt-3 glass-card hidden" id="s4DiscoveryResults">
+          <div class="row-layout discovery-header">
+            <h3>Found <span id="s4CountText" class="text-accent2">0</span> Potential Adjoiners</h3>
+            <button class="btn btn-success btn-sm" onclick="addAllDiscoveredToBoard()">+ Add All to Board</button>
+          </div>
+          <div class="adjoiner-discovery-grid" id="s4AdjoinerGrid">
+            <!-- Populated via JS -->
+          </div>
+        </div>
 
-<!-- ═══════════════════════════ PLAT PANEL ═══════════════════════════ -->
-<div class="plat-overlay hidden" id="platOverlay" onclick="closePlatPanel()"></div>
-<aside class="plat-panel hidden" id="platPanel">
-  <div class="detail-header">
-    <div>
-      <h2 class="detail-title">Related Plats</h2>
-      <span class="detail-docno" id="platDocRef"></span>
+        <div class="manual-add-card glass-card mt-3">
+          <h3 class="card-title text-sm mb-2">Manually Add Adjoiner</h3>
+          <div class="form-row">
+             <input type="text" id="s4ManualName" class="inp flex-1" placeholder="Adjoiner Name (Last, First)" onkeyup="if(event.key==='Enter') manualAddAdjoiner()">
+             <button class="btn btn-outline" onclick="manualAddAdjoiner()">+ Add</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 5: ADJOINER RESEARCH -->
+      <section class="step-panel hidden" id="step5Panel">
+        <div class="glass-card header-card row-layout justify-between mb-3">
+           <div>
+             <h2 class="card-title">Adjoiner Research Board</h2>
+             <p class="card-desc">Search, save deeds, and locate plats for all adjoiners.</p>
+           </div>
+           <div class="row-layout gap-2">
+             <button class="btn btn-outline" onclick="bulkSearchAdjoiners()" title="Attempts an online name search for all pending adjoiners">🔍 Bulk Search</button>
+             <button class="btn btn-outline" onclick="openFolderForContext()">📁 Open Folder</button>
+             <button class="btn btn-success" onclick="goToStep(6)">Continue to Boundary →</button>
+           </div>
+        </div>
+
+        <div class="research-grid" id="s5ResearchGrid">
+           <!-- Adjoiner cards populated via JS -->
+           <div class="empty-state">No adjoiners added yet. Go back to Step 4.</div>
+        </div>
+      </section>
+
+      <!-- STEP 6: BOUNDARY LINES -->
+      <section class="step-panel hidden" id="step6Panel">
+        <div class="split-layout">
+          <!-- Left: Calls + Parcels -->
+          <div class="split-left flex-col">
+            <div class="glass-card flex-1 flex-col">
+              <div class="tabs-nav" id="s6Tabs">
+                <button class="tab-btn active" onclick="switchS6Tab('calls')">Client Calls</button>
+                <button class="tab-btn" onclick="switchS6Tab('parcels')">Adjoiner Parcels</button>
+                <button class="tab-btn" onclick="switchS6Tab('options')">DXF Options</button>
+              </div>
+              
+              <div class="tab-content flex-1" id="s6TabCalls">
+                <div class="row-layout gap-2 mb-2 p-2" style="background:var(--bg3);border-bottom:1px solid var(--border)">
+                  <button class="btn btn-outline btn-sm" onclick="reparseClientCallsFromSession()">📥 Import from Client Deed</button>
+                  <button class="btn btn-outline btn-sm" onclick="addManualCall()">+ Add Call</button>
+                  <button class="btn btn-outline btn-sm text-danger ml-auto" onclick="clearAllCalls()">🗑️ Clear</button>
+                </div>
+                
+                <div class="closure-bar hidden" id="s6ClosureBar">
+                  <span id="s6ClosureText">Closure: 0.00 ft</span>
+                </div>
+
+                <div class="table-wrap flex-1">
+                  <table class="data-table calls-table">
+                    <thead><tr><th width="30">#</th><th>Bearing</th><th>Distance</th><th width="30"></th></tr></thead>
+                    <tbody id="s6CallsTbody">
+                      <tr><td colspan="4" class="empty-cell">No calls parsed.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="p-2 border-t">
+                  <textarea id="s6PasteText" class="inp" rows="2" placeholder="Paste deed metes & bounds text here to parse..."></textarea>
+                  <button class="btn btn-outline btn-sm mt-1 w-full" onclick="parseS6Text()">Parse Text</button>
+                </div>
+              </div>
+
+              <div class="tab-content hidden flex-1 p-2" id="s6TabParcels">
+                <div class="row-layout gap-2 mb-3">
+                   <button class="btn btn-primary btn-sm flex-1" onclick="autoPopulateAdjoiners()">⚡ Auto-populate from Board</button>
+                   <button class="btn btn-outline btn-sm flex-1" onclick="addAdjoinerParcel()">+ Add Manually</button>
+                   <button class="btn btn-outline btn-sm" onclick="clearAllParcels()" title="Clear All">🗑️</button>
+                </div>
+                <div class="parcel-list" id="s6ParcelList">
+                   <!-- Populated via JS -->
+                </div>
+              </div>
+
+              <div class="tab-content hidden p-3" id="s6TabOptions">
+                <div class="form-check"><input type="checkbox" id="optDrawBoundary" checked> <label>Draw Boundary Lines (Polylines)</label></div>
+                <div class="form-check"><input type="checkbox" id="optDrawLabels" checked> <label>Draw Bearing & Distance Labels</label></div>
+                <div class="form-check"><input type="checkbox" id="optDrawEndpoints"> <label>Draw Endpoints</label></div>
+                
+                <div class="form-group mt-3">
+                  <label>Label Text Height</label>
+                  <input type="number" id="optLabelSize" class="inp" value="2.0" step="0.5">
+                </div>
+                <div class="form-group mt-2">
+                  <label>Closure Tolerance (ft) <span class="hint">- for warning text</span></label>
+                  <input type="number" id="optCloseTol" class="inp" value="0.5" step="0.1">
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Right: Sketch & Export -->
+          <div class="split-right flex-col">
+            <div class="glass-card flex-1 flex-col justify-center align-center">
+               <div id="s6SketchWrap" class="sketch-wrap hidden w-full">
+                 <svg id="s6SketchSvg" width="100%" height="300" class="poly-sketch"></svg>
+                 <div id="s6AreaStats" class="area-stats mt-2 text-center text-sm"></div>
+               </div>
+               <div id="s6NoSketch" class="empty-state">
+                 <div class="empty-icon">📐</div>
+                 <p>Parsed boundary limits will sketch here.</p>
+               </div>
+            </div>
+            <div class="glass-card mt-3 text-center">
+              <button class="btn btn-success btn-lg w-full" id="btnGenerateDxf" onclick="doGenerateDxf()">
+                <span class="btn-icon">💾</span> Generate & Save DXF
+              </button>
+              <div id="s6GenerateStatus" class="mt-2 text-sm text-text3"></div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
     </div>
-    <button class="close-btn" onclick="closePlatPanel()">✕</button>
-  </div>
-  <div class="plat-body" id="platBody">
-    <div class="detail-loading"><div class="spinner"></div><p>Searching cabinet files…</p></div>
-  </div>
-</aside>
+  </main>
 
-<!-- ═══════════════════════════ ADJOINERS PANEL ═══════════════════════════ -->
-<div class="adj-overlay hidden" id="adjOverlay" onclick="closeAdjPanel()"></div>
-<aside class="adj-panel hidden" id="adjPanel">
-  <div class="detail-header">
-    <div>
-      <h2 class="detail-title">🏘️ Adjoiner Discovery</h2>
-      <span class="detail-docno" id="adjDocRef"></span>
+  <!-- OVERALL PROGRESS FOOTER -->
+  <footer class="app-footer">
+    <div class="footer-stats" id="footerStats">
+      <span class="stat">Deeds: <strong id="statDeeds" class="text-accent2">0/0</strong></span>
+      <span class="stat">Plats: <strong id="statPlats" class="text-accent2">0/0</strong></span>
     </div>
-    <button class="close-btn" onclick="closeAdjPanel()">✕</button>
-  </div>
-  <div class="plat-body" id="adjBody">
-    <div class="detail-loading"><div class="spinner"></div><p>Scanning deed text & online records…</p></div>
-  </div>
-</aside>
-
-<!-- ═══════════════════════════ RESEARCH BOARD ═══════════════════════════ -->
-<div class="board-overlay hidden" id="boardOverlay" onclick="closeResearchBoard()"></div>
-<aside class="board-panel hidden" id="boardPanel">
-  <div class="detail-header">
-    <div>
-      <h2 class="detail-title">🗂️ Research Board</h2>
-      <span class="detail-docno" id="boardJobLabel"></span>
-    </div>
-    <button class="close-btn" onclick="closeResearchBoard()">✕</button>
-  </div>
-
-  <!-- Job context bar -->
-  <div class="board-job-bar" id="boardJobBar">
-    <div class="form-row" style="gap:8px;padding:12px 16px 0">
-      <div class="form-group" style="flex:0 0 90px">
-        <label>Job #</label>
-        <input type="number" id="boardJobNum" class="inp" placeholder="Auto" oninput="boardJobChanged()" />
+    <div class="progress-bar-container w-full max-w-lg mx-auto">
+      <div class="progress-track">
+        <div class="progress-fill" id="globalProgressFill" style="width:0%"></div>
       </div>
-      <div class="form-group" style="flex:1">
-        <label>Client Name <span class="hint">(Last, First)</span></label>
-        <input type="text" id="boardClientName" class="inp" placeholder="e.g. Garza, Veronica" oninput="boardJobChanged()" />
+    </div>
+    <div class="footer-actions">
+       <button class="btn btn-outline btn-sm" onclick="exportSession()">📥 Export CSV</button>
+    </div>
+  </footer>
+
+  <!-- GLOBAL CABINET BROWSER MODAL (Reused from previous) -->
+  <div class="modal-overlay hidden" id="cabinetOverlay" onclick="if(event.target===this) closeCabinetBrowser()">
+    <div class="modal glass-card" id="cabinetPanel">
+      <div class="modal-header">
+        <h2>🗄️ Cabinet Browser</h2>
+        <button class="close-btn" onclick="closeCabinetBrowser()">✕</button>
       </div>
-      <div class="form-group" style="flex:0 0 86px">
-        <label>Type</label>
-        <select id="boardJobType" class="inp" onchange="boardJobChanged()"></select>
+      <div class="p-3 border-b flex gap-2" style="background:var(--bg3)">
+        <div class="cab-tabs flex gap-2">
+          <button class="cab-tab active" data-cab="A" onclick="browseCabinet('A')">Cab A</button>
+          <button class="cab-tab" data-cab="B" onclick="browseCabinet('B')">Cab B</button>
+          <button class="cab-tab" data-cab="C" onclick="browseCabinet('C')">Cab C</button>
+          <button class="cab-tab" data-cab="D" onclick="browseCabinet('D')">Cab D</button>
+          <button class="cab-tab" data-cab="E" onclick="browseCabinet('E')">Cab E</button>
+          <button class="cab-tab" data-cab="F" onclick="browseCabinet('F')">Cab F</button>
+        </div>
+        <input type="text" id="cabinetFilter" class="inp ml-auto w-48" placeholder="Filter names..." onkeyup="if(event.key==='Enter') filterCabinet()">
+        <button class="btn btn-primary btn-sm" onclick="filterCabinet()">Apply</button>
+      </div>
+      <div class="modal-body p-0" style="max-height: 60vh; overflow-y: auto;">
+        <div class="p-2 border-b text-xs text-text3 flex justify-between">
+          <span id="cabinetCount"></span>
+        </div>
+        <div id="cabinetBody" class="p-3">
+          <!-- Populated by JS -->
+        </div>
       </div>
     </div>
-    <div style="padding:6px 16px 10px;display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" style="font-size:11px;padding:6px 12px" onclick="loadResearchSession()">
-        📂 Load Session
-      </button>
-      <button class="btn btn-outline" style="font-size:11px;padding:6px 12px" onclick="openFolderForJob()">
-        📁 Open Folder
-      </button>
-      <button class="btn btn-outline" style="font-size:11px;padding:6px 12px" onclick="loadRecentJobs()">
-        🕒 Recent
-      </button>
-      <button class="btn btn-outline" style="font-size:11px;padding:6px 12px" onclick="exportSession()">
-        📤 Export
-      </button>
-      <button class="btn btn-accent" style="font-size:11px;padding:6px 12px" onclick="bulkSearchAdjoiners()" title="Search all pending adjoiners at once">
-        🔍 Search All
-      </button>
-    </div>
   </div>
 
-  <!-- Subject list -->
-  <div class="board-body" id="boardBody">
-    <div class="plat-empty">Enter a job number and client name above, then click Load Session.</div>
-  </div>
-
-  <!-- Add adjoiner -->
-  <div class="board-add-bar">
-    <input type="text" id="boardAdjName" class="inp" placeholder="Adjoiner name (Last, First)…" style="flex:1" />
-    <button class="btn btn-accent" style="font-size:11px;padding:8px 12px;white-space:nowrap" onclick="addAdjoiner()">
-      + Add Adjoiner
-    </button>
-  </div>
-</aside>
-
-<!-- ═══════════════════════════ SAVE MODAL ═══════════════════════════ -->
-<div class="modal-overlay hidden" id="modalOverlay" onclick="closeSaveModal()"></div>
-<div class="modal hidden" id="saveModal">
-  <div class="modal-header">
-    <h2>📁 Save Deed</h2>
-    <button class="close-btn" onclick="closeSaveModal()">✕</button>
-  </div>
-  <div class="modal-body">
-
-    <!-- Subject toggle -->
-    <div class="modal-section">
-      <h3>Save For</h3>
-      <div class="subject-toggle" id="subjectToggle">
-        <button class="stog-btn active" id="stogClient" onclick="setSubject('client')">
-          👤 Client
-        </button>
-        <button class="stog-btn" id="stogAdjoiner" onclick="setSubject('adjoiner')">
-          🏘️ Adjoiner
-        </button>
+  <!-- SETTINGS MODAL -->
+  <div class="modal-overlay hidden" id="settingsOverlay" onclick="if(event.target===this) closeSettingsModal()">
+    <div class="modal glass-card">
+      <div class="modal-header">
+        <h2>⚙️ Connection Settings</h2>
+        <button class="close-btn" onclick="closeSettingsModal()">✕</button>
       </div>
-      <div class="form-group hidden" id="adjNameGroup" style="margin-top:10px">
-        <label for="modalAdjName">Adjoiner Name <span class="hint">(Last, First)</span></label>
-        <input type="text" id="modalAdjName" class="inp" placeholder="e.g. Rael, Carlos"
-               list="adjNameSuggestions" />
-        <datalist id="adjNameSuggestions"></datalist>
-      </div>
-    </div>
-
-    <div class="modal-section">
-      <h3>Project Details</h3>
-      <div class="form-row">
+      <div class="modal-body">
+        <!-- Drive Status -->
+        <div class="form-group mb-3" style="background:rgba(0,0,0,.2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;">
+          <div class="row-layout justify-between mb-2">
+            <label style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text2);">📁 Survey Data Drive</label>
+            <button class="btn btn-outline btn-sm" id="btnRescanDrive" onclick="rescanDrive()">⟳ Rescan</button>
+          </div>
+          <div id="driveStatusRow" class="row-layout gap-2" style="font-size:13px;">
+            <span id="driveStatusDot" style="width:8px;height:8px;border-radius:50%;background:var(--text3);display:inline-block;flex-shrink:0"></span>
+            <span id="driveStatusText" style="color:var(--text2)">Checking...</span>
+          </div>
+          <div class="row-layout gap-2 mt-2">
+            <input type="text" id="driveOverrideInput" class="inp" maxlength="1" style="width:52px;text-align:center;font-family:monospace;font-weight:700;font-size:15px;text-transform:uppercase" placeholder="E">
+            <button class="btn btn-outline btn-sm flex-1" onclick="pinDrive()">Pin Drive Letter</button>
+            <button class="btn btn-outline btn-sm" onclick="pinDrive(true)" title="Clear pinned drive, use auto-detect">✕ Auto</button>
+          </div>
+        </div>
+        <!-- Connection credentials -->
         <div class="form-group">
-          <label for="modalJobNum">Job Number <span class="hint">(auto-assigned)</span></label>
-          <input type="number" id="modalJobNum" class="inp" placeholder="Auto" oninput="updatePreview()" />
+          <label>URL</label>
+          <input type="text" id="cfgUrl" class="inp" placeholder="https://1stnmtitle.com/records/...">
         </div>
         <div class="form-group">
-          <label for="modalJobType">Job Type</label>
-          <select id="modalJobType" class="inp" onchange="updatePreview()">
-            <!-- filled by JS -->
-          </select>
+          <label>Username</label>
+          <input type="text" id="cfgUser" class="inp">
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="cfgPass" class="inp">
+        </div>
+        <div class="form-check mt-3">
+           <input type="checkbox" id="optAutoOpen" checked>
+           <label>Auto-open PDFs after saving</label>
         </div>
       </div>
-      <div class="form-group">
-        <label for="modalClientName">Client Name <span class="hint">(Last, First)</span></label>
-        <input type="text" id="modalClientName" class="inp" placeholder="e.g. Garza, Veronica"
-               oninput="updatePreview()" />
+
+      <div class="modal-footer">
+        <div class="text-xs text-text3 flex-1" id="cfgStatus"></div>
+        <button class="btn btn-outline" onclick="closeSettingsModal()">Cancel</button>
+        <button class="btn btn-primary" id="btnSaveConfig" onclick="saveConfig()">🔌 Connect</button>
       </div>
     </div>
-
-    <div class="modal-section preview-section">
-      <h3>Save Preview</h3>
-      <div class="save-preview" id="savePreview">
-        <div class="preview-line">
-          <span class="preview-label">Folder</span>
-          <span class="preview-value mono" id="previewFolder">—</span>
-        </div>
-        <div class="preview-line">
-          <span class="preview-label">Filename</span>
-          <span class="preview-value mono" id="previewFilename">—</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="modal-section" id="saveResultSection" style="display:none">
-      <div class="save-success" id="saveSuccess"></div>
-    </div>
-
-  </div>
-  <div class="modal-footer">
-    <div style="display:flex;align-items:center;gap:8px;flex:1">
-      <input type="checkbox" id="autoOpenPdf" style="cursor:pointer" />
-      <label for="autoOpenPdf" style="font-size:11px;color:var(--text3);cursor:pointer">Auto-open PDF after save</label>
-    </div>
-    <button class="btn btn-outline" onclick="closeSaveModal()">Cancel</button>
-    <button class="btn btn-success" id="confirmSaveBtn" onclick="doSave()">
-      <span>💾</span> Save Deed &amp; Create Folders
-    </button>
-  </div>
-</div>
-
-<!-- ═══════════════════ CABINET BROWSER PANEL ═══════════════════ -->
-<div class="plat-overlay hidden" id="cabinetOverlay" onclick="closeCabinetBrowser()"></div>
-<aside class="plat-panel hidden" id="cabinetPanel" style="width:min(700px,95vw)">
-  <div class="detail-header">
-    <div>
-      <h2 class="detail-title">🗂️ Cabinet Browser</h2>
-      <span class="detail-docno" id="cabinetCount"></span>
-    </div>
-    <button class="close-btn" onclick="closeCabinetBrowser()">&#x2715;</button>
   </div>
 
-  <!-- Cabinet tabs -->
-  <div style="display:flex;gap:4px;padding:8px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center">
-    <div style="display:flex;gap:4px;flex-wrap:wrap;flex:1">
-      <button class="btn cab-tab active" data-cab="A" onclick="browseCabinet('A')" style="font-size:11px;padding:5px 10px">Cabinet A</button>
-      <button class="btn cab-tab" data-cab="B" onclick="browseCabinet('B')" style="font-size:11px;padding:5px 10px">Cabinet B</button>
-      <button class="btn cab-tab" data-cab="C" onclick="browseCabinet('C')" style="font-size:11px;padding:5px 10px">Cabinet C</button>
-      <button class="btn cab-tab" data-cab="D" onclick="browseCabinet('D')" style="font-size:11px;padding:5px 10px">Cabinet D</button>
-      <button class="btn cab-tab" data-cab="E" onclick="browseCabinet('E')" style="font-size:11px;padding:5px 10px">Cabinet E</button>
-      <button class="btn cab-tab" data-cab="F" onclick="browseCabinet('F')" style="font-size:11px;padding:5px 10px">Cabinet F</button>
-    </div>
-    <div style="display:flex;gap:6px;align-items:center">
-      <input type="text" id="cabinetFilter" class="inp" placeholder="Filter by name…"
-             style="width:180px;font-size:11px;padding:5px 10px"
-             oninput="filterCabinet()" />
-    </div>
-  </div>
+  <script>
+    // ── On-screen error display (shows JS errors without needing DevTools) ──
+    window._errors = [];
+    window.onerror = function(msg, src, line, col, err) {
+      window._errors.push({msg, src, line, col});
+      var box = document.getElementById('_errBox');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = '_errBox';
+        box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a0505;border-bottom:2px solid #ff3333;color:#ff7b72;font-family:monospace;font-size:12px;padding:12px 16px;max-height:40vh;overflow:auto;white-space:pre-wrap';
+        box.innerHTML = '<b style="color:#ff3333;font-size:14px">⚠ JavaScript Error(s):</b><br>';
+        document.body.prepend(box);
+      }
+      box.innerHTML += '\n❌ ' + msg + '\n   at ' + (src||'?') + ':' + line + ':' + col + '\n';
+      return false;
+    };
+    console.log('[DEBUG] Error handler installed');
 
-  <!-- File list -->
-  <div class="plat-body" id="cabinetBody" style="max-height:calc(100vh - 220px);overflow-y:auto">
-    <div class="detail-loading"><div class="spinner"></div><p>Loading…</p></div>
-  </div>
-</aside>
-
-<script src="app.js"></script>
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log('[DEBUG] DOMContentLoaded fired');
+      // Check if app.js loaded successfully
+      setTimeout(function() {
+        if (typeof showSettingsModal !== 'function') {
+          var box = document.getElementById('_errBox');
+          if (!box) {
+            box = document.createElement('div');
+            box.id = '_errBox';
+            box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a0505;border-bottom:2px solid #ff3333;color:#ff7b72;font-family:monospace;font-size:12px;padding:12px 16px;max-height:40vh;overflow:auto;white-space:pre-wrap';
+            document.body.prepend(box);
+          }
+          box.innerHTML = '<b style="color:#ff3333;font-size:14px">⚠ app.js failed to load or parse</b><br>';
+          box.innerHTML += 'showSettingsModal is ' + typeof showSettingsModal + '<br>';
+          box.innerHTML += 'apiFetch is ' + typeof apiFetch + '<br>';
+          box.innerHTML += 'startSession is ' + typeof startSession + '<br>';
+          box.innerHTML += 'Errors: ' + JSON.stringify(window._errors) + '<br>';
+          box.innerHTML += '<br><b>Try: Ctrl+Shift+R to hard refresh</b>';
+        } else {
+          console.log('[DEBUG] app.js loaded OK - all functions available');
+        }
+      }, 2000);
+    });
+  </script>
+  <script src="app.js?v=1774891000" onerror="
+    var box = document.createElement('div');
+    box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a0505;border-bottom:2px solid #ff3333;color:#ff7b72;font-family:monospace;font-size:14px;padding:16px;text-align:center';
+    box.textContent = '❌ Failed to load app.js - server may be down';
+    document.body.prepend(box);
+  "></script>
 </body>
 </html>

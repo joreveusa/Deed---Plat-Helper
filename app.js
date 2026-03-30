@@ -1,885 +1,213 @@
-/* ═══════════════════  Deed & Plat Helper — Frontend Logic  ═══════════════════ */
+// @ts-nocheck
+console.log("[app.js] EXECUTING - top of file");
+const API = "/api";  // Use relative URL to avoid CORS issues
 
-const API = "/api";
 
-let state = {
-  loggedIn:       false,
-  username:       "",
-  results:        [],
-  selectedDoc:    null,
+const state = {
+  currentStep: 1,
+  loggedIn: false,
+  nextJobNum: null,
+  researchSession: null,
+  selectedDoc: null,
   selectedDetail: null,
-  nextJobNum:     null,
-  jobTypes:       [],
-  platResults:    null,
-  discoveredAdjoiners: null,
-  // Research Board
-  researchSession:  null,
-  saveSubject:      "client",
+  discoveredAdjoiners: [],
+  parsedCalls: [],
+  adjoinParcels: [],
+  searchResults: []
 };
 
-// ── init ───────────────────────────────────────────────────────────────────────
+// 
+// INIT & BOOTSTRAP
+// 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Load config and recent jobs immediately  do NOT await checkLogin first
+  // checkLogin hits 1stnmtitle.com which can block for up to 30s
   await loadConfig();
-  prefillPreview();
+  loadRecentJobs(); // fire immediately, no await
+  checkLogin();     // fire in background, no await
 
-  // Update preview on modal field changes
-  ["modalJobNum", "modalClientName", "modalJobType"].forEach(id => {
-    document.getElementById(id)?.addEventListener("input", prefillPreview);
-    document.getElementById(id)?.addEventListener("change", prefillPreview);
-  });
+  // Restore last session fields
+  if (state.lastSession) {
+    document.getElementById("setupJobNum").value = state.lastSession.job_number || "";
+    document.getElementById("setupClient").value = state.lastSession.client_name || "";
+    document.getElementById("setupJobType").value = state.lastSession.job_type || "BDY";
+  } else {
+    apiFetch("/next-job-number").then(r => {
+      if (r.success) {
+        state.nextJobNum = r.next_job_number;
+        document.getElementById("setupJobNum").placeholder = "Auto: " + r.next_job_number;
+      }
+    }).catch(() => {});
+  }
 
-  // Enter key on search fields
-  ["searchName", "searchAddress"].forEach(id => {
-    document.getElementById(id).addEventListener("keydown", e => {
-      if (e.key === "Enter" && !document.getElementById("searchBtn").disabled) doSearch();
-    });
-  });
-  ["username", "password"].forEach(id => {
-    document.getElementById(id).addEventListener("keydown", e => {
-      if (e.key === "Enter") doLogin();
-    });
-  });
+  updateStepUI();
 });
 
-// ── config load ────────────────────────────────────────────────────────────────
 async function loadConfig() {
   try {
-    const cfg = await apiFetch("/config");
-    if (cfg.username) document.getElementById("username").value = cfg.username;
-    if (cfg.has_password) document.getElementById("remember").checked = true;
-    state.jobTypes = cfg.job_types || ["BDY", "CNS", "TOPO", "ALTA", "LOC", "OTHER"];
-    // Populate both job-type selects
-    ["modalJobType", "boardJobType"].forEach(selId => {
-      const sel = document.getElementById(selId);
-      if (!sel) return;
-      sel.innerHTML = "";
-      state.jobTypes.forEach(t => {
-        const opt = document.createElement("option");
-        opt.value = t; opt.textContent = t;
-        sel.appendChild(opt);
-      });
-    });
-    // ♥ Feature 4: restore last session on startup
-    if (cfg.last_session?.job_number && cfg.last_session?.client_name) {
-      const ls = cfg.last_session;
-      document.getElementById("boardJobNum").value     = ls.job_number;
-      document.getElementById("boardClientName").value = ls.client_name;
-      document.getElementById("boardJobType").value    = ls.job_type || "BDY";
-      try {
-        const res = await apiFetch(
-          `/research-session?job_number=${ls.job_number}&client_name=${encodeURIComponent(ls.client_name)}&job_type=${ls.job_type || "BDY"}`
-        );
-        if (res.success) {
-          state.researchSession = res.session;
-          document.getElementById("boardJobLabel").textContent = `Job #${ls.job_number}`;
-          showToast(`Session restored: Job #${ls.job_number} — ${ls.client_name}`, "info");
-        }
-      } catch (_) {}
-    }
-  } catch (_) {}
-}
-
-// ── login ──────────────────────────────────────────────────────────────────────
-async function doLogin() {
-  const btn = document.getElementById("loginBtn");
-  const username = document.getElementById("username").value.trim();
-  const password = document.getElementById("password").value;
-  const remember = document.getElementById("remember").checked;
-
-  if (!username || !password) { showToast("Enter username and password", "warn"); return; }
-
-  btn.disabled = true;
-  btn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px"></div> Connecting…';
-  setStatusDot("loading", "Connecting…");
-
-  try {
-    const res = await apiFetch("/login", "POST", { username, password, remember });
+    const res = await apiFetch("/config");
     if (res.success) {
-      state.loggedIn = true;
-      state.username = username;
-      setStatusDot("online", `Connected as ${username}`);
-      document.getElementById("loginForm").classList.add("hidden");
-      document.getElementById("loggedInPanel").classList.remove("hidden");
-      document.getElementById("loggedInUser").textContent = username;
-      document.getElementById("searchBtn").disabled = false;
-      showToast("Connected to Taos County records", "success");
-    } else {
-      setStatusDot("offline", "Not connected");
-      showToast(res.error || "Login failed", "error");
+      if (res.config.firstnm_user) document.getElementById("cfgUser").value = res.config.firstnm_user;
+      if (res.config.firstnm_pass) document.getElementById("cfgPass").value = res.config.firstnm_pass;
+      if (res.config.firstnm_url)  document.getElementById("cfgUrl").value  = res.config.firstnm_url;
+      state.lastSession = res.config.last_session;
     }
   } catch (e) {
-    setStatusDot("offline", "Connection error");
-    showToast("Cannot reach server: " + e.message, "error");
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<span class="btn-icon">🔑</span> Connect';
+    console.error("Config load failed", e);
   }
 }
 
-async function doLogout() {
-  await apiFetch("/logout", "POST");
-  state.loggedIn = false;
-  state.results = [];
-  setStatusDot("offline", "Not connected");
-  document.getElementById("loginForm").classList.remove("hidden");
-  document.getElementById("loggedInPanel").classList.add("hidden");
-  document.getElementById("searchBtn").disabled = true;
-  showView("empty");
-  document.getElementById("resultCount").classList.add("hidden");
-  document.getElementById("topbarTitle").textContent = "Property Records Search";
-  showToast("Logged out", "info");
-}
-
-// ── search ─────────────────────────────────────────────────────────────────────
-async function doSearch() {
-  const name     = document.getElementById("searchName").value.trim();
-  const address  = document.getElementById("searchAddress").value.trim();
-  const operator = document.getElementById("searchOperator").value;
-
-  if (!name && !address) { showToast("Enter a name or address to search", "warn"); return; }
-
-  const btn = document.getElementById("searchBtn");
-  btn.disabled = true;
-  btn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px"></div> Searching…';
-  document.getElementById("loadingText").textContent = "Searching Taos County records…";
-  showView("loading");
-
-  try {
-    const res = await apiFetch("/search", "POST", { name, address, operator });
-    if (!res.success) {
-      showToast(res.error || "Search failed", "error");
-      showView("empty");
-      return;
-    }
-
-    state.results = res.results;
-    renderResults(res.results);
-
-    const cnt = document.getElementById("resultCount");
-    cnt.textContent = `${res.results.length} record${res.results.length !== 1 ? "s" : ""}`;
-    cnt.classList.remove("hidden");
-
-    const label = [name, address].filter(Boolean).join(" · ");
-    document.getElementById("topbarTitle").textContent = `Results for "${label}"`;
-
-    if (res.results.length === 0) {
-      showToast("No records found", "warn");
-      showView("empty");
-    } else {
-      showView("results");
-    }
-  } catch (e) {
-    showToast("Search error: " + e.message, "error");
-    showView("empty");
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<span class="btn-icon">🔍</span> Search Records';
-  }
-}
-
-// ── render results ─────────────────────────────────────────────────────────────
-function renderResults(results) {
-  const tbody = document.getElementById("resultsBody");
-  tbody.innerHTML = "";
-
-  results.forEach((r, idx) => {
-    const tr = document.createElement("tr");
-    tr.dataset.idx = idx;
-    tr.onclick = () => loadDocument(r.doc_no, idx);
-
-    const typeClass = getTypeClass(r.instrument_type);
-    tr.innerHTML = `
-      <td><a class="doc-no-link">${escHtml(r.doc_no)}</a></td>
-      <td><span class="badge ${typeClass}">${escHtml(shortType(r.instrument_type))}</span></td>
-      <td>${escHtml(r.location)}</td>
-      <td>${escHtml(r.recorded_date)}</td>
-      <td>${escHtml(r.grantor)}</td>
-      <td>${escHtml(r.grantee)}</td>
-      <td style="font-family:monospace;font-size:11px">${escHtml(r.gf_number)}</td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
-
-function getTypeClass(type) {
-  const t = (type || "").toLowerCase();
-  if (t.includes("deed") || t.includes("warranty") || t.includes("quitclaim")) return "badge-deed";
-  if (t.includes("mortgage") || t.includes("assignment")) return "badge-mortgage";
-  return "badge-other";
-}
-
-function shortType(type) {
-  if (!type) return "—";
-  const t = type.toUpperCase();
-  if (t.includes("WARRANTY")) return "WARRANTY DEED";
-  if (t.includes("QUITCLAIM")) return "QUITCLAIM";
-  if (t.includes("MORTGAGE: ASSIGN")) return "MTG ASSIGN";
-  if (t.includes("MORTGAGE")) return "MORTGAGE";
-  if (t.includes("DEED")) return "DEED";
-  if (t.includes("DOMESTIC")) return "DV";
-  return type.length > 20 ? type.substring(0, 20) + "…" : type;
-}
-
-// ── document detail ────────────────────────────────────────────────────────────
-async function loadDocument(docNo, idx) {
-  // Highlight selected row
-  document.querySelectorAll("#resultsBody tr").forEach(r => r.classList.remove("selected"));
-  const row = document.querySelector(`#resultsBody tr[data-idx="${idx}"]`);
-  if (row) row.classList.add("selected");
-
-  state.selectedDoc = state.results[idx];
-
-  // Show panel with loading state
-  const panel = document.getElementById("detailPanel");
-  const overlay = document.getElementById("detailOverlay");
-  document.getElementById("detailTitle").textContent = shortType(state.selectedDoc?.instrument_type || "Document");
-  document.getElementById("detailDocNo").textContent = docNo;
-  document.getElementById("detailBody").innerHTML = `
-    <div class="detail-loading"><div class="spinner"></div><p>Loading document…</p></div>
-  `;
-  panel.classList.remove("hidden");
-  overlay.classList.remove("hidden");
-  requestAnimationFrame(() => panel.classList.add("open"));
-
-  try {
-    const res = await apiFetch(`/document/${docNo}?username=${encodeURIComponent(state.username)}`);
-    if (!res.success) {
-      document.getElementById("detailBody").innerHTML = `<p style="color:var(--danger);padding:20px">${escHtml(res.error)}</p>`;
-      return;
-    }
-    state.selectedDetail = res.detail;
-    renderDetail(res.detail);
-  } catch (e) {
-    document.getElementById("detailBody").innerHTML = `<p style="color:var(--danger);padding:20px">Error: ${escHtml(e.message)}</p>`;
-  }
-}
-
-const FIELD_ORDER = [
-  "Document Number", "Location", "Document_Code", "GF_Number",
-  "Instrument_Type", "Document_No", "Recorded_Date", "Instrument_Date",
-  "Grantor", "Grantee", "Subdivision_Legal", "Township_Legal",
-  "Other_Legal", "Address", "Comments", "Reference",
-  "Title_Company", "Amount"
-];
-const HIGHLIGHT_KEYS = new Set(["Grantor", "Grantee", "Instrument_Type", "Document Number"]);
-
-function renderDetail(detail) {
-  const body = document.getElementById("detailBody");
-  const grid = document.createElement("div");
-  grid.className = "detail-grid";
-
-  const keys = [...FIELD_ORDER, ...Object.keys(detail).filter(k =>
-    !FIELD_ORDER.includes(k) && !["doc_no", "pdf_url"].includes(k)
-  )];
-
-  keys.forEach(k => {
-    const val = detail[k];
-    if (val === undefined || val === "" || val === null) return;
-    const row = document.createElement("div");
-    row.className = "detail-row";
-    row.innerHTML = `
-      <div class="detail-key">${escHtml(k.replace(/_/g, " "))}</div>
-      <div class="detail-val${HIGHLIGHT_KEYS.has(k) ? " highlight" : ""}">${escHtml(val)}</div>
-    `;
-    grid.appendChild(row);
-  });
-
-  body.innerHTML = "";
-  body.appendChild(grid);
-}
-
-function closeDetail() {
-  const panel = document.getElementById("detailPanel");
-  const overlay = document.getElementById("detailOverlay");
-  panel.classList.remove("open");
-  setTimeout(() => {
-    panel.classList.add("hidden");
-    overlay.classList.add("hidden");
-    document.querySelectorAll("#resultsBody tr").forEach(r => r.classList.remove("selected"));
-  }, 260);
-  state.selectedDetail = null;
-}
-
-function openPdfNewTab() {
-  const url = state.selectedDetail?.pdf_url ||
-    (state.selectedDoc ? `http://records.1stnmtitle.com/WebTemp/${state.selectedDoc.doc_no}.pdf` : null);
-  if (url) window.open(url, "_blank");
-}
-
-// ── chain of title ─────────────────────────────────────────────────────────────
-function doChainSearch() {
-  const grantor = state.selectedDetail?.["Grantor"] || state.selectedDoc?.grantor || "";
-  if (!grantor) { showToast("No grantor on this deed", "warn"); return; }
-  // Get the last name (before the comma)
-  const last = grantor.split(",")[0].trim();
-  document.getElementById("searchName").value     = last;
-  document.getElementById("searchOperator").value = "contains";
-  closeDetail();
-  showToast(`Searching chain: "${last}"…`, "info");
-  if (!document.getElementById("searchBtn").disabled) doSearch();
-  else showToast("Connect to records first", "warn");
-}
-
-// ── adjoiner discovery ─────────────────────────────────────────────────────────
-async function doFindAdjoiners() {
-  if (!state.selectedDoc) return;
-
-  const panel   = document.getElementById("adjPanel");
-  const overlay = document.getElementById("adjOverlay");
-  const body    = document.getElementById("adjBody");
-  document.getElementById("adjDocRef").textContent = state.selectedDoc.doc_no || "";
-
-  body.innerHTML = `<div class="detail-loading"><div class="spinner"></div><p>Scanning deed text &amp; online records…</p></div>`;
-  panel.classList.remove("hidden");
-  overlay.classList.remove("hidden");
-  requestAnimationFrame(() => panel.classList.add("open"));
-
-  try {
-    const res = await apiFetch("/find-adjoiners", "POST", {
-      detail:   state.selectedDetail || {},
-      grantor:  state.selectedDetail?.["Grantor"] || state.selectedDoc?.grantor || "",
-      location: state.selectedDetail?.["Location"] || state.selectedDoc?.location || "",
-      doc_no:   state.selectedDoc?.doc_no || "",
-    });
-    if (!res.success) {
-      body.innerHTML = `<p style="color:var(--danger);padding:20px">${escHtml(res.error)}</p>`;
-      return;
-    }
-    state.discoveredAdjoiners = res.adjoiners || [];
-    renderAdjoiners(res);
-  } catch (e) {
-    body.innerHTML = `<p style="color:var(--danger);padding:20px">Error: ${escHtml(e.message)}</p>`;
-  }
-}
-
-function renderAdjoiners(res) {
-  const body      = document.getElementById("adjBody");
-  const adjoiners = res.adjoiners || [];
-
-  if (!adjoiners.length) {
-    body.innerHTML = `
-      <div class="plat-empty">
-        <div style="font-size:32px;margin-bottom:12px">🔍</div>
-        No adjoiner names found.<br>
-        <span style="font-size:11px;margin-top:8px;display:block">
-          No cabinet plat was matched for this deed, or the plat scan<br>
-          could not be read. Try finding the plat first.
-        </span>
-      </div>`;
+// 
+// WORKFLOW STEPPER LOGIC
+// 
+function goToStep(step) {
+  if (step > 1 && !state.researchSession) {
+    showToast("Please start a research session first", "warn");
     return;
   }
-
-  const plat_ocr = adjoiners.filter(a => a.source === "plat_ocr");
-  const online   = adjoiners.filter(a => a.source === "online_range");
-
-  const onBoard = new Set(
-    (state.researchSession?.subjects || [])
-      .filter(s => s.type === "adjoiner")
-      .map(s => s.name.toLowerCase())
-  );
-
-  const platName = res.plat_used || "";
-  let html = `<div style="font-size:11px;color:var(--text3);padding:8px 0 12px">
-    Found <strong style="color:var(--text)">${adjoiners.length}</strong> potential adjoiner${adjoiners.length !== 1 ? "s" : ""}.
-    Click <strong style="color:var(--text)">Add to Board</strong> to track them.
-  </div>`;
-
-  if (plat_ocr.length) {
-    const shortPlat = platName.length > 45 ? platName.slice(0,42)+"…" : platName;
-    const platLabel = platName ? ` <span style="color:var(--text3);font-weight:400">${escHtml(shortPlat)}</span>` : "";
-    html += `<div class="plat-section-title">🗺️ From Plat OCR (${plat_ocr.length})${platLabel}</div>`;
-    plat_ocr.forEach((a, i) => { html += adjCard(a, i, "plat_ocr", onBoard.has(a.name.toLowerCase())); });
-  }
-  if (online.length) {
-    html += `<div class="plat-section-title">🌐 Nearby Online Records (${online.length})</div>`;
-    online.forEach((a, i) => { html += adjCard(a, plat_ocr.length + i, "online", onBoard.has(a.name.toLowerCase())); });
-  }
-
-  body.innerHTML = html;
+  state.currentStep = step;
+  updateStepUI();
 }
 
-
-function adjCard(a, idx, type, alreadyAdded) {
-  const pill = type === "plat_ocr"
-    ? `<span class="adj-source-pill adj-source-legal">🗺️ Plat OCR</span>`
-    : `<span class="adj-source-pill adj-source-online">🌐 Online — ${escHtml(a.location || "")}</span>`;
-  const addBtn = alreadyAdded
-    ? `<button class="btn btn-outline" style="font-size:10px;padding:4px 10px" disabled>✓ On Board</button>`
-    : `<button class="btn btn-success" style="font-size:11px;padding:5px 10px" onclick="addAdjoinerFromDiscovery(${idx})">+ Add to Board</button>`;
-  const searchBtn = `<button class="btn btn-outline" style="font-size:10px;padding:4px 10px"
-    onclick="searchForSubject('${escHtml(a.name.split(",")[0]).replace(/'/g,"\\'")}')">🔍 Search</button>`;
-  return `<div class="plat-card">${pill}<div class="plat-card-title">${escHtml(a.name)}</div><div class="plat-card-actions">${addBtn}${searchBtn}</div></div>`;
-}
-
-
-async function addAdjoinerFromDiscovery(idx) {
-  const a = state.discoveredAdjoiners?.[idx];
-  if (!a) return;
-  if (!state.researchSession) {
-    showToast("Open the Research Board and load a session first.", "warn");
-    return;
-  }
-  const exists = state.researchSession.subjects.some(
-    s => s.type === "adjoiner" && s.name.toLowerCase() === a.name.toLowerCase()
-  );
-  if (exists) { showToast(`${a.name} is already on the board`, "warn"); return; }
-
-  state.researchSession.subjects.push({
-    id:         "adj_" + Date.now(),
-    type:       "adjoiner",
-    name:       a.name,
-    deed_saved: false,
-    plat_saved: false,
-  });
-  await persistSession();
-  renderAdjoiners({ adjoiners: state.discoveredAdjoiners });
-  renderBoard();
-  showToast(`${a.name} added to Research Board`, "success");
-}
-
-function closeAdjPanel() {
-  const panel   = document.getElementById("adjPanel");
-  const overlay = document.getElementById("adjOverlay");
-  panel.classList.remove("open");
-  setTimeout(() => { panel.classList.add("hidden"); overlay.classList.add("hidden"); }, 260);
-}
-
-// ── plat finder ────────────────────────────────────────────────────────────────
-async function doFindPlat() {
-  if (!state.selectedDetail && !state.selectedDoc) return;
-
-  const panel   = document.getElementById("platPanel");
-  const overlay = document.getElementById("platOverlay");
-  const body    = document.getElementById("platBody");
-  const ref     = document.getElementById("platDocRef");
-
-  ref.textContent = state.selectedDoc?.doc_no || "";
-  body.innerHTML  = `<div class="detail-loading"><div class="spinner"></div><p>Searching cabinet files & online records…</p></div>`;
-
-  panel.classList.remove("hidden");
-  overlay.classList.remove("hidden");
-  requestAnimationFrame(() => panel.classList.add("open"));
-
-  try {
-    const res = await apiFetch("/find-plat", "POST", {
-      detail:   state.selectedDetail || {},
-      grantor:  state.selectedDetail?.["Grantor"] || state.selectedDoc?.grantor || "",
-      location: state.selectedDetail?.["Location"] || state.selectedDoc?.location || "",
-    });
-
-    if (!res.success) {
-      body.innerHTML = `<p style="color:var(--danger);padding:20px">${escHtml(res.error)}</p>`;
-      return;
-    }
-    renderPlatResults(res);
-  } catch (e) {
-    body.innerHTML = `<p style="color:var(--danger);padding:20px">Error: ${escHtml(e.message)}</p>`;
-  }
-}
-
-function renderPlatResults(res) {
-  const body = document.getElementById("platBody");
-  let html   = "";
-
-  // Cabinet references detected
-  if (res.cabinet_refs?.length) {
-    const pills = res.cabinet_refs.map(r =>
-      `<span class="plat-ref-pill">${escHtml(r.raw)}</span>`
-    ).join(" ");
-    html += `<div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">${pills}</div>`;
-  }
-
-  // ── Local results ─────────────────────────────────────────────────────────
-  html += `<div class="plat-section-title">📁 Local Cabinet Files (${res.local?.length || 0})</div>`;
-  if (res.local?.length) {
-    res.local.forEach((h, i) => {
-      const shortName = h.file.length > 60 ? h.file.substring(0, 57) + "…" : h.file;
-      html += `
-        <div class="plat-card">
-          <span class="plat-card-badge badge-local">📂 Cabinet ${escHtml(h.cabinet)}</span>
-          <div class="plat-card-title">${escHtml(shortName)}</div>
-          <div class="plat-card-meta">Doc ${escHtml(h.doc)} &nbsp;·&nbsp; ${escHtml(String(h.size_kb))} KB</div>
-          <div class="plat-card-actions">
-            <button class="btn btn-outline" style="font-size:11px;padding:6px 10px"
-              onclick="openLocalFile('${escHtml(h.path.replace(/'/g,"\\'"))}')">
-              📂 Open Folder
-            </button>
-            <button class="btn btn-success" style="font-size:11px;padding:6px 10px"
-              onclick="savePlatLocal(${i})">
-              💾 Save to Plats
-            </button>
-          </div>
-        </div>`;
-    });
-  } else {
-    html += `<div class="plat-empty">No local cabinet files matched the deed references.</div>`;
-  }
-
-  // ── Online results ────────────────────────────────────────────────────────
-  html += `<div class="plat-section-title">🌐 Online Records – Surveys/Plats (${res.online?.length || 0})</div>`;
-  if (res.online?.length) {
-    res.online.forEach((h, i) => {
-      html += `
-        <div class="plat-card">
-          <span class="plat-card-badge badge-online">🌐 Online</span>
-          <div class="plat-card-title">${escHtml(h.instrument_type)}</div>
-          <div class="plat-card-meta">
-            Doc ${escHtml(h.doc_no)} &nbsp;·&nbsp; ${escHtml(h.recorded_date)}<br>
-            ${escHtml(h.grantor)} → ${escHtml(h.grantee)}
-          </div>
-          <div class="plat-card-actions">
-            <button class="btn btn-outline" style="font-size:11px;padding:6px 10px"
-              onclick="window.open('${escHtml(h.pdf_url)}','_blank')">
-              📄 View PDF
-            </button>
-            <button class="btn btn-success" style="font-size:11px;padding:6px 10px"
-              onclick="savePlatOnline(${i})">
-              💾 Save to Plats
-            </button>
-          </div>
-        </div>`;
-    });
-  } else {
-    html += `<div class="plat-empty">No survey/plat documents found online for this grantor.</div>`;
-  }
-
-  body.innerHTML = html;
-
-  // Stash results for save actions
-  state.platResults = res;
-}
-
-function closePlatPanel() {
-  const panel   = document.getElementById("platPanel");
-  const overlay = document.getElementById("platOverlay");
-  panel.classList.remove("open");
-  setTimeout(() => {
-    panel.classList.add("hidden");
-    overlay.classList.add("hidden");
-  }, 260);
-}
-
-function openLocalFile(filePath) {
-  // Open the folder containing the file using the OS file explorer via a backend call
-  const dir = filePath.substring(0, filePath.lastIndexOf("\\"));
-  apiFetch("/open-folder", "POST", { path: dir }).catch(() => {});
-  showToast("Opening folder in Explorer…", "info");
-}
-
-async function savePlatLocal(idx) {
-  const hit = state.platResults?.local?.[idx];
-  if (!hit) return;
-  await _savePlat({
-    source:    "local",
-    file_path: hit.path,
-    filename:  hit.file,
-  });
-}
-
-async function savePlatOnline(idx) {
-  const hit = state.platResults?.online?.[idx];
-  if (!hit) return;
-  await _savePlat({
-    source:  "online",
-    doc_no:  hit.doc_no,
-    pdf_url: hit.pdf_url,
-    filename: `${hit.doc_no} ${hit.grantor.split(",")[0].trim()} to ${hit.grantee.split(",")[0].trim()}.pdf`,
-  });
-}
-
-async function _savePlat(platData) {
-  // Need job context — use modal fields if open, otherwise prompt
-  const jobNum  = document.getElementById("modalJobNum")?.value || state.nextJobNum;
-  const client  = document.getElementById("modalClientName")?.value?.trim();
-  const jobType = document.getElementById("modalJobType")?.value || "BDY";
-
-  if (!client) {
-    showToast("Open the Save Deed modal first to set job number & client name, then save the plat.", "warn");
-    return;
-  }
-
-  try {
-    const res = await apiFetch("/save-plat", "POST", {
-      ...platData,
-      job_number:  parseInt(jobNum) || state.nextJobNum,
-      client_name: client,
-      job_type:    jobType,
-    });
-    if (res.success) {
-      showToast(`Plat saved → ${res.filename}`, "success");
-    } else {
-      showToast("Save failed: " + res.error, "error");
-    }
-  } catch (e) {
-    showToast("Error: " + e.message, "error");
-  }
-}
-
-// ── save modal ─────────────────────────────────────────────────────────────────
-async function openSaveModal() {
-  const modal   = document.getElementById("saveModal");
-  const overlay = document.getElementById("modalOverlay");
-  const resultSection = document.getElementById("saveResultSection");
-
-  resultSection.style.display = "none";
-  document.getElementById("saveSuccess").innerHTML = "";
-  document.getElementById("confirmSaveBtn").disabled = false;
-  document.getElementById("confirmSaveBtn").innerHTML = '<span>💾</span> Save Deed & Create Folders';
-
-  // If research board has a job loaded, pre-fill from it
-  if (state.researchSession) {
-    document.getElementById("modalJobNum").value      = state.researchSession.job_number;
-    document.getElementById("modalClientName").value  = state.researchSession.client_name;
-    document.getElementById("modalJobType").value     = state.researchSession.job_type;
-  } else if (state.selectedDetail) {
-    const grantee = state.selectedDetail["Grantee"] || state.selectedDoc?.grantee || "";
-    document.getElementById("modalClientName").value = toTitleCase(grantee);
-  }
-
-  // Reset subject to client
-  setSubject("client");
-
-  // Populate adjoiner datalist from research session
-  const dl = document.getElementById("adjNameSuggestions");
-  dl.innerHTML = "";
-  state.researchSession?.subjects?.filter(s => s.type === "adjoiner").forEach(s => {
-    const o = document.createElement("option"); o.value = s.name; dl.appendChild(o);
-  });
-
-  // Get next job number if no session loaded
-  if (!state.researchSession) {
-    try {
-      const res = await apiFetch("/next-job-number");
-      state.nextJobNum = res.next_job_number;
-      document.getElementById("modalJobNum").placeholder = `Auto (${res.next_job_number})`;
-      document.getElementById("modalJobNum").value = "";
-    } catch (_) {}
-  }
-
-  updatePreview();
-  modal.classList.remove("hidden");
-  overlay.classList.remove("hidden");
-  requestAnimationFrame(() => modal.classList.add("show"));
-}
-
-function setSubject(type) {
-  state.saveSubject = type;
-  document.getElementById("stogClient").classList.toggle("active",   type === "client");
-  document.getElementById("stogAdjoiner").classList.toggle("active", type === "adjoiner");
-  const adjGroup = document.getElementById("adjNameGroup");
-  adjGroup.classList.toggle("hidden", type !== "adjoiner");
-  updatePreview();
-}
-
-function updatePreview() {
-  const jobNum  = document.getElementById("modalJobNum")?.value || state.nextJobNum || "????";
-  const client  = document.getElementById("modalClientName")?.value || "Client, Name";
-  const jobType = document.getElementById("modalJobType")?.value || "BDY";
-  const isAdj   = state.saveSubject === "adjoiner";
-
-  const rstart  = Math.floor(parseInt(jobNum) / 100) * 100 || 2900;
-  const rangeF  = `${rstart}-${rstart + 99}`;
-  const last    = client.split(",")[0]?.trim() || client;
-  const adjSub  = isAdj ? "\\Adjoiners" : "";
-
-  const folder  = `Survey Data\\${rangeF}\\${jobNum} ${client}\\${jobNum}-01-${jobType} ${last}\\E Research\\A Deeds${adjSub}`;
-
-  const loc     = (state.selectedDetail?.["Location"] || state.selectedDoc?.location || "???").replace(/^[A-Za-z]/, "");
-  const grantor = (state.selectedDetail?.["Grantor"] || state.selectedDoc?.grantor || "Grantor").split(",")[0].trim();
-  const grantee = (state.selectedDetail?.["Grantee"] || state.selectedDoc?.grantee || "Grantee").split(",")[0].trim();
-  const filename = `${loc} ${toTitleCase(grantor)} to ${toTitleCase(grantee)}.pdf`;
-
-  document.getElementById("previewFolder").textContent   = folder;
-  document.getElementById("previewFilename").textContent = filename;
-}
-
-// keep old name working too
-function prefillPreview() { updatePreview(); }
-
-function closeSaveModal() {
-  const modal   = document.getElementById("saveModal");
-  const overlay = document.getElementById("modalOverlay");
-  modal.classList.remove("show");
-  setTimeout(() => {
-    modal.classList.add("hidden");
-    overlay.classList.add("hidden");
-  }, 200);
-}
-
-async function doSave() {
-  const jobNum    = parseInt(document.getElementById("modalJobNum").value) || state.nextJobNum;
-  const client    = document.getElementById("modalClientName").value.trim();
-  const jobType   = document.getElementById("modalJobType").value;
-  const isAdj     = state.saveSubject === "adjoiner";
-  const adjName   = document.getElementById("modalAdjName")?.value?.trim() || "";
-
-  if (!client) { showToast("Enter client name", "warn"); return; }
-  if (isAdj && !adjName) { showToast("Enter adjoiner name", "warn"); return; }
-
-  // Resolve subject_id from research session
-  let subjectId = "client";
-  if (isAdj && state.researchSession) {
-    const found = state.researchSession.subjects.find(
-      s => s.type === "adjoiner" && s.name.toLowerCase() === adjName.toLowerCase()
-    );
-    subjectId = found?.id || ("adj_" + Date.now());
-  }
-
-  const btn = document.getElementById("confirmSaveBtn");
-  btn.disabled = true;
-  btn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px"></div> Saving…';
-
-  try {
-    const res = await apiFetch("/download", "POST", {
-      doc_no:         state.selectedDoc?.doc_no,
-      grantor:        state.selectedDetail?.["Grantor"] || state.selectedDoc?.grantor || "",
-      grantee:        state.selectedDetail?.["Grantee"] || state.selectedDoc?.grantee || "",
-      location:       state.selectedDetail?.["Location"] || state.selectedDoc?.location || "",
-      job_number:     jobNum,
-      client_name:    client,
-      job_type:       jobType,
-      create_project: true,
-      is_adjoiner:    isAdj,
-      adjoiner_name:  adjName,
-      subject_id:     subjectId,
-    });
-
-    const resultSection = document.getElementById("saveResultSection");
-    const box = document.getElementById("saveSuccess");
-    resultSection.style.display = "block";
-
-    if (res.success) {
-      const folder = isAdj ? "A Deeds\\Adjoiners" : "A Deeds";
-      const skippedNote = res.skipped ? " <em>(already existed — not re-downloaded)</em>" : "";
-      const openBtn = res.saved_path
-        ? `<button class="btn btn-outline" style="font-size:11px;padding:5px 10px;margin-top:8px"
-             onclick="openSavedFile('${escHtml(res.saved_path).replace(/\\/g,'\\\\')}')">📂 Open File</button>`
-        : "";
-      box.innerHTML = `
-        ${res.skipped ? "⚠️" : "✅"} <strong>${res.skipped ? "Already saved" : "Deed saved!"}${skippedNote}</strong><br><br>
-        📁 <strong>Job #${escHtml(String(res.job_number))}</strong> — ${escHtml(client)}<br>
-        📄 <strong>${escHtml(res.filename)}</strong><br>
-        <span style="font-size:11px;color:#8b949e">→ ${escHtml(folder)}</span><br>
-        ${openBtn}
-      `;
-      showToast(res.skipped ? "File already exists — skipped" : "Deed saved!", res.skipped ? "warn" : "success");
-      btn.innerHTML = res.skipped ? "⚠️ Already Existed" : "✅ Saved!";
-      state.nextJobNum = res.job_number + 1;
-
-      // ♥ Feature 2: auto-open PDF if checkbox is checked and we have a path
-      if (!res.skipped && res.saved_path) {
-        const autoOpen = document.getElementById("autoOpenPdf")?.checked ?? false;
-        if (autoOpen) {
-          setTimeout(() => openSavedFile(res.saved_path), 600);
-        }
-      }
-
-      // Auto-create/sync research session
-      if (!state.researchSession && res.job_number) {
-        state.researchSession = null; // will load fresh
-        const autoJobNum  = res.job_number;
-        const autoClient  = client;
-        const autoType    = jobType;
-        apiFetch(`/research-session?job_number=${autoJobNum}&client_name=${encodeURIComponent(autoClient)}&job_type=${autoType}`)
-          .then(r => {
-            if (r.success) {
-              state.researchSession = r.session;
-              document.getElementById("boardJobNum").value    = autoJobNum;
-              document.getElementById("boardClientName").value = autoClient;
-              document.getElementById("boardJobType").value   = autoType;
-              document.getElementById("boardJobLabel").textContent = `Job #${autoJobNum}`;
-              showToast("Research session auto-loaded for this job", "info");
-            }
-          }).catch(() => {});
-      }
-
-      // Update research board if active
-      if (state.researchSession && res.subject_id) {
-        const subj = state.researchSession.subjects.find(s => s.id === res.subject_id);
-        if (subj) {
-          subj.deed_saved = true;
-          if (res.saved_path) subj.deed_path = res.saved_path;
-          renderBoard();
-        }
-      }
-    } else {
-      box.innerHTML = `❌ <strong>Error:</strong> ${escHtml(res.error)}`;
-      box.style.background = "#2d1015";
-      box.style.borderColor = "#da3633";
-      box.style.color = "#ff7b72";
+function updateStepUI() {
+  // Update nav buttons
+  document.querySelectorAll(".step-btn").forEach(btn => {
+    const s = parseInt(btn.dataset.step);
+    btn.classList.toggle("active", s === state.currentStep);
+    btn.classList.toggle("completed", s < state.currentStep);
+    
+    // Unlock logic
+    if (state.researchSession) {
       btn.disabled = false;
-      btn.innerHTML = '<span>💾</span> Retry';
     }
-  } catch (e) {
-    showToast("Save error: " + e.message, "error");
-    btn.disabled = false;
-    btn.innerHTML = '<span>💾</span> Save Deed & Create Folders';
+  });
+
+  // Update progress bar
+  const pct = ((state.currentStep - 1) / 5) * 100;
+  document.getElementById("stepProgressFill").style.width = pct + "%";
+
+  // Show active panel
+  for (let i = 1; i <= 6; i++) {
+    const panel = document.getElementById(`step${i}Panel`);
+    if (panel) {
+      if (i === state.currentStep) {
+        panel.classList.remove("hidden");
+        // small delay to let display:block apply before opacity transition
+        requestAnimationFrame(() => panel.classList.add("active"));
+      } else {
+        panel.classList.remove("active");
+        panel.classList.add("hidden");
+      }
+    }
+  }
+
+  // Trigger step-specific logic
+  if (state.currentStep === 2 && state.researchSession) {
+    if (!document.getElementById("s2SearchName").value) {
+      document.getElementById("s2SearchName").value = state.researchSession.client_name;
+    }
+  }
+  if (state.currentStep === 3) {
+    doStep3Search();
+  }
+  if (state.currentStep === 5) {
+    renderResearchBoard();
+  }
+  if (state.currentStep === 6) {
+    switchS6Tab('calls');
   }
 }
 
-// ── research board ─────────────────────────────────────────────────────────────
-function toggleResearchBoard() {
-  const panel = document.getElementById("boardPanel");
-  const isOpen = panel.classList.contains("open");
-  if (isOpen) closeResearchBoard(); else openResearchBoard();
-}
-
-function openResearchBoard() {
-  const panel   = document.getElementById("boardPanel");
-  const overlay = document.getElementById("boardOverlay");
-  panel.classList.remove("hidden");
-  overlay.classList.remove("hidden");
-  requestAnimationFrame(() => panel.classList.add("open"));
-  document.getElementById("boardBtn").classList.add("active");
-
-  // Auto-sync field values from research session
-  if (state.researchSession) {
-    document.getElementById("boardJobNum").value    = state.researchSession.job_number;
-    document.getElementById("boardClientName").value = state.researchSession.client_name;
-    document.getElementById("boardJobType").value   = state.researchSession.job_type;
-    renderBoard();
+function updateJobContext() {
+  const bar = document.getElementById("jobContextBar");
+  if (!state.researchSession) {
+    bar.classList.add("hidden");
+    return;
   }
+  bar.classList.remove("hidden");
+  document.getElementById("ctxJobNum").textContent = state.researchSession.job_number;
+  document.getElementById("ctxClient").textContent = state.researchSession.client_name;
+  document.getElementById("ctxType").textContent = state.researchSession.job_type;
 }
 
-function closeResearchBoard() {
-  const panel   = document.getElementById("boardPanel");
-  const overlay = document.getElementById("boardOverlay");
-  panel.classList.remove("open");
-  document.getElementById("boardBtn").classList.remove("active");
-  setTimeout(() => {
-    panel.classList.add("hidden");
-    overlay.classList.add("hidden");
-  }, 260);
-}
+// 
+// STEP 1: JOB SETUP
+// 
+async function startSession() {
+  const numInput = document.getElementById("setupJobNum").value;
+  const num = parseInt(numInput) || state.nextJobNum;
+  const client = document.getElementById("setupClient").value.trim();
+  const type = document.getElementById("setupJobType").value;
 
-function boardJobChanged() {
-  // Just clear any stale session indicator
-  document.getElementById("boardJobLabel").textContent = "";
-}
+  if (!client) { showToast("Client name is required", "error"); return; }
+  if (!num)    { showToast("Job number is required", "error"); return; }
 
-async function loadResearchSession() {
-  const jobNum  = document.getElementById("boardJobNum").value.trim();
-  const client  = document.getElementById("boardClientName").value.trim();
-  const jobType = document.getElementById("boardJobType").value;
-
-  if (!jobNum || !client) { showToast("Enter job number and client name", "warn"); return; }
+  const btn = document.getElementById("btnStartSession");
+  btn.disabled = true;
+  btn.innerHTML = "Loading...";
 
   try {
-    const res = await apiFetch(
-      `/research-session?job_number=${jobNum}&client_name=${encodeURIComponent(client)}&job_type=${jobType}`
-    );
-    if (!res.success) { showToast(res.error, "error"); return; }
-    state.researchSession = res.session;
-    document.getElementById("boardJobLabel").textContent = `Job #${jobNum}`;
-    renderBoard();
-    showToast(`Research session loaded — Job #${jobNum}`, "success");
-    // ♥ Feature 4: persist last session so it restores on next app start
-    apiFetch("/config", "POST", {
-      last_session: { job_number: parseInt(jobNum), client_name: client, job_type: jobType }
-    }).catch(() => {});
+    const res = await apiFetch(`/research-session?job_number=${num}&client_name=${encodeURIComponent(client)}&job_type=${type}`);
+    if (res.success) {
+      state.researchSession = res.session;
+      
+      // Ensure client is in the subjects list
+      let cSubj = state.researchSession.subjects.find(s => s.type === "client");
+      if (!cSubj) {
+        state.researchSession.subjects.unshift({
+          id: "client_" + Date.now(),
+          type: "client",
+          name: client,
+          deed_saved: false, plat_saved: false, status: "pending", notes: ""
+        });
+        await persistSession();
+      }
+
+      updateJobContext();
+      showToast(`Session loaded for Job #${num}`, "success");
+      
+      // Save last session
+      apiFetch("/config", "POST", {
+        last_session: { job_number: num, client_name: client, job_type: type }
+      }).catch(()=>{});
+
+      // Move to Step 2
+      goToStep(2);
+    } else {
+      showToast(res.error, "error");
+    }
   } catch (e) {
-    showToast("Error loading session: " + e.message, "error");
+    showToast("Failed to load session: " + e.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "Start Research Session &rarr;";
   }
+}
+
+async function loadRecentJobs() {
+  const container = document.getElementById("setupRecentJobs");
+  try {
+    const res = await apiFetch("/recent-jobs");
+    if (!res.success || !res.jobs.length) {
+      container.innerHTML = `<div class="empty-state">No recent jobs found.</div>`;
+      return;
+    }
+    container.innerHTML = res.jobs.map(j => `
+      <div class="recent-job-row" onclick="quickLoadJob(${j.job_number}, '${escHtml(j.client_name).replace(/'/g,"\\'")}','${j.job_type}')">
+        <div><strong class="text-accent2">#${j.job_number}</strong> &nbsp; ${escHtml(j.client_name)}</div>
+        <div class="job-type">${j.job_type}</div>
+      </div>
+    `).join("");
+  } catch (e) {
+    container.innerHTML = `<div class="text-danger">Failed to load recent jobs.</div>`;
+  }
+}
+
+function quickLoadJob(num, client, type) {
+  document.getElementById("setupJobNum").value = num;
+  document.getElementById("setupClient").value = client;
+  document.getElementById("setupJobType").value = type;
+  startSession();
 }
 
 async function persistSession() {
@@ -890,775 +218,1311 @@ async function persistSession() {
       job_number, client_name, job_type,
       session: state.researchSession
     });
-  } catch (_) {}
+    updateGlobalProgress();
+  } catch (e) { console.error("Session persist failed", e); }
 }
+// 
+// STEP 2: CLIENT DEED
+// 
+async function doStep2Search() {
+  const name = document.getElementById("s2SearchName").value.trim();
+  const op = document.getElementById("s2SearchOp").value;
 
-async function addAdjoiner() {
-  const nameEl = document.getElementById("boardAdjName");
-  const name   = nameEl.value.trim();
-  if (!name) { showToast("Enter adjoiner name", "warn"); return; }
-  if (!state.researchSession) { showToast("Load a session first", "warn"); return; }
+  if (!state.loggedIn) { showToast("Not connected to records. Connecting...", "warn"); await checkLogin(); return; }
+  if (!name || name.length < 2) { showToast("Enter a longer name", "warn"); return; }
 
-  // Avoid duplicates
-  const exists = state.researchSession.subjects.some(
-    s => s.type === "adjoiner" && s.name.toLowerCase() === name.toLowerCase()
-  );
-  if (exists) { showToast("Adjoiner already on board", "warn"); return; }
+  const btn = document.getElementById("btnS2Search");
+  const tbody = document.getElementById("s2ResultsBody");
+  btn.disabled = true;
+  btn.innerHTML = "Search";
+  tbody.innerHTML = `<tr><td colspan="5" class="empty-cell"><div class="loading-state">Searching records...</div></td></tr>`;
+  document.getElementById("s2ResultCount").textContent = "0";
 
-  const newSubj = {
-    id:          "adj_" + Date.now(),
-    type:        "adjoiner",
-    name:        name,
-    deed_saved:  false,
-    plat_saved:  false,
-    status:      "pending",
-    notes:       "",
-    deed_path:   "",
-    plat_path:   "",
-  };
-  state.researchSession.subjects.push(newSubj);
-  nameEl.value = "";
-  renderBoard();
-  await persistSession();
-  showToast(`Adjoiner added: ${name}`, "success");
-}
+  try {
+    const res = await apiFetch("/search", "POST", { name, operator: op });
+    if (!res.success) {
+      tbody.innerHTML = `<tr><td colspan="5" class="empty-cell text-danger">Error: ${res.error}</td></tr>`;
+      return;
+    }
 
-async function removeSubject(id) {
-  if (!state.researchSession) return;
-  state.researchSession.subjects = state.researchSession.subjects.filter(s => s.id !== id);
-  renderBoard();
-  await persistSession();
-}
+    if (!res.results.length) {
+      tbody.innerHTML = `<tr><td colspan="5" class="empty-cell text-text3">No records found for "${name}"</td></tr>`;
+      return;
+    }
 
-async function toggleSubjectStatus(id, field) {
-  if (!state.researchSession) return;
-  const subj = state.researchSession.subjects.find(s => s.id === id);
-  if (subj) {
-    subj[field] = !subj[field];
-    renderBoard();
-    await persistSession();
+    document.getElementById("s2ResultCount").textContent = res.results.length;
+    state.searchResults = res.results;
+    tbody.innerHTML = res.results.map((r, i) => `
+      <tr class="row-${getTypeClass(r.instrument_type)}" onclick="loadS2Detail('${r.doc_no}', ${i}, this)">
+        <td class="mono font-bold text-accent2">${r.doc_no || ''}</td>
+        <td title="${escHtml(r.grantor||'')}">${escHtml((r.grantor||'').split(",")[0] || r.grantor||'')}</td>
+        <td><span class="badge ${getTypeClass(r.instrument_type)}">${r.instrument_type||'Deed'}</span></td>
+        <td class="text-xs text-text3">${escHtml(r.location||'')}</td>
+        <td class="text-xs text-text3">${(r.recorded_date||r.instrument_date||'').split("-")[0] || r.date||''}</td>
+      </tr>
+    `).join("");
+
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-danger p-3">Search error: ${e.message}</td></tr>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "Search";
   }
 }
 
-function searchForSubject(name) {
-  // Pre-fill search form and trigger search
-  document.getElementById("searchName").value = name;
-  document.getElementById("searchOperator").value = "contains";
-  closeResearchBoard();
-  if (!document.getElementById("searchBtn").disabled) doSearch();
-  else showToast("Connect to records first, then search will run", "warn");
+async function loadS2Detail(docNo, idx, trEl) {
+  // Highlight row
+  document.querySelectorAll("#s2ResultsBody tr").forEach(tr => tr.classList.remove("selected"));
+  if (trEl) trEl.classList.add("selected");
+
+  const container = document.getElementById("s2DetailContainer");
+  container.innerHTML = `<div class="loading-state flex-col gap-2"><div class="spinner"></div> Loading ${docNo}...</div>`;
+
+  try {
+    // Set selectedDoc before fetching so we have the search row immediately
+    state.selectedDoc = state.searchResults?.[idx] || { doc_no: docNo };
+
+    // POST the search result so the backend can merge it into the detail
+    const res = await apiFetch(`/document/${encodeURIComponent(docNo)}`, 'POST', {
+      search_result: state.selectedDoc
+    });
+    if (!res.success) {
+      container.innerHTML = `<div class="empty-state text-danger">Error: ${res.error}</div>`;
+      return;
+    }
+
+    state.selectedDetail = res.detail;
+
+    const d = res.detail;
+    const extracted = extractDeedData(d, docNo, state.selectedDoc);
+    const pdfUrl = d.pdf_url || '';
+
+    container.innerHTML = `
+      <div class="deed-viewer-header">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text3);margin-bottom:4px">Document</div>
+            <div style="font-size:22px;font-weight:800;font-family:'JetBrains Mono',monospace;color:#e3c55a;letter-spacing:-0.5px">${escHtml(docNo)}</div>
+            <div style="font-size:12px;color:var(--text2);margin-top:3px">
+              ${escHtml(extracted.instrumentType)} &nbsp;&middot;&nbsp; ${escHtml(extracted.recordedDate)}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            ${pdfUrl ? `<a href="${escHtml(pdfUrl)}" target="_blank" class="btn btn-outline btn-sm">&#128279; View PDF</a>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <div class="deed-viewer-tabs">
+        <button class="deed-viewer-tab active" onclick="switchDeedTab('summary')" id="dtab-summary">&#128203; Summary</button>
+        <button class="deed-viewer-tab" onclick="switchDeedTab('fields')" id="dtab-fields">&#128194; All Fields</button>
+        ${pdfUrl ? `<button class="deed-viewer-tab" onclick="switchDeedTab('pdf')" id="dtab-pdf">&#128196; PDF</button>` : ''}
+      </div>
+
+      <div class="deed-viewer-body" id="deedTabSummary">
+        ${buildDeedSummaryTab(extracted, d)}
+      </div>
+
+      <div class="deed-viewer-body hidden" id="deedTabFields">
+        ${buildDeedAllFieldsTab(d)}
+      </div>
+
+      ${pdfUrl ? `
+      <div class="deed-viewer-body hidden" id="deedTabPdf" style="display:flex;flex-direction:column;padding:0;min-height:420px">
+        <div class="pdf-preview-bar">
+          &#128196; <span style="font-family:monospace;color:var(--accent2)">${escHtml(docNo)}.pdf</span>
+          <a href="${escHtml(pdfUrl)}" target="_blank" class="btn btn-outline btn-sm ml-auto">Open in Tab &#8599;</a>
+        </div>
+        <iframe src="${escHtml(pdfUrl)}" class="pdf-preview-frame" title="Deed PDF"></iframe>
+      </div>` : ''}
+
+      <div class="detail-actions">
+        <button class="btn btn-primary flex-1" id="btnS2Save" onclick="saveClientDeed('${docNo}')">
+          &#11015; Save Client Deed &rarr;</button>
+      </div>
+    `;
+
+  } catch (e) {
+    container.innerHTML = `<div class="empty-state text-danger">Error: ${e.message}</div>`;
+  }
 }
 
-function openFolderForJob() {
-  if (!state.researchSession) { showToast("No session loaded", "warn"); return; }
-  const { job_number, client_name, job_type } = state.researchSession;
-  const rstart = Math.floor(parseInt(job_number) / 100) * 100;
-  const last   = client_name.split(",")[0].trim();
-  const path   = `F:\\AI DATA CENTER\\Survey Data\\${rstart}-${rstart+99}\\${job_number} ${client_name}\\${job_number}-01-${job_type} ${last}\\E Research`;
-  apiFetch("/open-folder", "POST", { path }).catch(() => {});
-  showToast("Opening E Research folder…", "info");
-}
+/** Extract well-known fields from deed detail object */
+function extractDeedData(d, docNo, searchRow) {
+  const docNumbers = [{ label: 'Doc #', value: docNo, type: 'docnum' }];
+  ['Document Number','Document No','Instrument Number','Instrument No'].forEach(k => {
+    if (d[k] && d[k] !== docNo) docNumbers.push({ label: k, value: d[k], type: 'docnum' });
+  });
+  ['GF Number','GF#','GF No','File Number'].forEach(k => {
+    if (d[k]) docNumbers.push({ label: k, value: d[k], type: 'docnum' });
+  });
+  if (searchRow?.doc_no && searchRow.document_no && searchRow.document_no !== docNo)
+    docNumbers.push({ label: 'Instrument No', value: searchRow.document_no, type: 'docnum' });
+  if (searchRow?.gf_number) docNumbers.push({ label: 'GF#', value: searchRow.gf_number, type: 'docnum' });
 
-function renderBoard() {
-  const body = document.getElementById("boardBody");
-  const rs   = state.researchSession;
-  if (!rs) { body.innerHTML = '<div class="plat-empty">No session loaded.</div>'; return; }
+  const locationSources = [];
+  ['Location','Book/Page','Recorded Book','Reception No'].forEach(k => {
+    if (d[k]) locationSources.push({ label: k, value: d[k], type: 'location' });
+  });
+  if (searchRow?.location && !locationSources.find(l => l.value === searchRow.location))
+    locationSources.push({ label: 'Location', value: searchRow.location, type: 'location' });
 
-  // ─ Progress bar ─────────────────────────────────────────────────
-  const prog    = rs.progress || {};
-  const total   = prog.total   || rs.subjects.length;
-  const done    = prog.done    || 0;
-  const deeds   = prog.deeds   || 0;
-  const plats   = prog.plats   || 0;
-  const pct     = total > 0 ? Math.round((done / total) * 100) : 0;
-  const barColor = pct === 100 ? "#56d3a0" : pct > 50 ? "#79a8e0" : "#c9a227";
+  const partySeen = new Set();
+  const parties = [];
+  const addParty = (label, val) => {
+    if (!val) return;
+    const key = label + ':' + val;
+    if (partySeen.has(key)) return;
+    partySeen.add(key);
+    parties.push({ label, value: val, type: 'person' });
+  };
+  addParty('Grantor', d['Grantor']);
+  addParty('Grantee', d['Grantee']);
+  if (searchRow) { addParty('Grantor', searchRow.grantor); addParty('Grantee', searchRow.grantee); }
 
-  let html = `
-    <div style="margin-bottom:12px">
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:4px">
-        <span>Progress: <strong style="color:var(--text)">${done}/${total}</strong> complete</span>
-        <span style="color:var(--text2)">Deeds: ${deeds} &nbsp;·&nbsp; Plats: ${plats}</span>
-      </div>
-      <div style="height:5px;background:var(--bg3);border-radius:3px;overflow:hidden">
-        <div style="height:100%;width:${pct}%;background:${barColor};border-radius:3px;transition:width .4s ease"></div>
-      </div>
-    </div>`;
+  const dateSeen = new Set();
+  const dates = [];
+  const addDate = (label, val) => {
+    if (!val || dateSeen.has(val)) return;
+    dateSeen.add(val);
+    dates.push({ label, value: val, type: 'date' });
+  };
+  ['Recorded Date','Record Date','Instrument Date','Filed Date'].forEach(k => addDate(k, d[k]));
+  if (searchRow) { addDate('Recorded', searchRow.recorded_date); addDate('Instrument', searchRow.instrument_date); }
 
-  // ─ Subject rows ───────────────────────────────────────────────
-  rs.subjects.forEach(s => {
-    const isClient = s.type === "client";
-    const st       = s.status || "pending";  // pending | done | na
+  const trsRefs = (d._trs || []).map(t => ({ label: 'TRS', value: t.trs, type: 'trs' }));
 
-    // Deed chip — show open-file button if path exists
-    const deedFileBtn = s.deed_path
-      ? `<button class="btn btn-outline" style="font-size:9px;padding:2px 6px;margin-left:4px" title="Open deed PDF"
-           onclick="openSavedFile('${escHtml(s.deed_path).replace(/\\/g,'\\\\')}')">📂</button>` : "";
-    const platFileBtn = s.plat_path
-      ? `<button class="btn btn-outline" style="font-size:9px;padding:2px 6px;margin-left:4px" title="Open plat PDF"
-           onclick="openSavedFile('${escHtml(s.plat_path).replace(/\\/g,'\\\\')}')">📂</button>` : "";
-
-    const deedChip = s.deed_saved
-      ? `<span class="status-chip chip-done">✓ Deed</span>${deedFileBtn}`
-      : `<span class="status-chip chip-todo">○ Deed</span>`;
-    const platChip = s.plat_saved
-      ? `<span class="status-chip chip-done">✓ Plat</span>${platFileBtn}`
-      : `<span class="status-chip chip-todo">○ Plat</span>`;
-
-    // Status badge (cycles pending → done → na)
-    const stBadgeStyle = st === "done" ? `background:#1a3028;color:#56d3a0;border-color:#2d8a6e66`
-                        : st === "na"   ? `background:#281a1a;color:#888;border-color:#66444466`
-                        :                 `background:var(--bg);color:var(--text3);border-color:var(--border)`;
-    const stLabel = st === "done" ? "✓ Done" : st === "na" ? "⊘ N/A" : "● Pending";
-    const statusBadge = `<button class="status-chip" style="border:1px solid;border-radius:10px;
-      padding:2px 8px;font-size:10px;font-weight:600;cursor:pointer;${stBadgeStyle}"
-      onclick="cycleStatus('${s.id}')" title="Click to cycle status">${stLabel}</button>`;
-
-    // Inline notes
-    const noteVal  = escHtml(s.notes || "");
-    const notePh   = "Add note…";
-    const notesHtml = `<input class="inp" style="font-size:10px;padding:4px 8px;height:24px;margin-top:6px"
-      placeholder="${notePh}" value="${noteVal}"
-      onchange="saveNote('${s.id}', this.value)" />`;
-
-    const badge = isClient
-      ? `<span class="subject-type-badge badge-client">👤 Client</span>`
-      : `<span class="subject-type-badge badge-adjoiner">🏘️ Adjoiner</span>`;
-
-    html += `
-      <div class="subject-row ${isClient ? 'is-client' : 'is-adjoiner'}">
-        <div class="subject-name">${escHtml(s.name)}</div>
-        ${badge}
-        <div style="grid-column:1/-1;display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px">
-          ${deedChip}${platChip}
-          <span style="margin-left:auto">${statusBadge}</span>
-        </div>
-        ${notesHtml}
-        <div class="subject-actions" style="grid-column:1/-1;margin-top:6px">
-          <button class="btn btn-outline" style="font-size:10px;padding:4px 8px"
-            onclick="searchForSubject('${escHtml(s.name.split(',')[0]).replace(/'/g,"\\'")}')"🔍 Search</button>
-          <button class="btn btn-outline" style="font-size:10px;padding:4px 8px"
-            onclick="toggleSubjectStatus('${s.id}','deed_saved')">📄 Deed</button>
-          <button class="btn btn-outline" style="font-size:10px;padding:4px 8px"
-            onclick="toggleSubjectStatus('${s.id}','plat_saved')">🗺️ Plat</button>
-          ${!isClient ? `<button class="btn btn-outline" style="font-size:10px;padding:4px 8px;color:#ff7b72"
-            onclick="removeSubject('${s.id}')">✕</button>` : ""}
-        </div>
-      </div>`;
+  const money = [];
+  ['Consideration','Amount','Sale Price','Value'].forEach(k => {
+    if (d[k] && d[k] !== '$0' && d[k] !== '0') money.push({ label: k, value: d[k], type: 'money' });
   });
 
-  body.innerHTML = html || '<div class="plat-empty">No subjects yet.</div>';
+  const legalKeys = ['Legal Description','Other Legal','Other_Legal','Subdivision Legal','Subdivision_Legal','Legal','Section','Comments','Remarks'];
+  const legalText = legalKeys.map(k => d[k]).filter(Boolean).join('\n\n');
+
+  const instrumentType = searchRow?.instrument_type || d['Document Type'] || d['Type'] || d['Instrument Type'] || 'Deed';
+  const recordedDate = searchRow?.recorded_date || d['Recorded Date'] || d['Record Date'] || d['Instrument Date'] || '';
+
+  return { docNumbers, locationSources, parties, dates, trsRefs, money, legalText, instrumentType, recordedDate };
 }
 
-async function cycleStatus(id) {
-  if (!state.researchSession) return;
-  const subj = state.researchSession.subjects.find(s => s.id === id);
-  if (!subj) return;
-  const order = ["pending", "done", "na"];
-  const cur   = subj.status || "pending";
-  subj.status = order[(order.indexOf(cur) + 1) % order.length];
-  renderBoard();
-  await persistSession();
+function deedPill(item) {
+  return `<div class="data-pill pill-${item.type}">
+    <div class="data-pill-label">${escHtml(item.label)}</div>
+    <div class="data-pill-value">${escHtml(item.value)}</div>
+  </div>`;
 }
 
-async function saveNote(id, text) {
-  if (!state.researchSession) return;
-  const subj = state.researchSession.subjects.find(s => s.id === id);
-  if (!subj) return;
-  subj.notes = text;
-  // No re-render needed — just persist
-  await persistSession();
+function buildDeedSummaryTab(ex, d) {
+  let html = '';
+  if (ex.docNumbers.length) html += `<div class="extracted-section">
+    <div class="extracted-section-title">&#128290; Document Numbers</div>
+    <div class="data-pills">${ex.docNumbers.map(deedPill).join('')}</div>
+  </div>`;
+
+  if (ex.locationSources.length) html += `<div class="extracted-section">
+    <div class="extracted-section-title">&#128205; Location (Book / Page)</div>
+    <div class="data-pills">${ex.locationSources.map(deedPill).join('')}</div>
+  </div>`;
+
+  if (ex.parties.length) html += `<div class="extracted-section">
+    <div class="extracted-section-title">&#128100; Parties</div>
+    <div class="data-pills">${ex.parties.map(deedPill).join('')}</div>
+  </div>`;
+
+  if (ex.dates.length) html += `<div class="extracted-section">
+    <div class="extracted-section-title">&#128197; Dates</div>
+    <div class="data-pills">${ex.dates.map(deedPill).join('')}</div>
+  </div>`;
+
+  if (ex.trsRefs.length) html += `<div class="extracted-section">
+    <div class="extracted-section-title">&#128506; Township / Range / Section</div>
+    <div class="data-pills">${ex.trsRefs.map(deedPill).join('')}</div>
+  </div>`;
+
+  if (ex.money.length) html += `<div class="extracted-section">
+    <div class="extracted-section-title">&#128176; Consideration</div>
+    <div class="data-pills">${ex.money.map(deedPill).join('')}</div>
+  </div>`;
+
+  if (ex.legalText) html += `<div class="extracted-section">
+    <div class="extracted-section-title">&#128212; Legal Description</div>
+    <div class="legal-block">${escHtml(ex.legalText)}</div>
+  </div>`;
+
+  return html || `<div class="empty-state"><div class="empty-icon">&#128196;</div><p>No structured data found.<br>Check the All Fields tab.</p></div>`;
 }
 
-function openSavedFile(filePath) {
-  apiFetch("/open-file", "POST", { path: filePath })
-    .then(r => { if (!r.success) showToast("File not found: " + filePath.split("\\").pop(), "error"); })
-    .catch(() => showToast("Could not open file", "error"));
+function buildDeedAllFieldsTab(d) {
+  const skip = ['doc_no','_trs','pdf_url'];
+  let html = `<div class="detail-grid">`;
+  Object.entries(d).forEach(([k,v]) => {
+    if (skip.includes(k) || !v) return;
+    const isLoc = k === 'Location';
+    html += `<div class="detail-label">${escHtml(k)}</div>
+      <div class="detail-val" style="${isLoc ? 'color:var(--accent2);font-family:monospace' : ''}">${escHtml(String(v))}</div>`;
+  });
+  if (d._trs && d._trs.length) html += `<div class="detail-label">TRS Refs</div>
+    <div class="detail-val" style="color:#79a8e0;font-family:monospace">${d._trs.map(t=>escHtml(t.trs)).join(' | ')}</div>`;
+  html += `</div>`;
+  return html;
 }
 
-async function exportSession() {
-  if (!state.researchSession) { showToast("No session loaded", "warn"); return; }
+function switchDeedTab(name) {
+  document.querySelectorAll('.deed-viewer-tab').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('dtab-' + name);
+  if (btn) btn.classList.add('active');
+  const map = { summary:'deedTabSummary', fields:'deedTabFields', pdf:'deedTabPdf' };
+  Object.entries(map).forEach(([n,id]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (n === name) { el.classList.remove('hidden'); if(n==='pdf') el.style.display='flex'; }
+    else { el.classList.add('hidden'); if(n==='pdf') el.style.display=''; }
+  });
+}
+
+async function saveClientDeed(docNo) {
+  const rs = state.researchSession;
+  if (!rs) { showToast("No active session", "error"); return; }
+
+  const clientSubj = rs.subjects.find(s => s.type === "client");
+  if (!clientSubj) { showToast("Client subject disconnected", "error"); return; }
+
+  const btn = document.getElementById("btnS2Save");
+  if (btn) { btn.disabled = true; btn.innerHTML = "Saving..."; }
+
   try {
-    const res = await apiFetch("/export-session", "POST", { session: state.researchSession });
-    if (!res.success) { showToast("Export failed", "error"); return; }
-    // Download as .txt file
-    const blob = new Blob([res.text], { type: "text/plain" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `Job${state.researchSession.job_number}_Research.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast("Research summary exported", "success");
+    const res = await apiFetch("/download", "POST", {
+      doc_no:         docNo,
+      grantor:        state.selectedDetail["Grantor"] || "",
+      grantee:        state.selectedDetail["Grantee"] || "",
+      location:       state.selectedDetail["Location"] || "",
+      job_number:     rs.job_number,
+      client_name:    rs.client_name,
+      job_type:       rs.job_type,
+      create_project: true,
+      is_adjoiner:    false,
+      subject_id:     clientSubj.id,
+    });
+
+    if (res.success) {
+      showToast(res.skipped ? "Client deed already exists (skipped)" : "Client deed saved!", "success");
+      clientSubj.deed_saved = true;
+      if (res.saved_to) clientSubj.deed_path = res.saved_to;
+      await persistSession();
+
+      // Auto-open if configured
+      if (!res.skipped && res.saved_to && document.getElementById("optAutoOpen")?.checked) {
+        setTimeout(() => {
+          apiFetch("/open-file", "POST", { path: res.saved_to }).catch(()=>{});
+        }, 500);
+      }
+      // Automatically move to Step 3
+      setTimeout(() => goToStep(3), 800);
+    } else {
+      showToast("Save failed: " + res.error, "error");
+    }
   } catch (e) {
-    showToast("Export error: " + e.message, "error");
+    showToast("Error saving: " + e.message, "error");
+  } finally {
+    // Always re-enable the button so the user is never stuck
+    if (btn) { btn.disabled = false; btn.innerHTML = "&#11015; Save Client Deed &rarr;"; }
   }
 }
 
-async function loadRecentJobs() {
+/** Skip deed download and jump directly to the plat step */
+function skipToStep3() {
+  goToStep(3);
+}
+
+// ============================================================
+// STEP 3: CLIENT PLAT
+// ============================================================
+async function doStep3Search() {
+  const locCards = document.getElementById('s3LocalPlats');
+  const kmlCards = document.getElementById('s3KmlPlats');
+  const onlCards = document.getElementById('s3OnlinePlats');
+
+  if (!state.selectedDetail) {
+    const msg = '<div class="empty-state text-text3">No deed selected in Step 2. Go back and select a deed first.</div>';
+    locCards.innerHTML = msg;
+    if (kmlCards) kmlCards.innerHTML = msg;
+    onlCards.innerHTML = msg;
+    return;
+  }
+
+  locCards.innerHTML = '<div class="loading-state">Scanning local cabinets...</div>';
+  if (kmlCards) kmlCards.innerHTML = '<div class="loading-state">Querying KML parcel index...</div>';
+  onlCards.innerHTML  = '<div class="loading-state">Searching 1stnmtitle.com...</div>';
+
   try {
-    const res = await apiFetch("/recent-jobs");
-    if (!res.success || !res.jobs.length) { showToast("No recent jobs found", "info"); return; }
-    showRecentJobs(res.jobs);
+    const res = await apiFetch('/find-plat', 'POST', { detail: state.selectedDetail });
+    if (!res.success) throw new Error(res.error);
+
+    // ── Local Cabinet Hits ──────────────────────────────────────────────
+    const cabinetHits = res.local || res.cabinet_hits || [];
+    if (!cabinetHits.length) {
+      locCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">' +
+        '<div class="text-3xl mb-2">\u{1F5C4}\uFE0F</div>No cabinet plats found by deed reference or name.<br><br>' +
+        '<button class="btn btn-outline btn-sm" onclick="openGlobalCabinetBrowser()">Browse Cabinets Manually</button></div>';
+    } else {
+      state._cabinetHits = cabinetHits;
+      locCards.innerHTML = cabinetHits.map((f, fi) =>
+        '<div class="plat-item">' +
+          '<div class="plat-info">' +
+            '<span class="plat-name text-xs" title="' + escHtml(f.path) + '">' + escHtml(f.file) + '</span>' +
+            '<span class="plat-meta">Cabinet ' + (f.cabinet||'') + ' &nbsp;\u00B7&nbsp; ' + (f.strategy||'match') + '</span>' +
+          '</div>' +
+          '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
+        '</div>'
+      ).join('');
+    }
+
+    // ── KML Parcel Hits ─────────────────────────────────────────────────
+    if (kmlCards) {
+      const kmlHits = res.kml_matches || [];
+      if (!kmlHits.length) {
+        kmlCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">' +
+          '<div class="text-3xl mb-2">\u{1F5FA}\uFE0F</div>No parcel records found in KML index.<br><br>' +
+          '<span class="text-xs opacity-60">Use the \u{1F5FA}\uFE0F KML Index button to build the index from county data.</span></div>';
+      } else {
+        state._kmlHits = kmlHits;
+        kmlCards.innerHTML = kmlHits.map((p, pi) => {
+          const ct = p.centroid ? 'Lat: ' + p.centroid[1].toFixed(5) + ', Lng: ' + p.centroid[0].toFixed(5) : '';
+          const btns = (p.local_files && p.local_files.length)
+            ? p.local_files.map((lf, lfi) =>
+                '<button class="btn btn-success btn-sm" style="font-size:10px;padding:3px 7px;white-space:nowrap" ' +
+                'onclick="saveKmlLocalFile(' + pi + ',' + lfi + ')" title="' + escHtml(lf.file) + '">' +
+                '\u2B07 ' + escHtml(lf.cab_ref || (lf.cabinet + '-' + lf.doc)) + '</button>'
+              ).join('')
+            : '<span class="text-xs text-text3 italic">No local file</span>';
+          return '<div class="plat-item kml-parcel-item">' +
+            '<div class="plat-info" style="flex:1">' +
+              '<span class="plat-name" title="' + escHtml(ct) + '">' + escHtml(p.owner) + '</span>' +
+              '<div class="kml-meta-row">' +
+                (p.upc   ? '<span class="kml-chip chip-upc">UPC: ' + escHtml(p.upc) + '</span>' : '') +
+                (p.book  ? '<span class="kml-chip chip-book">Bk/Pg: ' + escHtml(p.book) + '/' + escHtml(p.page) + '</span>' : '') +
+                (p.cab_refs_str ? '<span class="kml-chip chip-cab">' + escHtml(p.cab_refs_str) + '</span>' : '') +
+              '</div>' +
+              (p.match_reason ? '<span class="plat-meta text-xs" style="color:var(--accent2)">' + escHtml(p.match_reason) + '</span>' : '') +
+              (p.plat ? '<span class="plat-meta text-xs" title="' + escHtml(p.plat) + '">' +
+                escHtml(p.plat.substring(0,60)) + (p.plat.length > 60 ? '\u2026' : '') + '</span>' : '') +
+            '</div>' +
+            '<div class="flex-col gap-1" style="min-width:80px;align-items:flex-end">' + btns + '</div>' +
+          '</div>';
+        }).join('');
+      }
+    }
+
+    // ── Online Survey Hits ──────────────────────────────────────────────
+    const surveyHits = res.online || res.survey_hits || [];
+    if (!surveyHits.length) {
+      onlCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">No online survey records found for this grantor name.</div>';
+    } else {
+      onlCards.innerHTML = surveyHits.map(r =>
+        '<div class="plat-item">' +
+          '<div class="plat-info">' +
+            '<span class="plat-name" title="' + escHtml(r.location||'') + '">' +
+              escHtml((r.grantor||'').split(',')[0] || r.grantor||'') + '</span>' +
+            '<span class="plat-meta">' + escHtml(r.instrument_type||'') +
+              ' &nbsp;&nbsp; ' + escHtml(r.recorded_date||r.date||'') +
+              ' &nbsp;&nbsp; Doc <span class="text-accent2">' + escHtml(r.doc_no) + '</span></span>' +
+          '</div>' +
+          '<button class="btn btn-outline btn-sm" ' +
+            'onclick="saveClientPlatOnline(\'' + r.doc_no + '\',\'' + escHtml(r.location||'') + '\')">' +
+            '\u2B07 Download</button>' +
+        '</div>'
+      ).join('');
+    }
+
   } catch (e) {
+    const errMsg = '<div class="text-danger p-3">Error: ' + e.message + '</div>';
+    locCards.innerHTML = errMsg;
+    if (kmlCards) kmlCards.innerHTML = errMsg;
+    onlCards.innerHTML  = errMsg;
+  }
+}
+
+async function saveKmlLocalFile(kmlIdx, fileIdx) {
+  const rs = state.researchSession;
+  if (!rs) { showToast('No active session', 'error'); return; }
+  const p  = state._kmlHits && state._kmlHits[kmlIdx];
+  if (!p || !p.local_files || !p.local_files[fileIdx]) { showToast('File not found', 'error'); return; }
+  const lf = p.local_files[fileIdx];
+  const clientSubj = rs.subjects.find(s => s.type === 'client');
+  try {
+    const res = await apiFetch('/save-plat', 'POST', {
+      source: 'local', file_path: lf.path, filename: lf.file,
+      job_number: rs.job_number, client_name: rs.client_name, job_type: rs.job_type,
+      subject_id: clientSubj ? clientSubj.id : 'client'
+    });
+    if (res.success) {
+      showToast(res.skipped ? 'Plat already exists in project' : 'Plat saved: ' + res.filename, 'success');
+      if (clientSubj && !res.skipped) {
+        clientSubj.plat_saved = true;
+        if (res.saved_to) clientSubj.plat_path = res.saved_to;
+        await persistSession();
+      }
+      setTimeout(() => goToStep(4), 800);
+    } else { showToast('Save failed: ' + res.error, 'error'); }
+  } catch(e) { showToast('Error: ' + e.message, 'error'); }
+}
+
+// ── KML Index Status Modal ───────────────────────────────────────────────────
+async function showKmlIndexModal() {
+  document.getElementById('kmlIndexOverlay').classList.remove('hidden');
+  const body = document.getElementById('kmlIndexBody');
+  body.innerHTML = '<div class="loading-state">Loading index status...</div>';
+  try {
+    const res = await apiFetch('/xml/status');
+    if (!res.success) throw new Error(res.error);
+    const srcRows = (res.sources || []).map(s =>
+      '<tr><td class="text-xs">' + escHtml(s.file) + '</td>' +
+      '<td class="text-xs text-accent2 text-right">' + s.records.toLocaleString() + '</td></tr>'
+    ).join('');
+    const fileRows = (res.xml_files || []).map(f =>
+      '<tr><td class="text-xs">' + escHtml(f.name) + '</td>' +
+      '<td class="text-xs text-text3">' + f.format.toUpperCase() + '</td>' +
+      '<td class="text-xs text-right">' + f.size_mb + ' MB</td></tr>'
+    ).join('');
+    body.innerHTML =
+      '<div class="kml-status-block ' + (res.exists ? 'kml-ok' : 'kml-warn') + '">' +
+      (res.exists
+        ? '<strong style="color:var(--accent2)">\u2705 Index Ready</strong> &nbsp;\u2014&nbsp; ' + (res.total||0).toLocaleString() + ' parcels<br>' +
+          '<span class="text-xs text-text3">Built: ' + (res.built_at||'unknown') + ' &nbsp;\u00B7&nbsp; ' + (res.size_mb||'?') + ' MB</span>'
+        : '<strong style="color:#ff7b72">\u26A0 No Index Yet</strong> \u2014 Build it below to enable KML parcel search.') +
+      '</div>' +
+      (res.exists && srcRows
+        ? '<div class="mt-3"><div class="text-xs font-bold uppercase text-text3 mb-1">Indexed Sources</div>' +
+          '<table class="data-table"><tbody>' + srcRows + '</tbody></table></div>' : '') +
+      (fileRows
+        ? '<div class="mt-3"><div class="text-xs font-bold uppercase text-text3 mb-1">KML / KMZ Files Available</div>' +
+          '<table class="data-table"><tbody>' + fileRows + '</tbody></table></div>'
+        : '<div class="empty-state text-sm mt-3">No KML/KMZ files found in Survey Data\\XML folder.</div>');
+  } catch(e) {
+    body.innerHTML = '<div class="text-danger p-3">Error: ' + e.message + '</div>';
+  }
+}
+
+function closeKmlModal() {
+  document.getElementById('kmlIndexOverlay').classList.add('hidden');
+}
+
+async function buildKmlIndex() {
+  const btn = document.getElementById('btnBuildIndex');
+  btn.disabled = true; btn.innerHTML = '\u23F3 Building...';
+  document.getElementById('kmlIndexBody').innerHTML = '<div class="loading-state">Parsing KML/KMZ files \u2014 this may take a minute.</div>';
+  try {
+    const res = await apiFetch('/xml/build-index', 'POST', {});
+    if (!res.success) throw new Error(res.error);
+    showToast('KML index built: ' + (res.total||0).toLocaleString() + ' parcels in ' + res.elapsed_sec + 's', 'success');
+    await showKmlIndexModal();
+  } catch(e) {
+    showToast('Build failed: ' + e.message, 'error');
+    document.getElementById('kmlIndexBody').innerHTML = '<div class="text-danger p-3">Error: ' + e.message + '</div>';
+  } finally {
+    btn.disabled = false; btn.innerHTML = '\u26A1 Build / Rebuild Index';
+  }
+}
+
+
+function savePlatByIndex(idx) {
+  const f = state._cabinetHits && state._cabinetHits[idx];
+  if (!f) { showToast('Plat not found', 'error'); return; }
+  saveClientPlatLocal(f.path, f.file);
+}
+
+async function saveClientPlatLocal(filePath, filename) {
+  const rs = state.researchSession;
+  if (!rs) { showToast("No active session", "error"); return; }
+  const clientSubj = rs.subjects.find(s => s.type === "client");
+
+  try {
+    const res = await apiFetch("/save-plat", "POST", {
+      source: "local", file_path: filePath, filename: filename,
+      job_number: rs.job_number, client_name: rs.client_name, job_type: rs.job_type,
+      subject_id: clientSubj?.id
+    });
+    if (res.success) {
+      showToast(`Plat saved to project: ${res.filename}`, "success");
+      if (clientSubj) { clientSubj.plat_saved = true; if (res.saved_to) clientSubj.plat_path = res.saved_to; }
+      await persistSession();
+      goToStep(4);
+    } else {
+      showToast("Save failed: " + res.error, "error");
+    }
+  } catch (e) {
+    showToast("Error saving plat: " + e.message, "error");
+  }
+}
+
+async function saveClientPlatOnline(docNo, loc) {
+  const rs = state.researchSession;
+  if (!rs) { showToast("No active session", "error"); return; }
+  
+  const clientSubj = rs.subjects.find(s => s.type === "client");
+
+  try {
+    const res = await apiFetch("/save-plat", "POST", {
+      source: "online", doc_no: docNo, location: loc,
+      job_number: rs.job_number, client_name: rs.client_name, job_type: rs.job_type,
+      subject_id: clientSubj.id
+    });
+
+    if (res.success) {
+      showToast(res.skipped ? "Plat file already exists" : `Plat saved to project: ${res.filename}`, "success");
+      clientSubj.plat_saved = true;
+      if (res.saved_to) clientSubj.plat_path = res.saved_to;
+      await persistSession();
+      goToStep(4);
+    } else {
+      showToast("Download failed: " + res.error, "error");
+    }
+  } catch (e) {
+    showToast("Error downloading plat: " + e.message, "error");
+  }
+}
+
+// 
+// STEP 4: ADJOINER DISCOVERY
+// 
+async function runAdjoinerDiscovery() {
+  const rs = state.researchSession;
+  if (!rs) { showToast("No active session", "error"); return; }
+  
+  const clientSubj = rs.subjects.find(s => s.type === "client");
+  if (!clientSubj || !clientSubj.deed_saved) {
+    showToast("Save the client deed first", "warn");
+    return;
+  }
+
+  const btn = document.getElementById("btnDiscoverAdjoiners");
+  const grid = document.getElementById("s4AdjoinerGrid");
+  const resArea = document.getElementById("s4DiscoveryResults");
+
+  btn.disabled = true;
+  btn.innerHTML = `<div class="spinner"></div> Scanning...`;
+  resArea.classList.remove("hidden");
+  grid.innerHTML = `<div class="loading-state col-span-full">Running OCR on plat and scanning online records...</div>`;
+  document.getElementById("s4CountText").textContent = "...";
+
+  try {
+    const res = await apiFetch("/find-adjoiners", "POST", {
+      detail: state.selectedDetail || {},
+      deed_path: clientSubj.deed_path || "",
+      job_number: rs.job_number,
+      client_name: rs.client_name,
+      job_type: rs.job_type,
+    });
+
+    if (!res.success) throw new Error(res.error);
+
+    state.discoveredAdjoiners = res.adjoiners || [];
+    state.ocrRawText = res.ocr_text || "";
+
+    const count = state.discoveredAdjoiners.length;
+    document.getElementById("s4CountText").textContent = count;
+
+    if (!count) {
+      const noDetailHint = !state.selectedDetail
+        ? `<br><br><span class="text-xs" style="color:var(--text3)">&#128161; Tip: Go to <button class="link-btn" onclick="goToStep(2)">Step 2</button> and select the client deed to enable full-text scanning.</span>`
+        : "";
+      grid.innerHTML = `<div class="empty-state col-span-full">No adjoiners found automatically. Add manually below.${noDetailHint}</div>`;
+    } else {
+      let html = state.discoveredAdjoiners.map(j => `
+        <div class="adjoiner-chip">
+          <div class="flex-col">
+            <span class="adjoiner-chip-name">${j.name}</span>
+            <span class="source-tag text-text3">${j.source}</span>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="addFoundAdjoiner(\'${j.name.replace(/\'/g,"\\\'")}\')">+ Add</button>
+        </div>
+      `).join("");
+      grid.innerHTML = html;
+    }
+
+  } catch (e) {
+    grid.innerHTML = `<div class="text-danger col-span-full p-4">Discovery failed: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `⚡ Re-run Scan`;
+  }
+}
+
+async function addFoundAdjoiner(name) {
+  const rs = state.researchSession;
+  if (!rs) return;
+
+  const exists = rs.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === name.toLowerCase());
+  if (exists) { showToast("Already on board", "info"); return; }
+
+  rs.subjects.push({
+    id: "adj_" + Date.now() + Math.random().toString(36).substr(2, 5),
+    type: "adjoiner",
+    name: name,
+    deed_saved: false, plat_saved: false, status: "pending", notes: ""
+  });
+  
+  await persistSession();
+  showToast(`Added ${name} to research board`, "success");
+}
+
+async function addAllDiscoveredToBoard() {
+  let count = 0;
+  for (const j of state.discoveredAdjoiners) {
+    const exists = state.researchSession.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === j.name.toLowerCase());
+    if (!exists) {
+      state.researchSession.subjects.push({
+        id: "adj_" + Date.now() + "_" + count,
+        type: "adjoiner",
+        name: j.name,
+        deed_saved: false, plat_saved: false, status: "pending", notes: ""
+      });
+      count++;
+    }
+  }
+  
+  if (count > 0) {
+    await persistSession();
+    showToast(`Added ${count} adjoiners to Research Board`, "success");
+    goToStep(5);
+  } else {
+    showToast("All discovered adjoiners already on board", "info");
+  }
+}
+
+async function manualAddAdjoiner() {
+  const inp = document.getElementById("s4ManualName");
+  const name = inp.value.trim();
+  if (!name || name.length < 2) return;
+  
+  await addFoundAdjoiner(name);
+  inp.value = "";
+}
+
+// Expose Cabinet browser globally
+function openGlobalCabinetBrowser() {
+  document.getElementById('cabinetOverlay').classList.remove('hidden');
+  browseCabinet('A'); // default
+}
+function closeCabinetBrowser() {
+  document.getElementById('cabinetOverlay').classList.add('hidden');
+}
+
+let _cabState = { cab: 'C', filter: '', page: 1 };
+async function browseCabinet(cab, page=1) {
+  _cabState.cab = cab; _cabState.page = page;
+  
+  document.querySelectorAll('.cab-tab').forEach(b => b.classList.toggle('active', b.dataset.cab === cab));
+  const body = document.getElementById('cabinetBody');
+  body.innerHTML = `<div class="loading-state">Loading...</div>`;
+  
+  try {
+    const res = await apiFetch(`/cabinet-browse?cabinet=${cab}&filter=${encodeURIComponent(_cabState.filter)}&page=${page}&per_page=50`);
+    if (!res.success) throw new Error(res.error);
+    
+    document.getElementById('cabinetCount').textContent = `Total: ${res.total} files`;
+    
+    if (!res.files.length) {
+      body.innerHTML = `<div class="empty-state text-sm">No files match.</div>`;
+      return;
+    }
+    
+    let html = `<table class="data-table"><tbody>`;
+    res.files.forEach(f => {
+      html += `
+        <tr>
+          <td class="text-xs">${escHtml(f.file)}</td>
+          <td class="text-text3 text-xs w-16">${f.size_kb} KB</td>
+          <td class="w-20"><button class="btn btn-outline btn-sm" onclick="apiFetch('/open-file','POST',{path:'${f.path.replace(/\\/g,"\\\\")}'})">Open</button></td>
+        </tr>`;
+    });
+    html += `</tbody></table>`;
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = `<div class="text-danger p-2">${e.message}</div>`;
+  }
+}
+function filterCabinet() {
+  _cabState.filter = document.getElementById('cabinetFilter').value.trim();
+  browseCabinet(_cabState.cab, 1);
+}
+// 
+// STEP 5: ADJOINER RESEARCH BOARD
+// 
+function renderResearchBoard() {
+  const grid = document.getElementById("s5ResearchGrid");
+  const rs = state.researchSession;
+  if (!rs || !rs.subjects.length) {
+    grid.innerHTML = `<div class="empty-state">No subjects on board. Add adjoiners in Step 4.</div>`;
+    return;
+  }
+
+  const adjoiners = rs.subjects.filter(s => s.type === "adjoiner");
+  const client    = rs.subjects.find(s => s.type === "client");
+  let html = "";
+
+  // Client card first
+  if (client) html += buildSubjectCard(client, rs);
+
+  adjoiners.forEach(s => { html += buildSubjectCard(s, rs); });
+  grid.innerHTML = html;
+}
+
+function buildSubjectCard(s, rs) {
+  const isClient = s.type === "client";
+  const st = s.status || "pending";
+  const accentColor = isClient ? "var(--accent)" : "#7a4f9a";
+
+  const deedChip = s.deed_saved
+    ? `<span class="chip chip-done"> Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="Open deed" onclick="openFile('${s.deed_path.replace(/\\/g,"\\\\").replace(/'/g,"\\'")}')"></button>` : ""}`
+    : `<span class="chip chip-todo"> Deed</span>`;
+  const platChip = s.plat_saved
+    ? `<span class="chip chip-done"> Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="Open plat" onclick="openFile('${s.plat_path.replace(/\\/g,"\\\\").replace(/'/g,"\\'")}')"></button>` : ""}`
+    : `<span class="chip chip-todo"> Plat</span>`;
+
+  const statusColors = { done: "#1a3028;color:#56d3a0", na: "#281a1a;color:#888", pending: "var(--bg3);color:var(--text3)" };
+  const statusLabel  = { done: " Done", na: " N/A", pending: " Pending" }[st];
+
+  return `
+    <div class="adjoiner-card status-${st}" id="card_${s.id}" style="border-top-color:${accentColor}">
+      <div class="adjoiner-card-header">
+        <div class="flex-col gap-1">
+          <strong style="font-size:15px">${escHtml(s.name)}</strong>
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:${isClient ? 'var(--accent2)' : '#b080e0'}">
+            ${isClient ? "★ Client" : " Adjoiner"}
+          </span>
+        </div>
+        <button class="chip" style="background:${statusColors[st]};border-color:transparent;cursor:pointer;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700"
+          onclick="cycleSubjectStatus('${s.id}')">${statusLabel}</button>
+      </div>
+
+      <div class="adjoiner-card-body">
+        <!-- Status chips -->
+        <div class="row-layout gap-2 flex-wrap">
+          ${deedChip}
+          ${platChip}
+          ${buildExceptionFlags(s)}
+        </div>
+
+        <!-- Notes -->
+        <input class="inp" style="padding:6px 10px;font-size:12px"
+          placeholder="Notes..." value="${escHtml(s.notes || "")}"
+          onchange="saveNote('${s.id}', this.value)">
+
+        <!-- Chain tracker -->
+        ${buildChainTracker(s)}
+
+        <!-- Actions -->
+        <div class="row-layout gap-2 flex-wrap border-t pt-2" style="border-color:var(--border)">
+          <button class="btn btn-outline btn-sm flex-1" onclick="searchForSubject('${escHtml(s.name.split(",")[0]).replace(/'/g,"\\'")}')">
+             Search
+          </button>
+          ${!isClient ? `
+          <button class="btn btn-outline btn-sm flex-1" onclick="saveAdjDeed('${s.id}')">
+            ⬇ Save Deed
+          </button>
+          <button class="btn btn-outline btn-sm flex-1" onclick="saveAdjPlat('${s.id}')">
+             Find Plat
+          </button>
+          <button class="btn btn-outline btn-sm" style="color:#ff7b72" onclick="removeSubject('${s.id}')">✗</button>
+          ` : ""}
+        </div>
+      </div>
+    </div>`;
+}
+
+function buildExceptionFlags(s) {
+  const FLAGS = [
+    { key: "mineral", label: " Mineral" },
+    { key: "easement", label: " Easement" },
+    { key: "roe", label: " ROW" },
+    { key: "access", label: " Access" },
+  ];
+  const exc = s.exceptions || {};
+  return `<div class="row-layout gap-1 flex-wrap">` +
+    FLAGS.map(f => `<span class="exc-chip ${exc[f.key] ? "exc-active" : "exc-off"}"
+      onclick="toggleException('${s.id}','${f.key}')" title="Toggle ${f.label}">${f.label}</span>`).join("") +
+  `</div>`;
+}
+
+function buildChainTracker(s) {
+  const years = (s.chain_years || []).sort((a,b) => b-a);
+  const goal  = s.chain_goal || null;
+  const reached = goal && years.length && Math.min(...years) <= goal;
+
+  return `<div class="chain-box">
+    <div class="row-layout justify-between mb-1">
+      <span class="text-xs text-text3 font-bold uppercase">Chain of Title</span>
+      <div class="row-layout gap-2">
+        ${goal
+          ? `<span class="text-xs" style="color:${reached ? "#56d3a0" : "#e3c55a"}">${reached ? "" : ""} Goal: ${goal}</span>`
+          : `<button class="link-btn" onclick="setChainGoal('${s.id}')">+ Set goal year</button>`}
+        <button class="link-btn text-accent2" onclick="addChainYear('${s.id}')">+ Add year</button>
+      </div>
+    </div>
+    ${years.length
+      ? `<div class="chain-years">${years.map(y => `<span class="year-chip" onclick="removeChainYear('${s.id}',${y})" title="Remove">${y}</span>`).join("")}</div>`
+      : `<div class="text-xs text-text3 italic">No years logged</div>`}
+  </div>`;
+}
+
+//  Search from board 
+function searchForSubject(name) {
+  if (document.getElementById("s2SearchName")) {
+    document.getElementById("s2SearchName").value = name;
+  }
+  goToStep(2);
+  setTimeout(() => doStep2Search(), 300);
+}
+
+async function saveAdjDeed(subjId) {
+  if (!state.selectedDoc || !state.selectedDetail) {
+    showToast("Select a deed in Step 2 first, then return here", "warn");
+    goToStep(2);
+    return;
+  }
+  const rs = state.researchSession;
+  const subj = rs.subjects.find(s => s.id === subjId);
+  if (!subj) return;
+
+  try {
+    const res = await apiFetch("/download", "POST", {
+      doc_no:         state.selectedDoc.doc_no,
+      grantor:        state.selectedDetail["Grantor"] || "",
+      grantee:        state.selectedDetail["Grantee"] || "",
+      location:       state.selectedDetail["Location"] || "",
+      job_number:     rs.job_number,
+      client_name:    rs.client_name,
+      job_type:       rs.job_type,
+      create_project: true,
+      is_adjoiner:    true,
+      adjoiner_name:  subj.name,
+      subject_id:     subjId,
+    });
+
+    if (res.success) {
+      subj.deed_saved = true;
+      if (res.saved_to) subj.deed_path = res.saved_to;
+      await persistSession();
+      showToast(`Deed saved for ${subj.name}`, "success");
+      renderResearchBoard();
+    } else {
+      showToast("Save failed: " + res.error, "error");
+    }
+  } catch(e) {
     showToast("Error: " + e.message, "error");
   }
 }
 
-function showRecentJobs(jobs) {
-  // Render a quick-pick list above the board body
-  const body = document.getElementById("boardBody");
-  const existingPicker = document.getElementById("recentJobsPicker");
-  if (existingPicker) { existingPicker.remove(); return; }  // toggle off
+async function saveAdjPlat(subjId) {
+  const rs = state.researchSession;
+  const subj = rs.subjects.find(s => s.id === subjId);
+  if (!subj) return;
 
-  const picker = document.createElement("div");
-  picker.id   = "recentJobsPicker";
-  picker.style.cssText = "background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:12px";
-  picker.innerHTML = `
-    <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px">🕒 Recent Jobs</div>
-    ${jobs.map(j => `
-      <button onclick="quickLoadJob(${j.job_number},'${escHtml(j.client_name).replace(/'/g,"\\'")}','${j.job_type}')"
-        style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:5px 4px;
-               cursor:pointer;font-size:12px;color:var(--text2);font-family:inherit;
-               border-radius:4px;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
-        <strong style="color:var(--text)">#${j.job_number}</strong> &mdash; ${escHtml(j.client_name)}
-        <span style="font-size:10px;color:var(--text3);margin-left:4px">${j.job_type}</span>
-      </button>`).join("")}
-  `;
-  body.insertBefore(picker, body.firstChild);
-}
-
-async function quickLoadJob(num, client, type) {
-  document.getElementById("boardJobNum").value    = num;
-  document.getElementById("boardClientName").value = client;
-  document.getElementById("boardJobType").value   = type;
-  document.getElementById("recentJobsPicker")?.remove();
-  await loadResearchSession();
-}
-
-
-// ♥ Feature 3: Bulk adjoiner search ───────────────────────────────────────────
-async function bulkSearchAdjoiners() {
-  if (!state.researchSession) { showToast("Load a session first", "warn"); return; }
-  const adjoiners = state.researchSession.subjects.filter(s => s.type === "adjoiner" && !s.deed_saved);
-  if (!adjoiners.length) { showToast("No pending adjoiners to search", "info"); return; }
-  if (!state.loggedIn) { showToast("Connect to records first", "warn"); return; }
-
-  showToast(`Searching ${adjoiners.length} adjoiner${adjoiners.length !== 1 ? "s" : ""}…`, "info");
-
-  // Show a results summary panel inside board body
-  const summaryId = "bulkSearchResults";
-  let summaryEl = document.getElementById(summaryId);
-  if (!summaryEl) {
-    summaryEl = document.createElement("div");
-    summaryEl.id = summaryId;
-    summaryEl.style.cssText = "background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px;max-height:260px;overflow-y:auto";
-    const body = document.getElementById("boardBody");
-    body.insertBefore(summaryEl, body.firstChild);
+  if (!state.selectedDetail) {
+    showToast("Go to Step 2, search & select the adjoiner's deed, then come back", "warn");
+    return;
   }
-  summaryEl.innerHTML = `<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px">🔍 Bulk Search Results</div><div id="bulkResultRows"></div>`;
-  const rowsEl = document.getElementById("bulkResultRows");
 
-  for (const subj of adjoiners) {
-    const lastName = subj.name.split(",")[0].trim();
-    rowsEl.innerHTML += `<div style="font-size:11px;color:var(--text3);padding:3px 0">⏳ Searching: <strong style="color:var(--text)">${escHtml(subj.name)}</strong>…</div>`;
-    rowsEl.scrollTop = rowsEl.scrollHeight;
-    try {
-      const res = await apiFetch("/search", "POST", { name: lastName, operator: "begins with" });
-      const count = res.results?.length ?? 0;
-      const color = count > 0 ? "#56d3a0" : "#888";
-      // Replace last row with result
-      const rows = rowsEl.querySelectorAll("div");
-      if (rows.length) rows[rows.length - 1].remove();
-      rowsEl.innerHTML += `
-        <div style="font-size:11px;padding:3px 0;display:flex;justify-content:space-between">
-          <strong style="color:var(--text)">${escHtml(subj.name)}</strong>
-          <span style="color:${color}">${count} record${count !== 1 ? "s" : ""}</span>
-        </div>`;
-      // If results found, pre-fill search and offer quick jump
-      if (count > 0) {
-        const lastRow = rowsEl.lastElementChild;
-        lastRow.style.cursor = "pointer";
-        lastRow.title = "Click to jump to search results";
-        lastRow.onclick = () => {
-          document.getElementById("searchName").value = lastName;
-          document.getElementById("searchOperator").value = "begins with";
-          closeResearchBoard();
-          if (!document.getElementById("searchBtn").disabled) doSearch();
-        };
-        lastRow.style.borderRadius = "4px";
-        lastRow.onmouseover = () => lastRow.style.background = "var(--bg2)";
-        lastRow.onmouseout  = () => lastRow.style.background = "transparent";
+  try {
+    const res = await apiFetch("/find-plat", "POST", { detail: state.selectedDetail });
+    if (!res.success) { showToast("Plat search error: " + res.error, "error"); return; }
+
+    // Try to auto-save — first check direct cabinet hits, then KML-linked local files
+    const _localHits = res.local || [];
+    if (_localHits.length) {
+      const f = _localHits[0];
+      const saveRes = await apiFetch("/save-plat", "POST", {
+        source: "local", file_path: f.path, filename: f.file,
+        job_number: rs.job_number, client_name: rs.client_name,
+        job_type: rs.job_type, subject_id: subjId, is_adjoiner: true, adjoiner_name: subj.name
+      });
+      if (saveRes.success) {
+        subj.plat_saved = true;
+        if (saveRes.saved_to) subj.plat_path = saveRes.saved_to;
+        await persistSession();
+        showToast(`Plat saved for ${subj.name}`, "success");
+        renderResearchBoard();
+        return;
       }
-    } catch (e) {
-      rowsEl.innerHTML += `<div style="font-size:11px;color:#ff7b72;padding:2px 0">❌ Error searching ${escHtml(subj.name)}</div>`;
     }
-    await new Promise(r => setTimeout(r, 300)); // small delay between requests
+    // Also try KML-matched local cabinet files
+    for (const km of (res.kml_matches || [])) {
+      if (km.local_files && km.local_files.length) {
+        const f = km.local_files[0];
+        const saveRes = await apiFetch("/save-plat", "POST", {
+          source: "local", file_path: f.path, filename: f.file,
+          job_number: rs.job_number, client_name: rs.client_name,
+          job_type: rs.job_type, subject_id: subjId, is_adjoiner: true, adjoiner_name: subj.name
+        });
+        if (saveRes.success) {
+          subj.plat_saved = true;
+          if (saveRes.saved_to) subj.plat_path = saveRes.saved_to;
+          await persistSession();
+          showToast(`Plat saved for ${subj.name} (KML match)`, "success");
+          renderResearchBoard();
+          return;
+        }
+      }
+    }
+    showToast("No local plat found. Go to Step 3 to search manually.", "warn");
+  } catch(e) {
+    showToast("Error: " + e.message, "error");
+  }
+}
+
+//  Board persistence helpers 
+async function removeSubject(id) {
+  state.researchSession.subjects = state.researchSession.subjects.filter(s => s.id !== id);
+  await persistSession();
+  renderResearchBoard();
+}
+
+async function cycleSubjectStatus(id) {
+  const subj = state.researchSession?.subjects.find(s => s.id === id);
+  if (!subj) return;
+  const order = ["pending", "done", "na"];
+  const cur = subj.status || "pending";
+  subj.status = order[(order.indexOf(cur) + 1) % order.length];
+  await persistSession();
+  renderResearchBoard();
+}
+
+async function saveNote(id, text) {
+  const subj = state.researchSession?.subjects.find(s => s.id === id);
+  if (!subj) return;
+  subj.notes = text;
+  await persistSession();
+}
+
+async function toggleException(subjId, key) {
+  const subj = state.researchSession?.subjects.find(s => s.id === subjId);
+  if (!subj) return;
+  if (!subj.exceptions) subj.exceptions = {};
+  subj.exceptions[key] = !subj.exceptions[key];
+  await persistSession();
+  renderResearchBoard();
+}
+
+function addChainYear(subjId) {
+  const y = parseInt(prompt("Enter deed year to add to chain:"));
+  if (!y || y < 1600 || y > 2100) return;
+  const subj = state.researchSession?.subjects.find(s => s.id === subjId);
+  if (!subj) return;
+  if (!subj.chain_years) subj.chain_years = [];
+  if (!subj.chain_years.includes(y)) subj.chain_years.push(y);
+  persistSession().then(() => renderResearchBoard());
+}
+
+function setChainGoal(subjId) {
+  const y = parseInt(prompt("Need chain back to year:"));
+  if (!y || y < 1600 || y > 2100) return;
+  const subj = state.researchSession?.subjects.find(s => s.id === subjId);
+  if (!subj) return;
+  subj.chain_goal = y;
+  persistSession().then(() => renderResearchBoard());
+}
+
+function removeChainYear(subjId, yr) {
+  const subj = state.researchSession?.subjects.find(s => s.id === subjId);
+  if (!subj || !subj.chain_years) return;
+  subj.chain_years = subj.chain_years.filter(y => y !== yr);
+  persistSession().then(() => renderResearchBoard());
+}
+
+async function bulkSearchAdjoiners() {
+  const rs = state.researchSession;
+  if (!rs) return;
+  const pending = rs.subjects.filter(s => s.type === "adjoiner" && !s.deed_saved);
+  if (!pending.length) { showToast("No pending adjoiners", "info"); return; }
+  if (!state.loggedIn) { showToast("Not connected to records", "warn"); return; }
+
+  showToast(`Searching ${pending.length} adjoiners...`, "info");
+  for (const subj of pending) {
+    const ln = subj.name.split(",")[0].trim();
+    try {
+      const res = await apiFetch("/search", "POST", { name: ln, operator: "begins with" });
+      const count = res.results?.length || 0;
+      const card = document.getElementById(`card_${subj.id}`);
+      if (card) {
+        const indicator = document.createElement("div");
+        indicator.className = "text-xs mt-1 " + (count > 0 ? "text-accent2" : "text-text3");
+        indicator.textContent = count > 0 ? ` ${count} record${count !== 1 ? "s" : ""} found` : "No records found";
+        const header = card.querySelector(".adjoiner-card-header");
+        if (header) header.appendChild(indicator);
+      }
+    } catch {}
+    await new Promise(r => setTimeout(r, 300));
   }
   showToast("Bulk search complete", "success");
 }
 
-
-// ♥ Feature 5: Cabinet browser ──────────────────────────────────────────────
-
-let _cabinetState = { cabinet: "C", filter: "", page: 1, total: 0 };
-
-function openCabinetBrowser() {
-  const panel = document.getElementById("cabinetPanel");
-  const overlay = document.getElementById("cabinetOverlay");
-  panel.classList.remove("hidden");
-  overlay.classList.remove("hidden");
-  requestAnimationFrame(() => panel.classList.add("open"));
-  browseCabinet(_cabinetState.cabinet);
-}
-
-function closeCabinetBrowser() {
-  const panel = document.getElementById("cabinetPanel");
-  const overlay = document.getElementById("cabinetOverlay");
-  panel.classList.remove("open");
-  setTimeout(() => { panel.classList.add("hidden"); overlay.classList.add("hidden"); }, 260);
-}
-
-async function browseCabinet(cabinet, page = 1) {
-  _cabinetState.cabinet = cabinet;
-  _cabinetState.page    = page;
-  const filt = _cabinetState.filter;
-
-  // Highlight active cabinet button
-  document.querySelectorAll(".cab-tab").forEach(b => b.classList.toggle("active", b.dataset.cab === cabinet));
-
-  const body = document.getElementById("cabinetBody");
-  body.innerHTML = `<div class="detail-loading"><div class="spinner"></div><p>Loading Cabinet ${escHtml(cabinet)}…</p></div>`;
-
+async function openFolderForContext() {
+  const rs = state.researchSession;
+  if (!rs) { showToast("No active session", "warn"); return; }
   try {
-    const res = await apiFetch(`/cabinet-browse?cabinet=${cabinet}&filter=${encodeURIComponent(filt)}&page=${page}&per_page=60`);
-    if (!res.success) { body.innerHTML = `<p style="color:var(--danger);padding:20px">${escHtml(res.error)}</p>`; return; }
-    _cabinetState.total = res.total;
-    renderCabinetFiles(res);
-  } catch (e) {
-    body.innerHTML = `<p style="color:var(--danger);padding:20px">Error: ${escHtml(e.message)}</p>`;
+    const drv    = await apiFetch("/drive-status");
+    const drive  = (drv.drive_ok && drv.drive) ? drv.drive : "F";
+    const rstart = Math.floor(parseInt(rs.job_number) / 100) * 100;
+    const last   = rs.client_name.split(",")[0].trim();
+    const path   = `${drive}:\\AI DATA CENTER\\Survey Data\\${rstart}-${rstart+99}\\${rs.job_number} ${rs.client_name}\\${rs.job_number}-01-${rs.job_type} ${last}\\E Research`;
+    apiFetch("/open-folder", "POST", { path }).catch(()=>{});
+    showToast("Opening E Research folder...", "info");
+  } catch(e) {
+    showToast("Could not resolve drive path", "warn");
   }
 }
 
-function filterCabinet() {
-  _cabinetState.filter = document.getElementById("cabinetFilter").value.trim();
-  _cabinetState.page   = 1;
-  browseCabinet(_cabinetState.cabinet, 1);
+function openFile(filePath) {
+  apiFetch("/open-file", "POST", { path: filePath })
+    .then(r => { if (!r.success) showToast("File not found", "error"); })
+    .catch(() => showToast("Could not open file", "error"));
 }
-
-function renderCabinetFiles(res) {
-  const body = document.getElementById("cabinetBody");
-  if (!res.files.length) {
-    body.innerHTML = `<div class="plat-empty">${res.total === 0 ? "No files in this cabinet." : "No files match your filter."}</div>`;
-    document.getElementById("cabinetCount").textContent = "";
-    return;
-  }
-
-  const totalPages = Math.ceil(res.total / res.per_page);
-  document.getElementById("cabinetCount").textContent = `${res.total} file${res.total !== 1 ? "s" : ""}`;
-
-  let html = `<table class="results-table" style="font-size:11px">`;
-  html += `<thead><tr><th style="width:55%">Filename</th><th>Size</th><th style="width:120px">Actions</th></tr></thead><tbody>`;
-
-  res.files.forEach(f => {
-    const shortName = f.file.length > 50 ? f.file.substring(0, 47) + "…" : f.file;
-    html += `
-      <tr>
-        <td title="${escHtml(f.file)}">${escHtml(shortName)}</td>
-        <td style="white-space:nowrap;color:var(--text3)">${f.size_kb} KB</td>
-        <td>
-          <button class="btn btn-outline" style="font-size:10px;padding:3px 8px;margin-right:4px"
-            onclick="openSavedFile('${escHtml(f.path).replace(/\\/g,'\\\\')}')">Open</button>
-          <button class="btn btn-success" style="font-size:10px;padding:3px 8px"
-            onclick="savePlatFromBrowser('${escHtml(f.path).replace(/\\/g,'\\\\')}','${escHtml(f.file).replace(/'/g,"\\'")}')">Save</button>
-        </td>
-      </tr>`;
+// 
+// STEP 6: BOUNDARY LINES (DXF)
+// 
+function switchS6Tab(tab) {
+  ["calls","parcels","options"].forEach(t => {
+    document.getElementById(`s6Tab${t.charAt(0).toUpperCase()+t.slice(1)}`)?.classList.toggle("hidden", t !== tab);
+    const btn = document.querySelector(`[onclick="switchS6Tab('${t}')"]`);
+    if (btn) btn.classList.toggle("active", t === tab);
   });
-  html += `</tbody></table>`;
-
-  // Pagination
-  if (totalPages > 1) {
-    html += `<div style="display:flex;justify-content:center;gap:8px;padding:12px;font-size:11px">`;
-    if (res.page > 1)
-      html += `<button class="btn btn-outline" style="font-size:11px;padding:4px 10px" onclick="browseCabinet('${res.cabinet}',${res.page - 1})">← Prev</button>`;
-    html += `<span style="line-height:28px;color:var(--text3)">Page ${res.page} / ${totalPages}</span>`;
-    if (res.page < totalPages)
-      html += `<button class="btn btn-outline" style="font-size:11px;padding:4px 10px" onclick="browseCabinet('${res.cabinet}',${res.page + 1})">Next →</button>`;
-    html += `</div>`;
-  }
-
-  body.innerHTML = html;
+  if (tab === "parcels") renderS6ParcelList();
 }
 
-async function savePlatFromBrowser(filePath, fileName) {
-  // Need a loaded session or save modal job info
-  const jobNum  = state.researchSession?.job_number ||
-                  parseInt(document.getElementById("modalJobNum")?.value) || state.nextJobNum;
-  const client  = state.researchSession?.client_name ||
-                  document.getElementById("modalClientName")?.value?.trim();
-  const jobType = state.researchSession?.job_type || "BDY";
-
-  if (!client) {
-    showToast("Open the Research Board and load a session first, or open the Save modal", "warn");
+async function reparseClientCallsFromSession() {
+  if (!state.selectedDetail) {
+    showToast("No deed detail loaded  search in Step 2 first", "warn");
     return;
   }
   try {
-    const res = await apiFetch("/save-plat", "POST", {
-      source: "local", file_path: filePath, filename: fileName,
-      job_number: jobNum, client_name: client, job_type: jobType,
-    });
-    if (res.success) showToast(`Plat saved → ${res.filename}`, "success");
-    else showToast("Save failed: " + res.error, "error");
-  } catch (e) {
+    const res = await apiFetch("/parse-calls", "POST", { detail: state.selectedDetail });
+    if (!res.success) { showToast("Parse error: " + res.error, "error"); return; }
+    state.parsedCalls = res.calls || [];
+    renderS6CallsTable(res);
+    showToast(`${res.count} call${res.count !== 1 ? "s" : ""} parsed from deed`, res.count ? "success" : "warn");
+  } catch(e) {
     showToast("Error: " + e.message, "error");
   }
 }
 
-
-// ── boundary panel ─────────────────────────────────────────────────────────────
-
-// State for boundary panel
-state.parsedCalls     = [];   // [{bearing_label, azimuth, distance, bearing_raw}]
-state.adjoinParcels   = [];   // [{label, layer, calls:[]}]
-state.activeBndTab    = "calls";
-
-// ── open / close ───────────────────────────────────────────────────────────────
-async function doDrawBoundary() {
-  if (!state.selectedDoc) return;
-
-  const panel   = document.getElementById("boundaryPanel");
-  const overlay = document.getElementById("boundaryOverlay");
-  document.getElementById("boundaryDocRef").textContent = state.selectedDoc.doc_no || "";
-
-  // Pre-fill job fields from session or modal
-  _prefillBndJobFields();
-
-  // Populate job-type select
-  const sel = document.getElementById("bndJobType");
-  if (!sel.options.length) {
-    state.jobTypes.forEach(t => {
-      const o = document.createElement("option"); o.value = t; o.textContent = t; sel.appendChild(o);
-    });
-  }
-  if (state.researchSession) sel.value = state.researchSession.job_type;
-
-  panel.classList.remove("hidden");
-  overlay.classList.remove("hidden");
-  requestAnimationFrame(() => panel.classList.add("open"));
-  switchBndTab("calls");
-
-  // Auto-parse from current deed detail if available
-  if (state.selectedDetail) {
-    await _runParseCalls({ detail: state.selectedDetail });
-  }
-}
-
-function closeBoundaryPanel() {
-  const panel   = document.getElementById("boundaryPanel");
-  const overlay = document.getElementById("boundaryOverlay");
-  panel.classList.remove("open");
-  setTimeout(() => { panel.classList.add("hidden"); overlay.classList.add("hidden"); }, 260);
-}
-
-function _prefillBndJobFields() {
-  const rs = state.researchSession;
-  if (rs) {
-    document.getElementById("bndJobNum").value    = rs.job_number;
-    document.getElementById("bndClientName").value = rs.client_name;
-  } else {
-    document.getElementById("bndJobNum").value    = document.getElementById("modalJobNum")?.value || "";
-    document.getElementById("bndClientName").value = document.getElementById("modalClientName")?.value || "";
-  }
-}
-
-// ── tabs ───────────────────────────────────────────────────────────────────────
-function switchBndTab(tab) {
-  state.activeBndTab = tab;
-  ["calls", "parcels", "options"].forEach(t => {
-    document.getElementById(`bndTab${t.charAt(0).toUpperCase()+t.slice(1)}`)?.classList.toggle("active", t === tab);
-    document.getElementById(`bndPane${t.charAt(0).toUpperCase()+t.slice(1)}`)?.classList.toggle("hidden", t !== tab);
-  });
-  if (tab === "parcels") renderParcelList();
-}
-
-// ── call parsing ───────────────────────────────────────────────────────────────
-async function _runParseCalls(body) {
-  setBndStatus("Parsing calls…", "loading");
-  document.getElementById("bndCallsWrap").innerHTML =
-    `<div class="detail-loading"><div class="spinner"></div><p>Parsing deed text…</p></div>`;
-
+async function parseS6Text() {
+  const txt = document.getElementById("s6PasteText").value.trim();
+  if (!txt) { showToast("Paste deed text first", "warn"); return; }
   try {
-    const res = await apiFetch("/parse-calls", "POST", body);
-    if (!res.success) { setBndStatus("Parse error: " + res.error, "error"); return; }
+    const res = await apiFetch("/parse-calls", "POST", { text: txt });
+    if (!res.success) { showToast("Parse error: " + res.error, "error"); return; }
     state.parsedCalls = res.calls || [];
-    renderCallsTable(res);
-    if (res.count === 0) {
-      setBndStatus("No calls found — paste deed text manually", "warn");
-    } else {
-      setBndStatus(`${res.count} call${res.count !== 1 ? "s" : ""} parsed`, "ok");
-    }
-  } catch (e) {
-    setBndStatus("Error: " + e.message, "error");
+    renderS6CallsTable(res);
+    showToast(`${res.count} calls parsed`, res.count ? "success" : "warn");
+  } catch(e) {
+    showToast("Error: " + e.message, "error");
   }
 }
 
-async function reparseCalls() {
-  if (!state.selectedDetail) { showToast("No deed detail loaded", "warn"); return; }
-  await _runParseCalls({ detail: state.selectedDetail });
-}
-
-async function parseFromTextbox() {
-  const txt = document.getElementById("bndPasteText").value.trim();
-  if (!txt) { showToast("Paste some deed text first", "warn"); return; }
-  await _runParseCalls({ text: txt });
-}
-
-// ── calls table ────────────────────────────────────────────────────────────────
-function renderCallsTable(res) {
-  const wrap = document.getElementById("bndCallsWrap");
+function renderS6CallsTable(res) {
+  const tbody = document.getElementById("s6CallsTbody");
+  const closureBar = document.getElementById("s6ClosureBar");
+  const closureText = document.getElementById("s6ClosureText");
   const calls = state.parsedCalls;
 
-  // Closure bar
-  const closureBar  = document.getElementById("bndClosureBar");
-  const closureTxt  = document.getElementById("bndClosureText");
-  if (calls.length) {
-    closureBar.style.display = "flex";
-    const err = res.closure_err ?? 0;
-    const cls = err < 0.5 ? "closure-good" : err < 2 ? "closure-warn" : "closure-bad";
-    closureTxt.innerHTML =
-      `<span class="${cls}">` +
-      (err < 0.01 ? "✓ Perfect closure" : `⚡ Closure error: ${err.toFixed(4)} ft`) +
-      `</span>` +
-      `&nbsp;·&nbsp; ${calls.length} call${calls.length !== 1 ? "s" : ""}` +
-      (res.coords?.length ? ` &nbsp;·&nbsp; ${res.coords.length - 1} segments` : "");
-  } else {
-    closureBar.style.display = "none";
-  }
-
   if (!calls.length) {
-    wrap.innerHTML = `<div class="plat-empty">No calls found. Paste deed text above or click "+ Add Call".</div>`;
+    tbody.innerHTML = `<tr><td colspan="4" class="empty-cell">No calls parsed yet.</td></tr>`;
+    closureBar.classList.add("hidden");
+    updateS6Sketch();
     return;
   }
 
-  let html = `
-    <table class="bnd-calls-table">
-      <thead>
-        <tr>
-          <th style="width:28px">#</th>
-          <th>Bearing</th>
-          <th>Distance (ft)</th>
-          <th style="width:28px">Del</th>
-        </tr>
-      </thead>
-      <tbody id="bndCallsTbody">
-  `;
-  calls.forEach((c, i) => {
-    html += `
-      <tr class="bnd-call-row" id="callRow${i}">
-        <td style="color:var(--text3);text-align:center">${i+1}</td>
-        <td>
-          <input class="inp bnd-cell-inp" value="${escHtml(c.bearing_label)}"
-            onchange="updateCallField(${i},'bearing_label',this.value)"
-            style="width:100%;font-size:11px;padding:3px 6px;font-family:monospace" />
-        </td>
-        <td>
-          <input class="inp bnd-cell-inp" type="number" step="0.001" value="${c.distance}"
-            onchange="updateCallField(${i},'distance',parseFloat(this.value)||0)"
-            style="width:100%;font-size:11px;padding:3px 6px" />
-        </td>
-        <td style="text-align:center">
-          <button class="bnd-del-btn" onclick="deleteCall(${i})" title="Delete">✕</button>
-        </td>
-      </tr>
-    `;
-  });
-  html += `</tbody></table>`;
-  wrap.innerHTML = html;
+  const err = res.closure_err ?? 0;
+  const cls = err < 0.5 ? "text-accent2" : err < 2 ? "text-gold" : "text-danger";
+  closureBar.classList.remove("hidden");
+  closureBar.className = `closure-bar ${err < 0.5 ? "bg-green" : err < 2 ? "bg-gold" : "bg-red"}`;
+  closureText.innerHTML = `<span class="${cls}">${err < 0.01 ? " Perfect closure" : ` ${err.toFixed(4)} ft error`}</span> &nbsp;&nbsp; ${calls.length} calls`;
+
+  tbody.innerHTML = calls.map((c, i) => `
+    <tr class="call-row">
+      <td class="text-text3 text-center">${i+1}</td>
+      <td><input class="inp" style="font-family:monospace;font-size:11px;padding:4px 6px" value="${escHtml(c.bearing_label)}"
+        onchange="updateCallField(${i},'bearing_label',this.value)"></td>
+      <td><input class="inp" type="number" step="0.001" style="font-size:11px;padding:4px 6px" value="${c.distance}"
+        onchange="updateCallField(${i},'distance',parseFloat(this.value)||0)"></td>
+      <td><button class="btn btn-outline btn-sm" style="color:#ff7b72;padding:2px 8px" onclick="deleteCall(${i})">✗</button></td>
+    </tr>
+  `).join("");
+
+  updateS6Sketch();
 }
 
 function updateCallField(idx, field, value) {
   if (!state.parsedCalls[idx]) return;
   state.parsedCalls[idx][field] = value;
-  // Re-compute azimuth if bearing_label changed
   if (field === "bearing_label") {
-    const lbl = value.trim().toUpperCase();
-    const m = lbl.match(/^([NS])(\d+)°(\d+)'(\d+)"([EW])$/);
+    const m = value.trim().toUpperCase().match(/^([NS])(\d+)°(\d+)'(\d+)"([EW])$/);
     if (m) {
-      const ns = m[1], deg = +m[2], mn = +m[3], sec = +m[4], ew = m[5];
-      let az = deg + mn/60 + sec/3600;
-      if (ns==='N' && ew==='E') az = az;
-      else if (ns==='S' && ew==='E') az = 180 - az;
-      else if (ns==='S' && ew==='W') az = 180 + az;
-      else if (ns==='N' && ew==='W') az = 360 - az;
+      const [,ns,deg,mn,sec,ew] = m;
+      let az = +deg + +mn/60 + +sec/3600;
+      if (ns==="S"&&ew==="E") az=180-az;
+      else if(ns==="S"&&ew==="W") az=180+az;
+      else if(ns==="N"&&ew==="W") az=360-az;
       state.parsedCalls[idx].azimuth = +az.toFixed(6);
     }
   }
+  recalcS6Closure();
+  updateS6Sketch();
 }
 
 function deleteCall(idx) {
   state.parsedCalls.splice(idx, 1);
-  renderCallsTable({ closure_err: 0 });
-  recalcClosure();
+  renderS6CallsTable({ closure_err: 0 });
 }
 
 function clearAllCalls() {
   state.parsedCalls = [];
-  renderCallsTable({});
-  document.getElementById("bndClosureBar").style.display = "none";
-  setBndStatus("Calls cleared", "ok");
+  renderS6CallsTable({});
 }
 
 function addManualCall() {
-  state.parsedCalls.push({
-    bearing_label: "N00°00'00\"E",
-    azimuth: 0,
-    distance: 0,
-    bearing_raw: "",
-  });
-  renderCallsTable({ closure_err: 0 });
-  recalcClosure();
+  state.parsedCalls.push({ bearing_label: "N00°00'00\"E", azimuth: 0, distance: 0, bearing_raw: "" });
+  renderS6CallsTable({ closure_err: 0 });
 }
 
-function recalcClosure() {
+function recalcS6Closure() {
   const calls = state.parsedCalls;
   if (!calls.length) return;
-  let x = 0, y = 0;
-  calls.forEach(c => {
-    const az = c.azimuth * Math.PI / 180;
-    x += c.distance * Math.sin(az);
-    y += c.distance * Math.cos(az);
-  });
-  const err = Math.hypot(x, y);
-  const closureTxt = document.getElementById("bndClosureText");
-  const cls = err < 0.5 ? "closure-good" : err < 2 ? "closure-warn" : "closure-bad";
-  closureTxt.innerHTML =
-    `<span class="${cls}">` +
-    (err < 0.01 ? "✓ Perfect closure" : `⚡ Closure error: ${err.toFixed(4)} ft`) +
-    `</span> &nbsp;·&nbsp; ${calls.length} call${calls.length !== 1 ? "s" : ""}`;
-  document.getElementById("bndClosureBar").style.display = "flex";
+  let x=0, y=0;
+  calls.forEach(c => { const az=c.azimuth*Math.PI/180; x+=c.distance*Math.sin(az); y+=c.distance*Math.cos(az); });
+  const err = Math.hypot(x,y);
+  const txt = document.getElementById("s6ClosureText");
+  if (txt) {
+    const cls = err<0.5 ? "text-accent2" : err<2 ? "text-gold" : "text-danger";
+    txt.innerHTML = `<span class="${cls}">${err<0.01 ? " Perfect closure" : ` ${err.toFixed(4)} ft`}</span> &nbsp;&nbsp; ${calls.length} calls`;
+  }
 }
 
-// ── parcel management ──────────────────────────────────────────────────────────
-function renderParcelList() {
-  const wrap = document.getElementById("bndParcelList");
-  let html   = "";
-
-  // Client parcel (always first, using parsedCalls)
-  const clientCount = state.parsedCalls.length;
-  html += `
-    <div class="bnd-parcel-card" style="border-color:var(--accent-teal,#1abc9c)">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <span class="subject-type-badge badge-client">👤 Client Boundary</span>
-        <span style="font-size:11px;color:var(--text3)">${clientCount} call${clientCount!==1?'s':''} (from Calls tab)</span>
+//  Parcels (Adjoiner boundaries) 
+function renderS6ParcelList() {
+  const wrap = document.getElementById("s6ParcelList");
+  let html = `
+    <div class="parcel-client-card">
+      <div class="row-layout justify-between">
+        <span class="badge badge-local">★ Client</span>
+        <span class="text-xs text-text3">${state.parsedCalls.length} calls</span>
       </div>
-      <div style="margin-top:6px;font-size:11px;color:var(--text3)">Layer: <strong style="color:#ffee00">CLIENT</strong></div>
-    </div>
-  `;
+      <div class="text-xs text-text3 mt-1">Source: Calls tab (above)</div>
+    </div>`;
 
-  // Adjoiner parcels
   state.adjoinParcels.forEach((p, pi) => {
-    const cnt = p.calls.length;
     html += `
-      <div class="bnd-parcel-card">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span class="subject-type-badge badge-adjoiner">🏘️ ${escHtml(p.label)}</span>
-          <button class="bnd-del-btn" onclick="removeAdjoinerParcel(${pi})" title="Remove">✕</button>
+      <div class="parcel-card">
+        <div class="row-layout justify-between mb-2">
+          <span class="badge" style="background:rgba(122,79,154,.15);color:#b080e0;border-color:#7a4f9a66"> ${escHtml(p.label)}</span>
+          <div class="row-layout gap-2">
+            <span class="text-xs text-text3">${p.calls.length} calls ${p.calls.length ? "" : ""}</span>
+            <button class="btn btn-outline btn-sm" style="color:#ff7b72;padding:2px 8px" onclick="removeAdjoinerParcel(${pi})">✗</button>
+          </div>
         </div>
-        <div style="margin-top:6px;font-size:11px;color:var(--text3)">Layer: <strong style="color:#00aa00">ADJOINERS</strong></div>
-        <div style="margin-top:6px;display:flex;gap:6px;align-items:center">
-          <input class="inp bnd-cell-inp" placeholder="Label…" value="${escHtml(p.label)}"
-            style="flex:1;font-size:11px;padding:3px 8px"
-            onchange="state.adjoinParcels[${pi}].label=this.value;renderParcelList()" />
-          <span style="font-size:11px;color:var(--text3)">${cnt} call${cnt!==1?'s':''}</span>
-        </div>
-        <div style="margin-top:6px">
-          <textarea class="inp bnd-cell-inp" rows="2"
-            style="width:100%;font-size:10px;font-family:monospace;resize:vertical"
-            placeholder="Paste adjoiner deed text to parse calls…"
-            id="adjText${pi}"></textarea>
-          <button class="btn btn-outline" style="font-size:10px;padding:3px 8px;margin-top:4px"
-            onclick="parseAdjoinerText(${pi})">Parse</button>
-        </div>
-      </div>
-    `;
+        ${p.deed_path
+          ? `<button class="btn btn-outline btn-sm w-full mb-1" onclick="extractCallsFromPdf(${pi},'${p.deed_path.replace(/\\/g,"\\\\").replace(/'/g,"\\'")}')"> Extract Calls from Deed PDF</button>`
+          : `<span class="text-xs text-text3">No deed saved yet</span>`}
+        <textarea class="inp mt-1" rows="2" id="adjText${pi}" style="font-size:11px;font-family:monospace;resize:vertical"
+          placeholder="Or paste deed text here..."></textarea>
+        <button class="btn btn-outline btn-sm mt-1 w-full" onclick="parseAdjoinerText(${pi})">Parse Text</button>
+      </div>`;
   });
 
-  wrap.innerHTML = html || `<div class="plat-empty" style="margin:0">No parcels defined yet.</div>`;
+  if (!state.adjoinParcels.length) {
+    html += `<div class="empty-state text-sm mt-2">No adjoiner parcels. Click "Auto-populate from Board" above.</div>`;
+  }
+
+  wrap.innerHTML = html;
+}
+
+function autoPopulateAdjoiners() {
+  if (!state.researchSession) { showToast("Load a session first", "warn"); return; }
+  const adjs = state.researchSession.subjects.filter(s => s.type === "adjoiner");
+  if (!adjs.length) { showToast("No adjoiners on the research board", "info"); return; }
+  let added = 0;
+  adjs.forEach(subj => {
+    if (!state.adjoinParcels.some(p => p.label.toLowerCase() === subj.name.toLowerCase())) {
+      state.adjoinParcels.push({ label: subj.name, layer: "ADJOINERS", calls: [], start_x: 0, start_y: 0, deed_path: subj.deed_path||"", plat_path: subj.plat_path||"", extracting: false });
+      added++;
+    }
+  });
+  renderS6ParcelList();
+  showToast(added ? `${added} parcels added` : "All adjoiners already in list", added ? "success" : "info");
 }
 
 function addAdjoinerParcel() {
-  // Suggest from discovered adjoiners
-  const suggestions = (state.researchSession?.subjects || [])
-    .filter(s => s.type === "adjoiner")
-    .map(s => s.name);
-
-  const label = prompt("Adjoiner parcel label (e.g. \"Rael, Carlos\"):",
-    suggestions.length ? suggestions[0] : "Adjoiner");
+  const suggestions = (state.researchSession?.subjects||[]).filter(s=>s.type==="adjoiner").map(s=>s.name);
+  const label = prompt("Adjoiner label:\n" + (suggestions.length ? "Suggestions: " + suggestions.join(", ") : "(none)"), suggestions[0]||"Adjoiner");
   if (!label) return;
+  const subj = (state.researchSession?.subjects||[]).find(s=>s.type==="adjoiner"&&s.name.toLowerCase()===label.toLowerCase());
+  state.adjoinParcels.push({ label, layer:"ADJOINERS", calls:[], start_x:0, start_y:0, deed_path:subj?.deed_path||"", plat_path:subj?.plat_path||"", extracting:false });
+  renderS6ParcelList();
+}
 
-  state.adjoinParcels.push({ label, layer: "ADJOINERS", calls: [], start_x: 0, start_y: 0 });
-  renderParcelList();
+function clearAllParcels() {
+  if (!state.adjoinParcels.length) return;
+  if (!confirm(`Remove all ${state.adjoinParcels.length} parcel(s)?`)) return;
+  state.adjoinParcels = [];
+  renderS6ParcelList();
 }
 
 function removeAdjoinerParcel(idx) {
   state.adjoinParcels.splice(idx, 1);
-  renderParcelList();
+  renderS6ParcelList();
 }
 
 async function parseAdjoinerText(idx) {
   const txt = document.getElementById(`adjText${idx}`)?.value.trim();
-  if (!txt) { showToast("Paste some text first", "warn"); return; }
+  if (!txt) { showToast("Paste text first", "warn"); return; }
+  const res = await apiFetch("/parse-calls", "POST", { text: txt });
+  if (!res.success) { showToast("Parse error: " + res.error, "error"); return; }
+  state.adjoinParcels[idx].calls = res.calls;
+  renderS6ParcelList();
+  showToast(`${res.count} calls parsed for ${state.adjoinParcels[idx].label}`, "success");
+}
+
+async function extractCallsFromPdf(idx, pdfPath) {
+  if (!pdfPath) { showToast("No saved PDF path", "warn"); return; }
+  state.adjoinParcels[idx].extracting = true;
+  renderS6ParcelList();
   try {
-    const res = await apiFetch("/parse-calls", "POST", { text: txt });
-    if (!res.success) { showToast("Parse error: " + res.error, "error"); return; }
+    const res = await apiFetch("/extract-calls-from-pdf", "POST", { pdf_path: pdfPath });
+    if (!res.success) { showToast("Extract failed: " + res.error, "error"); return; }
     state.adjoinParcels[idx].calls = res.calls;
-    renderParcelList();
-    showToast(`${res.count} call${res.count!==1?"s":""} parsed for ${state.adjoinParcels[idx].label}`, "success");
-  } catch (e) {
+    showToast(res.count ? `${res.count} calls from ${res.filename}` : "No metes & bounds found  paste manually", res.count ? "success" : "warn");
+  } catch(e) {
     showToast("Error: " + e.message, "error");
+  } finally {
+    state.adjoinParcels[idx].extracting = false;
+    renderS6ParcelList();
   }
 }
 
-// ── generate DXF ───────────────────────────────────────────────────────────────
+//  DXF Generation 
 async function doGenerateDxf() {
-  const jobNum  = parseInt(document.getElementById("bndJobNum").value);
-  const client  = document.getElementById("bndClientName").value.trim();
-  const jobType = document.getElementById("bndJobType").value || "BDY";
-
-  if (!client) {
-    showToast("Enter client name in the Parcels tab", "warn");
-    switchBndTab("parcels");
-    return;
-  }
-  if (!state.parsedCalls.length && !state.adjoinParcels.some(p => p.calls.length)) {
-    showToast("No boundary calls to generate — parse or add calls first", "warn");
-    switchBndTab("calls");
-    return;
+  const rs = state.researchSession;
+  if (!rs) { showToast("Load a session first", "warn"); return; }
+  if (!state.parsedCalls.length && !state.adjoinParcels.some(p=>p.calls.length)) {
+    showToast("No boundary calls to generate", "warn"); return;
   }
 
-  // Build parcels array
+  const btn = document.getElementById("btnGenerateDxf");
+  const status = document.getElementById("s6GenerateStatus");
+  btn.disabled = true;
+  btn.innerHTML = "Generating...";
+  status.textContent = "";
+
   const parcels = [];
   if (state.parsedCalls.length) {
-    parcels.push({
-      label:  `Client — ${client}`,
-      layer:  "CLIENT",
-      calls:  state.parsedCalls,
-      start_x: 0,
-      start_y: 0,
-    });
+    parcels.push({ label:`Client  ${rs.client_name}`, layer:"CLIENT", calls:state.parsedCalls, start_x:0, start_y:0 });
   }
   state.adjoinParcels.forEach(p => {
-    if (p.calls.length) {
-      parcels.push({
-        label:   p.label,
-        layer:   p.layer || "ADJOINERS",
-        calls:   p.calls,
-        start_x: p.start_x || 0,
-        start_y: p.start_y || 0,
-      });
-    }
+    if (p.calls.length) parcels.push({ label:p.label, layer:p.layer||"ADJOINERS", calls:p.calls, start_x:p.start_x||0, start_y:p.start_y||0 });
   });
 
-  // Collect options from UI
   const options = {
     draw_boundary:   document.getElementById("optDrawBoundary")?.checked ?? true,
     draw_labels:     document.getElementById("optDrawLabels")?.checked   ?? true,
@@ -1667,118 +1531,351 @@ async function doGenerateDxf() {
     close_tolerance: parseFloat(document.getElementById("optCloseTol")?.value)  || 0.5,
   };
 
-  const btn = document.getElementById("bndGenerateBtn");
-  btn.disabled = true;
-  btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px"></div> Generating…';
-  setBndStatus("Generating DXF…", "loading");
-
   try {
-    const resolvedJob = jobNum || (await apiFetch("/next-job-number")).next_job_number;
     const res = await apiFetch("/generate-dxf", "POST", {
-      job_number:  resolvedJob,
-      client_name: client,
-      job_type:    jobType,
-      parcels,
-      options,
+      job_number: rs.job_number, client_name: rs.client_name, job_type: rs.job_type, parcels, options
     });
+    if (!res.success) { showToast("DXF failed: " + res.error, "error"); status.textContent = "Error: " + res.error; return; }
 
-    if (!res.success) {
-      setBndStatus("Error: " + res.error, "error");
-      showToast("DXF generation failed: " + res.error, "error");
-      return;
-    }
-
-    // Show closure errors if any
-    const badClosure = (res.closure_errors || []).filter(e => e.error > options.close_tolerance);
-    if (badClosure.length) {
-      const msg = badClosure.map(e => `${e.label}: ${e.error.toFixed(3)} ft`).join(", ");
-      showToast(`⚠️ Closure issues: ${msg}`, "warn");
-    }
-
-    setBndStatus(`✓ Saved: ${res.filename}`, "ok");
-    showToast(`DXF saved → ${res.filename}`, "success");
-
-    // Offer to open the folder
+    showToast(` DXF saved: ${res.filename}`, "success");
+    status.innerHTML = `<span class="text-accent2"> ${escHtml(res.filename)}</span>`;
     setTimeout(() => {
       const dir = res.saved_to.substring(0, res.saved_to.lastIndexOf("\\"));
-      apiFetch("/open-folder", "POST", { path: dir }).catch(() => {});
+      apiFetch("/open-folder", "POST", { path: dir }).catch(()=>{});
     }, 500);
-
-  } catch (e) {
-    setBndStatus("Error: " + e.message, "error");
+  } catch(e) {
     showToast("Error: " + e.message, "error");
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '<span>💾</span> Generate &amp; Save DXF';
+    btn.innerHTML = "Generate &amp; Save DXF";
   }
 }
 
-// ── status helper ──────────────────────────────────────────────────────────────
-function setBndStatus(msg, type) {
-  const el = document.getElementById("bndStatus");
-  if (!el) return;
-  const colors = { ok:"#56d3a0", error:"#ff7b72", warn:"#e3c55a", loading:"#79a8e0" };
-  el.style.color    = colors[type] || "#ccc";
-  el.style.fontSize = "11px";
-  el.textContent    = msg;
+//  SVG Sketch 
+function updateS6Sketch() {
+  const calls = state.parsedCalls;
+  const sketchWrap = document.getElementById("s6SketchWrap");
+  const noSketch   = document.getElementById("s6NoSketch");
+
+  if (!calls.length) {
+    sketchWrap.classList.add("hidden");
+    noSketch.classList.remove("hidden");
+    document.getElementById("s6AreaStats").textContent = "";
+    return;
+  }
+
+  sketchWrap.classList.remove("hidden");
+  noSketch.classList.add("hidden");
+
+  let x=0, y=0;
+  const pts = [[0,0]];
+  calls.forEach(c => {
+    const az = c.azimuth*Math.PI/180;
+    x += c.distance*Math.sin(az);
+    y += c.distance*Math.cos(az);
+    pts.push([+x.toFixed(4), +y.toFixed(4)]);
+  });
+
+  // Area (Shoelace) & Perimeter
+  let area=0, perim=0;
+  for (let i=0; i<pts.length-1; i++) {
+    area += pts[i][0]*pts[i+1][1] - pts[i+1][0]*pts[i][1];
+    perim += Math.hypot(pts[i+1][0]-pts[i][0], pts[i+1][1]-pts[i][1]);
+  }
+  const last = pts[pts.length-1];
+  area += last[0]*pts[0][1] - pts[0][0]*last[1];
+  area = Math.abs(area)/2;
+
+  document.getElementById("s6AreaStats").innerHTML =
+    `<span class="text-accent2 font-bold">${(area/43560).toFixed(4)} ac</span> &nbsp;&nbsp; ${area.toFixed(0)} sq ft &nbsp;&nbsp; Perim: ${perim.toFixed(1)} ft`;
+
+  // SVG
+  const svg = document.getElementById("s6SketchSvg");
+  const W = svg.clientWidth||420, H=300;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+
+  const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const pad=28, scaleX=(maxX===minX)?1:(W-pad*2)/(maxX-minX), scaleY=(maxY===minY)?1:(H-pad*2)/(maxY-minY);
+  const scale=Math.min(scaleX,scaleY);
+  const tx=p=>(p[0]-minX)*scale+pad, ty=p=>H-((p[1]-minY)*scale+pad);
+
+  const polyPts = pts.map(p=>`${tx(p).toFixed(1)},${ty(p).toFixed(1)}`).join(" ");
+  const isClosed = Math.hypot(last[0]-pts[0][0],last[1]-pts[0][1])<0.5;
+
+  let s = `<rect width="${W}" height="${H}" fill="rgba(0,0,0,0.1)" rx="4"/>`;
+  s += `<line x1="0" y1="${H/2}" x2="${W}" y2="${H/2}" stroke="#ffffff06" stroke-width="1"/>`;
+  s += `<line x1="${W/2}" y1="0" x2="${W/2}" y2="${H}" stroke="#ffffff06" stroke-width="1"/>`;
+  if (!isClosed) s += `<line x1="${tx(last).toFixed(1)}" y1="${ty(last).toFixed(1)}" x2="${tx(pts[0]).toFixed(1)}" y2="${ty(pts[0]).toFixed(1)}" stroke="#ff7b72" stroke-width="1.5" stroke-dasharray="4,3" opacity=".7"/>`;
+  s += `<polygon points="${polyPts}" fill="rgba(45,138,110,0.1)" stroke="#2d8a6e" stroke-width="2" stroke-linejoin="round"/>`;
+  s += `<circle cx="${tx(pts[0]).toFixed(1)}" cy="${ty(pts[0]).toFixed(1)}" r="5" fill="#2d8a6e" stroke="#56d3a0" stroke-width="1.5"/>`;
+  if (!isClosed) s += `<circle cx="${tx(last).toFixed(1)}" cy="${ty(last).toFixed(1)}" r="5" fill="#ff7b72" opacity=".8"/>`;
+  // North arrow
+  s += `<text x="${W-16}" y="22" font-size="11" fill="#79a8e0" font-family="monospace" text-anchor="middle">N</text>`;
+  s += `<line x1="${W-16}" y1="26" x2="${W-16}" y2="42" stroke="#79a8e0" stroke-width="1.5"/>`;
+  s += `<polygon points="${W-16},26 ${W-20},34 ${W-12},34" fill="#79a8e0"/>`;
+  svg.innerHTML = s;
+}
+// 
+// SETTINGS MODAL
+// 
+function showSettingsModal() {
+  document.getElementById("settingsOverlay").classList.remove("hidden");
+  loadDriveStatus(); // refresh drive status every time modal opens
+}
+function closeSettingsModal() {
+  document.getElementById("settingsOverlay").classList.add("hidden");
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────────
-function showView(view) {
-  document.getElementById("emptyState").classList.toggle("hidden",   view !== "empty");
-  document.getElementById("loadingState").classList.toggle("hidden", view !== "loading");
-  document.getElementById("resultsWrap").classList.toggle("hidden",  view !== "results");
+async function loadDriveStatus() {
+  const dot  = document.getElementById("driveStatusDot");
+  const text = document.getElementById("driveStatusText");
+  if (!dot || !text) return;
+  text.textContent = "Checking...";
+  dot.style.background = "var(--text3)";
+  try {
+    const res = await apiFetch("/drive-status");
+    updateDriveStatusUI(res);
+  } catch(e) {
+    text.textContent = "Cannot reach server";
+    dot.style.background = "var(--danger)";
+  }
+}
+
+function updateDriveStatusUI(res) {
+  const dot  = document.getElementById("driveStatusDot");
+  const text = document.getElementById("driveStatusText");
+  if (!dot || !text) return;
+  if (res.drive_ok) {
+    dot.style.background = "var(--success2)";
+    dot.style.boxShadow  = "0 0 6px var(--success2)";
+    text.innerHTML = `<span style="color:var(--accent2);font-weight:700">${res.drive}:\\</span> &nbsp; <span style="color:var(--text3);font-size:12px">${res.survey_path}</span>`;
+    document.getElementById("driveOverrideInput").value = res.drive || "";
+  } else {
+    dot.style.background = "var(--danger)";
+    dot.style.boxShadow  = "none";
+    text.innerHTML = `<span style="color:#ff7b72">Drive not found</span> <span style="color:var(--text3);font-size:12px"> — plug in the drive then click ⟳ Rescan</span>`;
+  }
+}
+
+async function rescanDrive() {
+  const btn  = document.getElementById("btnRescanDrive");
+  const text = document.getElementById("driveStatusText");
+  btn.disabled = true;
+  btn.textContent = "Scanning...";
+  text.textContent = "Scanning all drives...";
+  try {
+    const res = await apiFetch("/drive-status?rescan=1");
+    updateDriveStatusUI(res);
+    if (res.drive_ok) showToast(`Drive found: ${res.drive}:\\`, "success");
+    else showToast("Drive not found. Plug it in and try again.", "warn");
+  } catch(e) {
+    showToast("Scan error: " + e.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⟳ Rescan";
+  }
+}
+
+async function pinDrive(clear = false) {
+  const letter = clear ? "" : (document.getElementById("driveOverrideInput")?.value.trim() || "");
+  try {
+    const res = await apiFetch("/drive-override", "POST", { drive: letter });
+    if (res.success) {
+      await loadDriveStatus();
+      showToast(letter ? `Drive pinned to ${letter}:\\` : "Drive set to auto-detect", "success");
+    } else {
+      showToast("Override failed: " + res.error, "error");
+    }
+  } catch(e) {
+    showToast("Error: " + e.message, "error");
+  }
+}
+
+async function saveConfig() {
+  const url  = document.getElementById("cfgUrl").value.trim();
+  const user = document.getElementById("cfgUser").value.trim();
+  const pass = document.getElementById("cfgPass").value;
+  const status = document.getElementById("cfgStatus");
+
+  if (!user || !pass) { showToast("Enter username and password", "warn"); return; }
+
+  const btn = document.getElementById("btnSaveConfig");
+  btn.disabled = true;
+  btn.innerHTML = "Connecting...";
+  status.textContent = "";
+
+  try {
+    const res = await apiFetch("/config", "POST", {
+      firstnm_url: url, firstnm_user: user, firstnm_pass: pass
+    });
+    if (!res.success) { showToast("Config save failed: " + res.error, "error"); return; }
+
+    // Now login
+    const loginRes = await apiFetch("/login", "POST", { url, username: user, password: pass });
+    if (loginRes.success) {
+      state.loggedIn = true;
+      setStatusDot("online", "Connected");
+      showToast("Connected to records!", "success");
+      status.textContent = " Connected";
+      closeSettingsModal();
+    } else {
+      showToast("Login failed: " + loginRes.error, "error");
+      status.textContent = "Login failed: " + loginRes.error;
+    }
+  } catch(e) {
+    showToast("Connection error: " + e.message, "error");
+    status.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "Connect";
+  }
+}
+
+// 
+// LOGIN & CONNECTION
+// 
+async function checkLogin() {
+  try {
+    const url  = document.getElementById("cfgUrl").value.trim();
+    const user = document.getElementById("cfgUser").value.trim();
+    const pass = document.getElementById("cfgPass").value;
+    if (!user || !pass) {
+      setStatusDot("offline", "Click Settings to connect");
+      // Only auto-open modal on truly first run (no stored credentials)
+      showSettingsModal();
+      return;
+    }
+    setStatusDot("loading", "Connecting...");
+    const res = await apiFetch("/login", "POST", { url, username: user, password: pass });
+    if (res.success) {
+      state.loggedIn = true;
+      setStatusDot("online", "Connected");
+    } else {
+      setStatusDot("offline", "Login failed  check Settings");
+      // Don't auto-open modal; user can click Settings button
+      showToast("Login failed: " + (res.error || "Check username/password in Settings"), "warn");
+    }
+  } catch(e) {
+    setStatusDot("offline", "Offline");
+  }
 }
 
 function setStatusDot(mode, text) {
   const dot  = document.querySelector(".status-dot");
   const span = document.getElementById("statusText");
-  dot.className = `status-dot ${mode}`;
-  span.textContent = text;
+  if (dot)  dot.className = `status-dot ${mode}`;
+  if (span) span.textContent = text;
 }
 
+// 
+// GLOBAL PROGRESS FOOTER
+// 
+function updateGlobalProgress() {
+  const rs = state.researchSession;
+  if (!rs) return;
+
+  const all    = rs.subjects;
+  const deeds  = all.filter(s => s.deed_saved).length;
+  const plats  = all.filter(s => s.plat_saved).length;
+  const total  = all.length * 2; // each subject needs deed + plat
+  const done   = deeds + plats;
+  const pct    = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  document.getElementById("statDeeds").textContent = `${deeds}/${all.length}`;
+  document.getElementById("statPlats").textContent = `${plats}/${all.length}`;
+  document.getElementById("globalProgressFill").style.width = pct + "%";
+}
+
+// 
+// EXPORT
+// 
+async function exportSession() {
+  const rs = state.researchSession;
+  if (!rs) { showToast("No session loaded", "warn"); return; }
+  const headers = ["Job#","Name","Type","Deed","Plat","Status","Notes"];
+  const rows = rs.subjects.map(s => [
+    rs.job_number, s.name, s.type,
+    s.deed_saved?"Yes":"No", s.plat_saved?"Yes":"No",
+    s.status||"pending", (s.notes||"").replace(/"/g,'""')
+  ]);
+  const csv = [headers,...rows].map(r=>r.map(v=>`"${v}"`).join(",")).join("\n");
+  const blob = new Blob([csv],{type:"text/csv"});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href=url; a.download=`Job${rs.job_number}_Research.csv`; a.click();
+  URL.revokeObjectURL(url);
+  showToast("CSV exported", "success");
+}
+
+// 
+// UTILITIES
+// 
 function escHtml(str) {
   return String(str ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
-function toTitleCase(str) {
-  return str.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+function getTypeClass(type) {
+  const t = (type||"").toLowerCase();
+  if (t.includes("deed")||t.includes("warranty")||t.includes("quitclaim")) return "badge-deed";
+  if (t.includes("mortgage")||t.includes("assignment")) return "badge-online";
+  return "badge-other";
 }
 
-async function apiFetch(path, method = "GET", body = null) {
-  const opts = {
-    method,
-    headers: { "Content-Type": "application/json" },
-  };
+async function apiFetch(path, method="GET", body=null) {
+  const opts = { method, headers: {"Content-Type":"application/json"} };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(API + path, opts);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
-// ── toast notifications ────────────────────────────────────────────────────────
-let toastContainer;
-function showToast(msg, type = "info") {
-  if (!toastContainer) {
-    toastContainer = document.createElement("div");
-    toastContainer.style.cssText = "position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;max-width:340px";
-    document.body.appendChild(toastContainer);
+//  Toast 
+let _toastEl;
+function showToast(msg, type="info") {
+  if (!_toastEl) {
+    _toastEl = document.createElement("div");
+    _toastEl.style.cssText = "position:fixed;bottom:80px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;max-width:360px;pointer-events:none";
+    document.body.appendChild(_toastEl);
   }
-  const colors = {
-    success: ["#1a3028","#2d8a6e","#56d3a0"],
-    error:   ["#2d1015","#da3633","#ff7b72"],
-    warn:    ["#2a2108","#c9a227","#e3c55a"],
-    info:    ["#1c2340","#3b5e99","#79a8e0"],
-  };
-  const [bg, border, color] = colors[type] || colors.info;
-  const toast = document.createElement("div");
-  toast.style.cssText = `background:${bg};border:1px solid ${border};color:${color};padding:10px 14px;border-radius:8px;font-size:13px;font-weight:500;box-shadow:0 4px 20px rgba(0,0,0,.5);animation:toastIn .25s ease;max-width:340px;word-break:break-word`;
-  toast.textContent = msg;
-  toastContainer.appendChild(toast);
-  setTimeout(() => { toast.style.opacity = "0"; toast.style.transition = "opacity .3s"; setTimeout(() => toast.remove(), 300); }, 3500);
+  const c = { success:["#1a3028","#2d8a6e","#56d3a0"], error:["#2d1015","#da3633","#ff7b72"], warn:["#2a2108","#c9a227","#e3c55a"], info:["#1c2340","#3b5e99","#79a8e0"] };
+  const [bg,border,color] = c[type]||c.info;
+  const t = document.createElement("div");
+  t.style.cssText = `background:${bg};border:1px solid ${border};color:${color};padding:12px 16px;border-radius:10px;font-size:13px;font-weight:500;box-shadow:0 4px 24px rgba(0,0,0,.5);animation:toastIn .25s ease;pointer-events:auto`;
+  t.textContent = msg;
+  _toastEl.appendChild(t);
+  setTimeout(()=>{ t.style.opacity="0"; t.style.transition="opacity .3s"; setTimeout(()=>t.remove(),300); }, 3500);
 }
 
-const style = document.createElement("style");
-style.textContent = `@keyframes toastIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }`;
-document.head.appendChild(style);
-
+// Inject toast animation
+const _toastStyle = document.createElement("style");
+_toastStyle.textContent = `
+  @keyframes toastIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+  .badge-deed   { background:rgba(86,211,160,.15); color:#56d3a0; border:1px solid rgba(86,211,160,.3); }
+  .badge-other  { background:rgba(201,162,39,.15);  color:#c9a227; border:1px solid rgba(201,162,39,.3); }
+  .bg-green { background:rgba(45,138,110,.1); }
+  .bg-gold  { background:rgba(201,162,39,.1); }
+  .bg-red   { background:rgba(218,54,51,.1);  }
+  .text-gold { color:#e3c55a; }
+  .chip { display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px; }
+  .chip-done { background:rgba(45,138,110,.15);color:#56d3a0;border:1px solid rgba(45,138,110,.3); }
+  .chip-todo { background:rgba(0,0,0,.2);color:var(--text3);border:1px solid var(--border); }
+  .btn-icon-sm { background:none;border:none;cursor:pointer;font-size:13px;padding:0 4px; }
+  .exc-chip { display:inline-flex;align-items:center;font-size:9px;font-weight:700;padding:2px 6px;border-radius:6px;cursor:pointer;transition:all .15s;border:1px solid transparent; }
+  .exc-off   { background:var(--bg);color:var(--text3);border-color:var(--border); }
+  .exc-active { background:rgba(201,162,39,.15);color:#c9a227;border-color:rgba(201,162,39,.3); }
+  .chain-box { background:rgba(0,0,0,.2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px; }
+  .chain-years { display:flex;gap:4px;flex-wrap:wrap;margin-top:5px; }
+  .year-chip { background:rgba(45,138,110,.15);color:var(--accent2);border:1px solid var(--accent);border-radius:4px;font-size:10px;padding:1px 6px;font-family:monospace;cursor:pointer; }
+  .link-btn { background:none;border:none;cursor:pointer;color:var(--text3);font-size:10px;padding:0;font-family:inherit; }
+  .parcel-client-card,.parcel-card { background:rgba(0,0,0,.2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px; }
+  .parcel-client-card { border-left:3px solid var(--accent); }
+  .parcel-card  { border-left:3px solid #7a4f9a; }
+  .status-dot.loading { background:var(--gold);animation:pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .spinner { border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;width:18px;height:18px;animation:spin .8s linear infinite;display:inline-block; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+  .font-bold { font-weight:700; }
+  .highlight  { color:var(--accent2) !important; }
+`;
+document.head.appendChild(_toastStyle);

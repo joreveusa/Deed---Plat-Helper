@@ -1,4 +1,12 @@
 {
   "username": "redtail",
-  "password": "301Awing"
+  "password": "301Awing",
+  "firstnm_user": "redtail",
+  "firstnm_pass": "301Awing",
+  "firstnm_url": "",
+  "last_session": {
+    "job_number": 3001,
+    "client_name": "garza, veronica",
+    "job_type": "BDY"
+  }
 }

@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# App data / generated
+*.ocr.json
+config.json
+
+# Survey data (never commit actual client data)
+Survey Data/
+
+# OS / editor
+.vscode/settings.json
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
