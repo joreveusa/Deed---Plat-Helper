@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 const API = "/api";  // Use relative URL to avoid CORS issues
 
 
@@ -36,10 +36,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         state.nextJobNum = r.next_job_number;
         document.getElementById("setupJobNum").placeholder = "Auto: " + r.next_job_number;
       }
-    }).catch(() => {});
+    }).catch(() => { });
   }
 
   updateStepUI();
+
+  // ── Keyboard Shortcuts ──────────────────────────────────────────────────
+  document.addEventListener('keydown', _handleGlobalKeyboard);
 });
 
 async function loadConfig() {
@@ -48,7 +51,7 @@ async function loadConfig() {
     if (res.success) {
       if (res.config.firstnm_user) document.getElementById("cfgUser").value = res.config.firstnm_user;
       if (res.config.firstnm_pass) document.getElementById("cfgPass").value = res.config.firstnm_pass;
-      if (res.config.firstnm_url)  document.getElementById("cfgUrl").value  = res.config.firstnm_url;
+      if (res.config.firstnm_url) document.getElementById("cfgUrl").value = res.config.firstnm_url;
       state.lastSession = res.config.last_session;
     }
   } catch (e) {
@@ -74,7 +77,7 @@ function updateStepUI() {
     const s = parseInt(btn.dataset.step);
     btn.classList.toggle("active", s === state.currentStep);
     btn.classList.toggle("completed", s < state.currentStep);
-    
+
     // Unlock logic
     if (state.researchSession) {
       btn.disabled = false;
@@ -149,6 +152,7 @@ function updateJobContext() {
   document.getElementById("ctxJobNum").textContent = state.researchSession.job_number;
   document.getElementById("ctxClient").textContent = state.researchSession.client_name;
   document.getElementById("ctxType").textContent = state.researchSession.job_type;
+  updateFileBadges();
 }
 
 // 
@@ -161,7 +165,7 @@ async function startSession() {
   const type = document.getElementById("setupJobType").value;
 
   if (!client) { showToast("Client name is required", "error"); return; }
-  if (!num)    { showToast("Job number is required", "error"); return; }
+  if (!num) { showToast("Job number is required", "error"); return; }
 
   const btn = document.getElementById("btnStartSession");
   btn.disabled = true;
@@ -174,32 +178,32 @@ async function startSession() {
 
       // Clear any stale deed/plat state from a previous session so Step 3
       // doesn't use the prior client's deed detail when searching for this client.
-      state.selectedDoc    = null;
+      state.selectedDoc = null;
       state.selectedDetail = null;
-      state._kmlHits       = null;
-      state._cabinetHits   = null;
+      state._kmlHits = null;
+      state._cabinetHits = null;
       // Reset per-session automation flags
-      state._step2Searched    = false;
-      state._adjDiscoveryRan  = false;
+      state._step2Searched = false;
+      state._adjDiscoveryRan = false;
 
       // If the user selected a property from the KML map in Step 1, pre-seed
       // the client_upc in the session. Steps 3 & 4 will use it for parcel matching.
       if (_propPicker.confirmedParcel) {
-        state.researchSession.client_upc      = _propPicker.confirmedParcel.upc || '';
-        state.researchSession.client_parcel   = _propPicker.confirmedParcel;
+        state.researchSession.client_upc = _propPicker.confirmedParcel.upc || '';
+        state.researchSession.client_parcel = _propPicker.confirmedParcel;
         // Pre-seed _kmlHits so Step 3 KML search already has the client's parcel
         state._kmlHits = [{
-          owner:        _propPicker.confirmedParcel.owner || client,
-          upc:          _propPicker.confirmedParcel.upc   || '',
-          plat:         _propPicker.confirmedParcel.plat  || '',
-          book:         _propPicker.confirmedParcel.book  || '',
-          page:         _propPicker.confirmedParcel.page  || '',
-          cab_refs:     _propPicker.confirmedParcel.cab_refs || [],
+          owner: _propPicker.confirmedParcel.owner || client,
+          upc: _propPicker.confirmedParcel.upc || '',
+          plat: _propPicker.confirmedParcel.plat || '',
+          book: _propPicker.confirmedParcel.book || '',
+          page: _propPicker.confirmedParcel.page || '',
+          cab_refs: _propPicker.confirmedParcel.cab_refs || [],
           cab_refs_str: (_propPicker.confirmedParcel.cab_refs || []).join(', '),
-          centroid:     _propPicker.confirmedParcel.centroid,
+          centroid: _propPicker.confirmedParcel.centroid,
           match_reason: 'Selected from KML Map Picker',
-          source:       'kml',
-          local_files:  [],
+          source: 'kml',
+          local_files: [],
         }];
       }
 
@@ -217,11 +221,11 @@ async function startSession() {
 
       updateJobContext();
       showToast(`Session loaded for Job #${num}`, "success");
-      
+
       // Save last session
       apiFetch("/config", "POST", {
         last_session: { job_number: num, client_name: client, job_type: type }
-      }).catch(()=>{});
+      }).catch(() => { });
 
       // Move to Step 2
       goToStep(2);
@@ -244,12 +248,31 @@ async function loadRecentJobs() {
       container.innerHTML = `<div class="empty-state">No recent jobs found.</div>`;
       return;
     }
-    container.innerHTML = res.jobs.map(j => `
-      <div class="recent-job-row" onclick="quickLoadJob(${j.job_number}, '${escHtml(j.client_name).replace(/'/g,"\\'")}','${j.job_type}')">
+
+    let html = '';
+
+    // Quick-resume banner for the last session
+    if (state.lastSession && state.lastSession.job_number) {
+      const ls = state.lastSession;
+      html += `
+        <div class="resume-banner" onclick="quickLoadJob(${ls.job_number}, '${escHtml(ls.client_name).replace(/'/g, "\\'")}','${ls.job_type}')">
+          <div class="resume-banner-icon">⚡</div>
+          <div class="resume-banner-info">
+            <div class="resume-banner-title">Resume Last Session</div>
+            <div class="resume-banner-meta">Job #${ls.job_number} — ${escHtml(ls.client_name)} <span class="resume-banner-type">${ls.job_type}</span></div>
+          </div>
+          <div class="resume-banner-arrow">→</div>
+        </div>`;
+    }
+
+    html += res.jobs.map(j => `
+      <div class="recent-job-row" onclick="quickLoadJob(${j.job_number}, '${escHtml(j.client_name).replace(/'/g, "\\'")}','${j.job_type}')">
         <div><strong class="text-accent2">#${j.job_number}</strong> &nbsp; ${escHtml(j.client_name)}</div>
         <div class="job-type">${j.job_type}</div>
       </div>
     `).join("");
+
+    container.innerHTML = html;
   } catch (e) {
     container.innerHTML = `<div class="text-danger">Failed to load recent jobs.</div>`;
   }
@@ -263,15 +286,58 @@ function quickLoadJob(num, client, type) {
 }
 
 async function persistSession() {
-  if (!state.researchSession) return;
+  if (!state.researchSession) return false;
   const { job_number, client_name, job_type } = state.researchSession;
   try {
+    // Deep-clone the session, stripping any non-serializable data
+    // (Leaflet layer refs, DOM elements, circular structures) that would
+    // cause JSON.stringify to throw and silently kill the persist.
+    const safeSession = _safeCloneSession(state.researchSession);
     await apiFetch("/research-session", "POST", {
       job_number, client_name, job_type,
-      session: state.researchSession
+      session: safeSession
     });
     updateGlobalProgress();
-  } catch (e) { console.error("Session persist failed", e); }
+    updateFileBadges();
+    return true;
+  } catch (e) {
+    console.error("Session persist failed", e);
+    showToast("⚠ Session save failed — check console", "error");
+    return false;
+  }
+}
+
+/**
+ * Create a JSON-safe deep clone of the research session.
+ * Strips any keys whose values are non-serializable (functions,
+ * DOM elements, Leaflet layers, circular references).
+ */
+function _safeCloneSession(session) {
+  try {
+    return JSON.parse(JSON.stringify(session));
+  } catch (_) {
+    // Fallback: manually pick only the known-safe keys
+    const safe = {
+      job_number: session.job_number,
+      client_name: session.client_name,
+      job_type: session.job_type,
+      subjects: (session.subjects || []).map(s => ({
+        id: s.id,
+        type: s.type,
+        name: s.name,
+        deed_saved: !!s.deed_saved,
+        plat_saved: !!s.plat_saved,
+        status: s.status || 'pending',
+        notes: s.notes || '',
+        deed_path: s.deed_path || '',
+        plat_path: s.plat_path || '',
+      })),
+      client_upc: session.client_upc || '',
+      progress: session.progress || {},
+    };
+    console.warn('[persistSession] Used fallback safe clone — session had non-serializable data');
+    return safe;
+  }
 }
 // 
 // STEP 2: CLIENT DEED
@@ -311,10 +377,10 @@ async function doStep2Search() {
     tbody.innerHTML = res.results.map((r, i) => `
       <tr class="row-${getTypeClass(r.instrument_type)}" onclick="loadS2Detail('${r.doc_no}', ${i}, this)">
         <td class="mono font-bold text-accent2">${r.doc_no || ''}</td>
-        <td title="${escHtml(r.grantor||'')}">${escHtml((r.grantor||'').split(",")[0] || r.grantor||'')}</td>
-        <td><span class="badge ${getTypeClass(r.instrument_type)}">${r.instrument_type||'Deed'}</span></td>
-        <td class="text-xs text-text3">${escHtml(r.location||'')}</td>
-        <td class="text-xs text-text3">${(r.recorded_date||r.instrument_date||'').split("-")[0] || r.date||''}</td>
+        <td title="${escHtml(r.grantor || '')}">${escHtml((r.grantor || '').split(",")[0] || r.grantor || '')}</td>
+        <td><span class="badge ${getTypeClass(r.instrument_type)}">${r.instrument_type || 'Deed'}</span></td>
+        <td class="text-xs text-text3">${escHtml(r.location || '')}</td>
+        <td class="text-xs text-text3">${(r.recorded_date || r.instrument_date || '').split("-")[0] || r.date || ''}</td>
       </tr>
     `).join("");
 
@@ -357,6 +423,7 @@ async function loadS2Detail(docNo, idx, trEl) {
     }
 
     state.selectedDetail = res.detail;
+    state._analysisLoaded = false; // reset so analysis tab re-fetches for new deed
 
     const d = res.detail;
     const extracted = extractDeedData(d, docNo, state.selectedDoc);
@@ -382,10 +449,12 @@ async function loadS2Detail(docNo, idx, trEl) {
         <button class="deed-viewer-tab active" onclick="switchDeedTab('summary')" id="dtab-summary">&#128203; Summary</button>
         <button class="deed-viewer-tab" onclick="switchDeedTab('fields')" id="dtab-fields">&#128194; All Fields</button>
         ${pdfUrl ? `<button class="deed-viewer-tab" onclick="switchDeedTab('pdf')" id="dtab-pdf">&#128196; PDF</button>` : ''}
+        <button class="deed-viewer-tab" onclick="switchDeedTab('analysis')" id="dtab-analysis">&#128269; Analysis</button>
       </div>
 
       <div class="deed-viewer-body" id="deedTabSummary">
         <div id="deedPlatHintArea"></div>
+        <div id="deedPropertyDescArea"></div>
         ${buildDeedSummaryTab(extracted, d)}
       </div>
 
@@ -402,14 +471,28 @@ async function loadS2Detail(docNo, idx, trEl) {
         <iframe src="${escHtml(pdfUrl)}" class="pdf-preview-frame" title="Deed PDF"></iframe>
       </div>` : ''}
 
+      <div class="deed-viewer-body hidden" id="deedTabAnalysis" style="padding:0;overflow-y:auto">
+        <div class="loading-state flex-col gap-2" id="analysisLoading">
+          <div class="spinner"></div>
+          Analyzing deed health...
+        </div>
+      </div>
+
       <div class="detail-actions">
         <button class="btn btn-primary flex-1" id="btnS2Save" onclick="saveClientDeed('${docNo}')">
           &#11015; Save Client Deed &rarr;</button>
+        <button class="btn btn-outline" onclick="extractPropertyDescription('${docNo}', '')" title="Extract property description from deed PDF">
+          📜 Get Description</button>
+        <button class="btn btn-outline" onclick="runChainOfTitle()" title="Trace deed ownership backward">
+          &#128279; Chain Back</button>
       </div>
     `;
 
     // Async: extract plat hints from deed in background — don't block UI
     extractPlatHintsFromDeed(res.detail);
+
+    // Auto-extract property description from the online PDF
+    extractPropertyDescription(docNo, '');
 
   } catch (e) {
     container.innerHTML = `<div class="empty-state text-danger">Error: ${e.message}</div>`;
@@ -464,7 +547,7 @@ async function extractPlatHintsFromDeed(detail) {
       cabRefs,
       bookPageMatches: [...new Set(bookPageMatches)],
       platNameMatches: [...new Set(platNameMatches)],
-      surveyorRefs:    [...new Set(surveyorRefs)],
+      surveyorRefs: [...new Set(surveyorRefs)],
       priorOwners,
     };
 
@@ -483,9 +566,9 @@ async function extractPlatHintsFromDeed(detail) {
       rows.push(`<div class="plat-hint-row">
         <span class="plat-hint-label">&#128230; Cabinet Refs</span>
         <span class="plat-hint-values">${cabRefs.map(r =>
-          `<span class="badge badge-local" style="cursor:pointer" onclick="jumpToPlat('${r.cabinet}','${r.doc}')" title="Search Cabinet ${r.cabinet} for ${r.doc}">`+
-          `${escHtml('C-'+r.cabinet+'-'+r.doc)} <span style="opacity:.6;font-size:9px">▶ Plat</span></span>`
-        ).join(' ')}</span>
+        `<span class="badge badge-local" style="cursor:pointer" onclick="jumpToPlat('${r.cabinet}','${r.doc}')" title="Search Cabinet ${r.cabinet} for ${r.doc}">` +
+        `${escHtml('C-' + r.cabinet + '-' + r.doc)} <span style="opacity:.6;font-size:9px">▶ Plat</span></span>`
+      ).join(' ')}</span>
       </div>`);
     }
 
@@ -493,8 +576,8 @@ async function extractPlatHintsFromDeed(detail) {
       rows.push(`<div class="plat-hint-row">
         <span class="plat-hint-label">&#128213; Book / Page</span>
         <span class="plat-hint-values">${bookPageMatches.map(b =>
-          `<span class="badge badge-online">${escHtml(b)}</span>`
-        ).join(' ')}</span>
+        `<span class="badge badge-online">${escHtml(b)}</span>`
+      ).join(' ')}</span>
       </div>`);
     }
 
@@ -502,8 +585,8 @@ async function extractPlatHintsFromDeed(detail) {
       rows.push(`<div class="plat-hint-row">
         <span class="plat-hint-label">&#128196; Plat Name</span>
         <span class="plat-hint-values">${platNameMatches.map(p =>
-          `<span class="badge" style="background:rgba(121,168,224,.15);color:#79a8e0">${escHtml(p)}</span>`
-        ).join(' ')}</span>
+        `<span class="badge" style="background:rgba(121,168,224,.15);color:#79a8e0">${escHtml(p)}</span>`
+      ).join(' ')}</span>
       </div>`);
     }
 
@@ -511,8 +594,8 @@ async function extractPlatHintsFromDeed(detail) {
       rows.push(`<div class="plat-hint-row">
         <span class="plat-hint-label">&#9998; Surveyor</span>
         <span class="plat-hint-values">${surveyorRefs.map(s =>
-          `<span class="badge" style="background:rgba(108,71,255,.15);color:#a78bfa">${escHtml(s)}</span>`
-        ).join(' ')}</span>
+        `<span class="badge" style="background:rgba(108,71,255,.15);color:#a78bfa">${escHtml(s)}</span>`
+      ).join(' ')}</span>
       </div>`);
     }
 
@@ -520,11 +603,11 @@ async function extractPlatHintsFromDeed(detail) {
       rows.push(`<div class="plat-hint-row">
         <span class="plat-hint-label">&#128100; Prior Owners</span>
         <span class="plat-hint-values">${priorOwners.map(n =>
-          `<span class="badge" style="background:rgba(227,197,90,.12);color:#e3c55a;cursor:pointer"
-            onclick="jumpToPlatByOwner('${escHtml(n).replace(/'/g,'&#39;')}')"
+        `<span class="badge" style="background:rgba(227,197,90,.12);color:#e3c55a;cursor:pointer"
+            onclick="jumpToPlatByOwner('${escHtml(n).replace(/'/g, '&#39;')}')"
             title="Search plat under prior owner: ${escHtml(n)}">` +
-          `${escHtml(n.split(',')[0])} <span style="opacity:.5;font-size:9px">▶ Search</span></span>`
-        ).join(' ')}</span>
+        `${escHtml(n.split(',')[0])} <span style="opacity:.5;font-size:9px">▶ Search</span></span>`
+      ).join(' ')}</span>
       </div>`);
     }
 
@@ -539,7 +622,7 @@ async function extractPlatHintsFromDeed(detail) {
         ${rows.join('')}
       </div>`;
 
-  } catch(e) {
+  } catch (e) {
     // Non-fatal — just don't show the hint
     console.warn('extractPlatHintsFromDeed failed:', e.message);
   }
@@ -551,7 +634,7 @@ async function extractPlatHintsFromDeed(detail) {
  */
 async function saveClientDeedAndGoToPlat() {
   const detail = state.selectedDetail;
-  const docNo  = detail?.doc_no || state.selectedDoc?.doc_no;
+  const docNo = detail?.doc_no || state.selectedDoc?.doc_no;
   if (!docNo) { showToast('No deed selected', 'warn'); return; }
   await saveClientDeed(docNo);
   // saveClientDeed already calls goToStep(3) after 800ms — we're done
@@ -581,10 +664,10 @@ function jumpToPlatByOwner(ownerName) {
 
 function extractDeedData(d, docNo, searchRow) {
   const docNumbers = [{ label: 'Doc #', value: docNo, type: 'docnum' }];
-  ['Document Number','Document No','Instrument Number','Instrument No'].forEach(k => {
+  ['Document Number', 'Document No', 'Instrument Number', 'Instrument No'].forEach(k => {
     if (d[k] && d[k] !== docNo) docNumbers.push({ label: k, value: d[k], type: 'docnum' });
   });
-  ['GF Number','GF#','GF No','File Number'].forEach(k => {
+  ['GF Number', 'GF#', 'GF No', 'File Number'].forEach(k => {
     if (d[k]) docNumbers.push({ label: k, value: d[k], type: 'docnum' });
   });
   if (searchRow?.doc_no && searchRow.document_no && searchRow.document_no !== docNo)
@@ -592,7 +675,7 @@ function extractDeedData(d, docNo, searchRow) {
   if (searchRow?.gf_number) docNumbers.push({ label: 'GF#', value: searchRow.gf_number, type: 'docnum' });
 
   const locationSources = [];
-  ['Location','Book/Page','Recorded Book','Reception No'].forEach(k => {
+  ['Location', 'Book/Page', 'Recorded Book', 'Reception No'].forEach(k => {
     if (d[k]) locationSources.push({ label: k, value: d[k], type: 'location' });
   });
   if (searchRow?.location && !locationSources.find(l => l.value === searchRow.location))
@@ -618,17 +701,17 @@ function extractDeedData(d, docNo, searchRow) {
     dateSeen.add(val);
     dates.push({ label, value: val, type: 'date' });
   };
-  ['Recorded Date','Record Date','Instrument Date','Filed Date'].forEach(k => addDate(k, d[k]));
+  ['Recorded Date', 'Record Date', 'Instrument Date', 'Filed Date'].forEach(k => addDate(k, d[k]));
   if (searchRow) { addDate('Recorded', searchRow.recorded_date); addDate('Instrument', searchRow.instrument_date); }
 
   const trsRefs = (d._trs || []).map(t => ({ label: 'TRS', value: t.trs, type: 'trs' }));
 
   const money = [];
-  ['Consideration','Amount','Sale Price','Value'].forEach(k => {
+  ['Consideration', 'Amount', 'Sale Price', 'Value'].forEach(k => {
     if (d[k] && d[k] !== '$0' && d[k] !== '0') money.push({ label: k, value: d[k], type: 'money' });
   });
 
-  const legalKeys = ['Legal Description','Other Legal','Other_Legal','Subdivision Legal','Subdivision_Legal','Legal','Section','Comments','Remarks'];
+  const legalKeys = ['Legal Description', 'Other Legal', 'Other_Legal', 'Subdivision Legal', 'Subdivision_Legal', 'Legal', 'Section', 'Comments', 'Remarks'];
   const legalText = legalKeys.map(k => d[k]).filter(Boolean).join('\n\n');
 
   const instrumentType = searchRow?.instrument_type || d['Document Type'] || d['Type'] || d['Instrument Type'] || 'Deed';
@@ -685,16 +768,16 @@ function buildDeedSummaryTab(ex, d) {
 }
 
 function buildDeedAllFieldsTab(d) {
-  const skip = ['doc_no','_trs','pdf_url'];
+  const skip = ['doc_no', '_trs', 'pdf_url'];
   let html = `<div class="detail-grid">`;
-  Object.entries(d).forEach(([k,v]) => {
+  Object.entries(d).forEach(([k, v]) => {
     if (skip.includes(k) || !v) return;
     const isLoc = k === 'Location';
     html += `<div class="detail-label">${escHtml(k)}</div>
       <div class="detail-val" style="${isLoc ? 'color:var(--accent2);font-family:monospace' : ''}">${escHtml(String(v))}</div>`;
   });
   if (d._trs && d._trs.length) html += `<div class="detail-label">TRS Refs</div>
-    <div class="detail-val" style="color:#79a8e0;font-family:monospace">${d._trs.map(t=>escHtml(t.trs)).join(' | ')}</div>`;
+    <div class="detail-val" style="color:#79a8e0;font-family:monospace">${d._trs.map(t => escHtml(t.trs)).join(' | ')}</div>`;
   html += `</div>`;
   return html;
 }
@@ -703,13 +786,18 @@ function switchDeedTab(name) {
   document.querySelectorAll('.deed-viewer-tab').forEach(b => b.classList.remove('active'));
   const btn = document.getElementById('dtab-' + name);
   if (btn) btn.classList.add('active');
-  const map = { summary:'deedTabSummary', fields:'deedTabFields', pdf:'deedTabPdf' };
-  Object.entries(map).forEach(([n,id]) => {
+  const map = { summary: 'deedTabSummary', fields: 'deedTabFields', pdf: 'deedTabPdf', analysis: 'deedTabAnalysis' };
+  Object.entries(map).forEach(([n, id]) => {
     const el = document.getElementById(id);
     if (!el) return;
-    if (n === name) { el.classList.remove('hidden'); if(n==='pdf') el.style.display='flex'; }
-    else { el.classList.add('hidden'); if(n==='pdf') el.style.display=''; }
+    if (n === name) { el.classList.remove('hidden'); if (n === 'pdf') el.style.display = 'flex'; }
+    else { el.classList.add('hidden'); if (n === 'pdf') el.style.display = ''; }
   });
+  // Lazy-load analysis on first open
+  if (name === 'analysis' && !state._analysisLoaded) {
+    state._analysisLoaded = true;
+    runDeedAnalysis();
+  }
 }
 
 async function saveClientDeed(docNo) {
@@ -724,16 +812,16 @@ async function saveClientDeed(docNo) {
 
   try {
     const res = await apiFetch("/download", "POST", {
-      doc_no:         docNo,
-      grantor:        state.selectedDetail["Grantor"] || "",
-      grantee:        state.selectedDetail["Grantee"] || "",
-      location:       state.selectedDetail["Location"] || "",
-      job_number:     rs.job_number,
-      client_name:    rs.client_name,
-      job_type:       rs.job_type,
+      doc_no: docNo,
+      grantor: state.selectedDetail["Grantor"] || "",
+      grantee: state.selectedDetail["Grantee"] || "",
+      location: state.selectedDetail["Location"] || "",
+      job_number: rs.job_number,
+      client_name: rs.client_name,
+      job_type: rs.job_type,
       create_project: true,
-      is_adjoiner:    false,
-      subject_id:     clientSubj.id,
+      is_adjoiner: false,
+      subject_id: clientSubj.id,
     });
 
     if (res.success) {
@@ -745,9 +833,13 @@ async function saveClientDeed(docNo) {
       // Auto-open if configured
       if (!res.skipped && res.saved_to && document.getElementById("optAutoOpen")?.checked) {
         setTimeout(() => {
-          apiFetch("/open-file", "POST", { path: res.saved_to }).catch(()=>{});
+          apiFetch("/open-file", "POST", { path: res.saved_to }).catch(() => { });
         }, 500);
       }
+
+      // ── Extract property description from the saved deed PDF ──
+      extractPropertyDescription(docNo, res.saved_to);
+
       // Automatically move to Step 3
       setTimeout(() => goToStep(3), 800);
     } else {
@@ -761,12 +853,568 @@ async function saveClientDeed(docNo) {
   }
 }
 
+// ── PROPERTY DESCRIPTION EXTRACTION ─────────────────────────────────────────
+
+/**
+ * Extract the full property description from the deed PDF.
+ * Called automatically after saving the client deed, or manually from the UI.
+ * Fires in the background — doesn't block the UI.
+ *
+ * @param {string} docNo   - The document number
+ * @param {string} pdfPath - Path to the saved PDF (optional — falls back to online download)
+ */
+async function extractPropertyDescription(docNo, pdfPath) {
+  const descArea = document.getElementById('deedPropertyDescArea');
+
+  // Show loading indicator in the deed panel if visible
+  if (descArea) {
+    descArea.innerHTML = `
+      <div class="prop-desc-card prop-desc-loading">
+        <div class="spinner" style="width:16px;height:16px"></div>
+        <span>Extracting property description from deed PDF…</span>
+      </div>`;
+  }
+
+  try {
+    const res = await apiFetch('/extract-deed-description', 'POST', {
+      pdf_path: pdfPath || '',
+      detail: state.selectedDetail || {},
+      doc_no: docNo || '',
+    });
+
+    if (!res.success) {
+      console.warn('[desc] Extraction failed:', res.error);
+      if (descArea) {
+        descArea.innerHTML = `<div class="prop-desc-card prop-desc-error">
+          <span>⚠ Could not extract property description: ${escHtml(res.error)}</span>
+        </div>`;
+      }
+      return;
+    }
+
+    const desc = res.description;
+    state._propertyDescription = desc;
+
+    // Save to session for downstream use
+    const rs = state.researchSession;
+    if (rs) {
+      const clientSubj = rs.subjects.find(s => s.type === 'client');
+      if (clientSubj) {
+        clientSubj.property_description = desc.legal_description || desc.full_text;
+        clientSubj.desc_type = desc.desc_type;
+        clientSubj.trs_refs = desc.trs_refs;
+        clientSubj.area_acres = desc.area_acres;
+        clientSubj.calls_count = desc.calls_count;
+        persistSession(); // fire-and-forget
+      }
+    }
+
+    // Render the property description card
+    renderPropertyDescriptionCard(desc);
+
+    // Show a success toast
+    const descTypeLabels = {
+      metes_and_bounds: 'Metes & Bounds',
+      lot_block: 'Lot/Block',
+      tract: 'Tract',
+      trs_only: 'TRS Only',
+      unknown: 'General',
+    };
+    showToast(`📜 Property description acquired — ${descTypeLabels[desc.desc_type] || desc.desc_type}`, 'success');
+
+  } catch (e) {
+    console.warn('[desc] Extraction error:', e.message);
+    if (descArea) {
+      descArea.innerHTML = `<div class="prop-desc-card prop-desc-error">
+        <span>⚠ Error extracting description: ${escHtml(e.message)}</span>
+      </div>`;
+    }
+  }
+}
+
+/**
+ * Render the property description card in the deed summary panel.
+ */
+function renderPropertyDescriptionCard(desc) {
+  const descArea = document.getElementById('deedPropertyDescArea');
+  if (!descArea) return;
+
+  const descTypeLabels = {
+    metes_and_bounds: 'Metes & Bounds',
+    lot_block: 'Lot / Block',
+    tract: 'Tract Reference',
+    trs_only: 'TRS Only',
+    unknown: 'General',
+  };
+  const descTypeIcons = {
+    metes_and_bounds: '🧭',
+    lot_block: '🏘️',
+    tract: '📋',
+    trs_only: '📍',
+    unknown: '📄',
+  };
+  const sourceLabels = { text: 'PDF text layer', ocr: 'OCR scan', none: 'metadata only', paste: 'Manual paste' };
+
+  const typeLabel = descTypeLabels[desc.desc_type] || desc.desc_type;
+  const typeIcon = descTypeIcons[desc.desc_type] || '📄';
+  const sourceLabel = sourceLabels[desc.source] || desc.source;
+
+  let html = `<div class="prop-desc-card">`;
+
+  // Header
+  html += `<div class="prop-desc-header">
+    <div class="prop-desc-title">
+      <span class="prop-desc-icon">${typeIcon}</span>
+      <span>Property Description</span>
+      <span class="prop-desc-type-badge">${typeLabel}</span>
+    </div>
+    <div class="prop-desc-source">Source: ${sourceLabel}</div>
+  </div>`;
+
+  // Quick stats bar
+  const stats = [];
+  if (desc.calls_count) stats.push(`<span class="pds-stat"><span class="pds-icon">🧭</span>${desc.calls_count} calls</span>`);
+  if (desc.area_acres) stats.push(`<span class="pds-stat"><span class="pds-icon">📐</span>${desc.area_acres} ac</span>`);
+  if (desc.perimeter_ft) stats.push(`<span class="pds-stat"><span class="pds-icon">📏</span>${desc.perimeter_ft.toLocaleString()} ft</span>`);
+  if (desc.pob_found) stats.push(`<span class="pds-stat pds-ok"><span class="pds-icon">✅</span>POB</span>`);
+  if (desc.monuments?.length) stats.push(`<span class="pds-stat"><span class="pds-icon">📍</span>${desc.monuments.join(', ')}</span>`);
+  if (desc.trs_refs?.length) stats.push(`<span class="pds-stat"><span class="pds-icon">🗺️</span>${desc.trs_refs.join(' · ')}</span>`);
+
+  if (stats.length) {
+    html += `<div class="prop-desc-stats">${stats.join('')}</div>`;
+  }
+
+  // Legal description text
+  const legalText = desc.legal_description || desc.full_text || '';
+  if (legalText) {
+    // Highlight bearing calls in the text
+    let displayText = escHtml(legalText);
+    // Highlight bearing patterns
+    displayText = displayText.replace(
+      /([NS]\s*\d{1,3}[°\s]\d{0,2}[\'\s]\d{0,2}[\"\s]*[EW])/gi,
+      '<span class="bearing-highlight">$1</span>'
+    );
+    // Highlight distances
+    displayText = displayText.replace(
+      /(\d+\.?\d*)\s*(?:feet|foot|ft|&#39;)/gi,
+      '<span class="distance-highlight">$1 ft</span>'
+    );
+
+    html += `<div class="prop-desc-text-wrap">
+      <div class="prop-desc-text" id="propDescText">${displayText}</div>
+      <button class="btn btn-outline btn-sm prop-desc-toggle" onclick="togglePropDescExpand()" id="propDescToggleBtn">
+        Show Full Text ▾
+      </button>
+    </div>`;
+  } else {
+    html += `<div class="prop-desc-empty">
+      <div style="margin-bottom:8px">⚠ This PDF is a scanned image — no selectable text could be extracted automatically.</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:10px">
+        <strong>Paste the deed text below</strong> (copy from your PDF viewer) and click "Extract" to parse the legal description, bearings, and property data.
+      </div>
+      <textarea id="manualDeedDescInput" class="inp" rows="6" style="font-size:12px;font-family:'JetBrains Mono',monospace;width:100%;resize:vertical"
+        placeholder="Paste the full deed text here (including BEGINNING, thence, bearings, distances, etc.)..."></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-primary btn-sm flex-1" onclick="submitManualDeedDescription()">📜 Extract from Pasted Text</button>
+      </div>
+    </div>`;
+  }
+
+  // Adjoiners found
+  if (desc.adjoiners?.length) {
+    html += `<div class="prop-desc-adjoiners">
+      <div class="prop-desc-adj-label">👥 Adjoiners Referenced:</div>
+      <div class="prop-desc-adj-list">${desc.adjoiners.map(a =>
+      `<span class="prop-desc-adj-chip">${escHtml(a)}</span>`
+    ).join('')}</div>
+    </div>`;
+  }
+
+  // Cabinet refs
+  if (desc.cab_refs?.length) {
+    html += `<div class="prop-desc-cab-refs">
+      <div class="prop-desc-adj-label">🗄️ Cabinet References:</div>
+      <div class="prop-desc-adj-list">${desc.cab_refs.map(r =>
+      `<span class="prop-desc-cab-chip" onclick="jumpToPlat('${r.cabinet}','${r.doc}')" title="Search Cabinet ${r.cabinet}">
+          C-${escHtml(r.cabinet)}-${escHtml(r.doc)} ▶
+        </span>`
+    ).join('')}</div>
+    </div>`;
+  }
+
+  // Calls table (collapsed by default)
+  if (desc.calls?.length) {
+    html += `<div class="prop-desc-calls-section">
+      <button class="prop-desc-calls-toggle" onclick="togglePropDescCalls()">
+        🧭 ${desc.calls.length} Bearing/Distance Calls
+        <span id="propDescCallsChevron" class="cat-chevron">▸</span>
+      </button>
+      <div class="prop-desc-calls-table hidden" id="propDescCallsTable">
+        <table class="data-table calls-table" style="font-size:11px">
+          <thead><tr><th>#</th><th>Bearing</th><th>Distance</th></tr></thead>
+          <tbody>${desc.calls.map((c, i) =>
+      `<tr${c.curve ? ' class="row-curve"' : ''}>
+              <td class="mono text-text3">${i + 1}</td>
+              <td class="mono">${escHtml(c.bearing)}</td>
+              <td class="mono text-accent2">${c.distance.toLocaleString()} ft</td>
+            </tr>`
+    ).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  html += `</div>`;
+  descArea.innerHTML = html;
+}
+
+/** Toggle expand/collapse of the property description text */
+function togglePropDescExpand() {
+  const el = document.getElementById('propDescText');
+  const btn = document.getElementById('propDescToggleBtn');
+  if (!el) return;
+  el.classList.toggle('expanded');
+  if (btn) {
+    btn.innerHTML = el.classList.contains('expanded') ? 'Collapse ▴' : 'Show Full Text ▾';
+  }
+}
+
+/** Toggle expand/collapse of the calls table */
+function togglePropDescCalls() {
+  const el = document.getElementById('propDescCallsTable');
+  const chev = document.getElementById('propDescCallsChevron');
+  if (!el) return;
+  el.classList.toggle('hidden');
+  if (chev) chev.textContent = el.classList.contains('hidden') ? '▸' : '▾';
+}
+
+/**
+ * Handle manual paste of deed text when auto-extraction fails (scanned PDFs).
+ * Sends the pasted text to the backend for parsing, then re-renders the
+ * property description card with full structured data.
+ */
+async function submitManualDeedDescription() {
+  const textarea = document.getElementById('manualDeedDescInput');
+  if (!textarea) return;
+  const text = textarea.value.trim();
+  if (!text) { showToast('Paste the deed text first', 'warn'); return; }
+  if (text.length < 30) { showToast('Text seems too short — paste the full deed description', 'warn'); return; }
+
+  const descArea = document.getElementById('deedPropertyDescArea');
+  if (descArea) {
+    descArea.innerHTML = `
+      <div class="prop-desc-card prop-desc-loading">
+        <div class="spinner" style="width:16px;height:16px"></div>
+        <span>Parsing pasted deed text…</span>
+      </div>`;
+  }
+
+  try {
+    // Send the pasted text as both the 'detail' fields and via a custom text field
+    const detail = { ...(state.selectedDetail || {}), 'Legal Description': text };
+
+    const res = await apiFetch('/extract-deed-description', 'POST', {
+      pdf_path: '',
+      detail: detail,
+      doc_no: '',
+    });
+
+    if (!res.success) {
+      showToast('Parse error: ' + res.error, 'error');
+      if (descArea) descArea.innerHTML = `<div class="prop-desc-card prop-desc-error">⚠ ${escHtml(res.error)}</div>`;
+      return;
+    }
+
+    const desc = res.description;
+
+    // Override source to indicate manual paste
+    desc.source = 'paste';
+
+    // If the backend didn't isolate a legal description, use the full pasted text
+    if (!desc.legal_description && !desc.full_text) {
+      desc.legal_description = text;
+      desc.full_text = text;
+    }
+    if (!desc.legal_description && desc.full_text) {
+      desc.legal_description = desc.full_text;
+    }
+
+    state._propertyDescription = desc;
+
+    // Save to session
+    const rs = state.researchSession;
+    if (rs) {
+      const clientSubj = rs.subjects.find(s => s.type === 'client');
+      if (clientSubj) {
+        clientSubj.property_description = desc.legal_description || desc.full_text || text;
+        clientSubj.desc_type = desc.desc_type;
+        clientSubj.trs_refs = desc.trs_refs;
+        clientSubj.area_acres = desc.area_acres;
+        clientSubj.calls_count = desc.calls_count;
+        persistSession();
+      }
+    }
+
+    // Re-render the description card with real data
+    renderPropertyDescriptionCard(desc);
+
+    const descTypeLabels = {
+      metes_and_bounds: 'Metes & Bounds',
+      lot_block: 'Lot/Block',
+      tract: 'Tract',
+      trs_only: 'TRS Only',
+      unknown: 'General',
+    };
+    showToast(`📜 Property description parsed — ${descTypeLabels[desc.desc_type] || desc.desc_type}${desc.calls_count ? `, ${desc.calls_count} bearing calls` : ''}`, 'success');
+
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+    if (descArea) {
+      descArea.innerHTML = `<div class="prop-desc-card prop-desc-error">⚠ ${escHtml(e.message)}</div>`;
+    }
+  }
+}
+
+
 /** Skip deed download and jump directly to the plat step */
 function skipToStep3() {
   goToStep(3);
 }
 
-// ============================================================
+// ── DEED ANALYSIS ─────────────────────────────────────────────────────────
+
+/**
+ * Call the backend /api/analyze-deed endpoint and render the results
+ * into the Analysis tab. Lazy-loaded on first tab click.
+ */
+async function runDeedAnalysis() {
+  const container = document.getElementById('deedTabAnalysis');
+  if (!container) return;
+
+  container.innerHTML = `<div class="loading-state flex-col gap-2">
+    <div class="spinner"></div>Analyzing deed health…
+  </div>`;
+
+  try {
+    const detail = state.selectedDetail || {};
+    const pdfPath = state.researchSession?.subjects?.find(s => s.type === 'client')?.deed_path || '';
+
+    const res = await apiFetch('/analyze-deed', 'POST', {
+      detail,
+      pdf_path: pdfPath,
+    });
+
+    if (!res.success) {
+      container.innerHTML = `<div class="empty-state text-danger">Analysis failed: ${escHtml(res.error)}</div>`;
+      return;
+    }
+
+    state._analysisResult = res.analysis;
+    container.innerHTML = buildDeedAnalysisHtml(res.analysis, pdfPath);
+
+  } catch (e) {
+    container.innerHTML = `<div class="empty-state text-danger">Error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+/**
+ * Build the full HTML for the Analysis tab from the analysis result object.
+ */
+function buildDeedAnalysisHtml(a, pdfPath) {
+  const score = a.score;
+  const grade = a.grade; // 'good' | 'fair' | 'poor'
+  const gradeLabel = grade === 'good' ? 'Healthy Deed' : grade === 'fair' ? 'Needs Attention' : 'Issues Found';
+
+  // SVG ring gauge — start at 0 offset, animate after mount
+  const radius = 38;
+  const circ = 2 * Math.PI * radius;
+  const targetOffset = circ * (1 - score / 100);
+
+  // Count issues by severity
+  const counts = { ok: 0, info: 0, warn: 0, critical: 0 };
+  (a.issues || []).forEach(i => { counts[i.severity] = (counts[i.severity] || 0) + 1; });
+
+  // Description type label
+  const descLabels = {
+    metes_and_bounds: 'Metes & Bounds',
+    lot_block: 'Lot / Block',
+    tract: 'Tract Reference',
+    trs_only: 'TRS Only',
+    unknown: 'Unknown',
+  };
+  const descLabel = descLabels[a.desc_type] || a.desc_type;
+
+  let html = `<div class="analysis-tab">`;
+
+  // ── Health Score Ring ────────────────────────────────────────────
+  html += `<div class="health-score-area">
+    <div class="health-ring-wrap">
+      <svg class="health-ring-svg" viewBox="0 0 90 90">
+        <circle class="health-ring-bg" cx="45" cy="45" r="${radius}"/>
+        <circle class="health-ring-fill grade-${grade}" cx="45" cy="45" r="${radius}"
+          id="healthRingArc"
+          stroke-dasharray="${circ.toFixed(1)}"
+          stroke-dashoffset="${circ.toFixed(1)}"/>
+      </svg>
+      <div class="health-ring-label">
+        <div class="health-ring-num" id="healthScoreNum">0</div>
+        <div class="health-ring-txt">/ 100</div>
+      </div>
+    </div>
+    <div class="health-summary">
+      <div class="health-grade-label grade-${grade}">${gradeLabel}</div>
+      <div class="health-meta">
+        ${counts.critical ? `<span class="health-meta-pill"><span class="hm-icon">❌</span> ${counts.critical} Critical</span>` : ''}
+        ${counts.warn ? `<span class="health-meta-pill"><span class="hm-icon">⚠️</span> ${counts.warn} Warning${counts.warn > 1 ? 's' : ''}</span>` : ''}
+        ${counts.info ? `<span class="health-meta-pill"><span class="hm-icon">ℹ️</span> ${counts.info} Info</span>` : ''}
+        ${counts.ok ? `<span class="health-meta-pill"><span class="hm-icon">✅</span> ${counts.ok} Passed</span>` : ''}
+        <span class="health-meta-pill"><span class="hm-icon">📜</span> ${descLabel}</span>
+      </div>
+      ${a.pdf_used ? `<div class="health-pdf-note">✓ Full PDF text analyzed (${a.pdf_source || 'text layer'})</div>` : pdfPath ? `<div class="health-pdf-note">📄 PDF saved — click Re-analyze for deeper scan</div>` : `<div class="health-pdf-note">💡 Save the deed PDF for deeper text analysis</div>`}
+    </div>
+  </div>`;
+
+  // ── Quick Stats (only shown when we have useful data) ────────────────
+  const closure = a.categories?.closure || {};
+  const completeness = a.categories?.completeness || {};
+
+  const statsItems = [];
+  if (closure.desc_type === 'metes_and_bounds') {
+    if (closure.area_acres) statsItems.push({ label: 'Area', value: `${closure.area_acres} ac`, icon: '📐' });
+    if (closure.perimeter) statsItems.push({ label: 'Perimeter', value: `${closure.perimeter.toLocaleString()} ft`, icon: '📏' });
+    if (closure.closure_err !== undefined) statsItems.push({ label: 'Closure', value: closure.closure_ratio || `${closure.closure_err} ft`, icon: closure.closure_err <= 1 ? '✅' : '⚠️' });
+    if (closure.calls_count) statsItems.push({ label: 'Calls', value: `${closure.calls_count}`, icon: '🧭' });
+  }
+  if (closure.monuments?.length) statsItems.push({ label: 'Monuments', value: closure.monuments.join(', '), icon: '📍' });
+  if (completeness.percent !== undefined) statsItems.push({ label: 'Completeness', value: `${completeness.percent}%`, icon: '📋' });
+
+  if (statsItems.length) {
+    html += `<div class="analysis-quick-stats">`;
+    for (const s of statsItems) {
+      html += `<div class="aq-stat">
+        <div class="aq-stat-icon">${s.icon}</div>
+        <div class="aq-stat-body">
+          <div class="aq-stat-val">${escHtml(s.value)}</div>
+          <div class="aq-stat-label">${escHtml(s.label)}</div>
+        </div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  // ── Category Cards ───────────────────────────────────────────────
+  html += `<div class="analysis-categories">`;
+
+  const catOrder = ['closure', 'parties', 'legal', 'completeness', 'nm_specific'];
+  for (const catKey of catOrder) {
+    const cat = a.categories[catKey];
+    if (!cat) continue;
+
+    const catIssues = (a.issues || []).filter(i => i.category === catKey);
+    const hasCritical = catIssues.some(i => i.severity === 'critical');
+    const hasWarn = catIssues.some(i => i.severity === 'warn');
+    const badgeClass = hasCritical ? 'cat-badge-err' : hasWarn ? 'cat-badge-warn' : 'cat-badge-ok';
+    const badgeText = hasCritical ? '❌ Issues' : hasWarn ? '⚠ Warnings' : '✅ OK';
+
+    // Extra detail for specific categories
+    let extraBadge = '';
+    if (catKey === 'closure' && cat.calls_count > 0) {
+      extraBadge = `<span class="analysis-cat-badge cat-badge-ok" style="margin-right:4px">${cat.calls_count} calls</span>`;
+    }
+    if (catKey === 'completeness') {
+      const pctClass = cat.percent >= 80 ? 'cat-badge-ok' : cat.percent >= 50 ? 'cat-badge-warn' : 'cat-badge-err';
+      extraBadge = `<span class="analysis-cat-badge ${pctClass}" style="margin-right:4px">${cat.percent}%</span>`;
+    }
+
+    html += `<div class="analysis-cat-card">
+      <div class="analysis-cat-header" onclick="toggleAnalysisCat(this)">
+        <div class="analysis-cat-title">
+          <span class="cat-icon">${cat.icon || '📋'}</span>
+          ${escHtml(cat.title)}
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          ${extraBadge}
+          <span class="analysis-cat-badge ${badgeClass}">${badgeText}</span>
+          <span class="cat-chevron">▾</span>
+        </div>
+      </div>
+      <div class="analysis-cat-body">`;
+
+    // Completeness progress bar
+    if (catKey === 'completeness' && cat.passed !== undefined) {
+      const pctColor = cat.percent >= 80 ? '#40c29f' : cat.percent >= 50 ? '#e3c55a' : '#da3633';
+      html += `<div style="padding:10px 16px 6px;border-bottom:1px solid rgba(255,255,255,0.03)">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:5px">
+          <span>${cat.passed} of ${cat.total} fields present</span>
+          <span style="font-weight:700;color:${pctColor}">${cat.percent}%</span>
+        </div>
+        <div style="height:4px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden">
+          <div style="width:${cat.percent}%;height:100%;background:${pctColor};border-radius:2px;transition:width 0.8s ease"></div>
+        </div>
+      </div>`;
+    }
+
+    // Render check items
+    for (const iss of catIssues) {
+      const sevIcon = iss.severity === 'ok' ? '✓' : iss.severity === 'info' ? 'ℹ' : iss.severity === 'warn' ? '!' : '✕';
+      html += `<div class="analysis-check">
+        <div class="check-icon sev-${iss.severity}">${sevIcon}</div>
+        <div class="check-content">
+          <div class="check-title">${escHtml(iss.title)}</div>
+          ${iss.detail ? `<div class="check-detail">${escHtml(iss.detail)}</div>` : ''}
+        </div>
+      </div>`;
+    }
+
+    if (!catIssues.length) {
+      html += `<div class="analysis-check"><div class="check-content"><div class="check-detail" style="font-style:italic">No checks for this category.</div></div></div>`;
+    }
+
+    html += `</div></div>`; // close body + card
+  }
+
+  html += `</div>`; // close categories grid
+
+  // ── Re-analyze / Refresh ─────────────────────────────────────────
+  html += `<div class="analysis-reanalyze">
+    <span>Analysis based on ${a.pdf_used ? 'full PDF text' : 'online metadata'}</span>
+    <button class="btn btn-outline btn-sm" onclick="state._analysisLoaded=false;runDeedAnalysis()">⟳ Re-analyze</button>
+  </div>`;
+
+  html += `</div>`; // close .analysis-tab
+
+  // Animate the score ring after DOM update
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const arc = document.getElementById('healthRingArc');
+      const num = document.getElementById('healthScoreNum');
+      if (arc) arc.style.strokeDashoffset = targetOffset.toFixed(1);
+      // Animate number counting up
+      if (num) {
+        let cur = 0;
+        const step = Math.max(1, Math.ceil(score / 40));
+        const tick = () => {
+          cur = Math.min(cur + step, score);
+          num.textContent = cur;
+          if (cur < score) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }
+    });
+  });
+
+  return html;
+}
+
+/** Toggle expand/collapse on analysis category cards */
+function toggleAnalysisCat(headerEl) {
+  const body = headerEl.parentElement.querySelector('.analysis-cat-body');
+  const chevron = headerEl.querySelector('.cat-chevron');
+  if (!body) return;
+  body.classList.toggle('hidden');
+  if (chevron) chevron.textContent = body.classList.contains('hidden') ? '▸' : '▾';
+}
+
 // STEP 3: CLIENT PLAT
 // ============================================================
 
@@ -797,21 +1445,21 @@ async function onCabinetSelectChange(val) {
     try {
       const fastRes = await apiFetch('/find-plat', 'POST', { detail: state.selectedDetail });
       cabRefs = (fastRes && fastRes.cabinet_refs) || [];
-    } catch(e) {}
+    } catch (e) { }
 
     const payload = {
-      detail:         state.selectedDetail,
-      cabinet_refs:   forcedCabs ? [] : cabRefs,
-      kml_matches:    forcedCabs ? [] : kmlHits,
-      client_name:    state.researchSession?.client_name || '',
+      detail: state.selectedDetail,
+      cabinet_refs: forcedCabs ? [] : cabRefs,
+      kml_matches: forcedCabs ? [] : kmlHits,
+      client_name: state.researchSession?.client_name || '',
     };
     if (forcedCabs) payload.forced_cabinets = forcedCabs;
 
-    const res             = await apiFetch('/find-plat-local', 'POST', payload);
-    const localHits       = (res && res.local)            || [];
-    const targetCabs      = (res && res.target_cabinets)  || [];
+    const res = await apiFetch('/find-plat-local', 'POST', payload);
+    const localHits = (res && res.local) || [];
+    const targetCabs = (res && res.target_cabinets) || [];
     const targetingReason = (res && res.targeting_reason) || '';
-    const cabLabelRes     = targetCabs.length && targetCabs.length < 6
+    const cabLabelRes = targetCabs.length && targetCabs.length < 6
       ? `Cabinet${targetCabs.length > 1 ? 's' : ''} ${targetCabs.join(', ')}`
       : 'all cabinets';
 
@@ -824,27 +1472,31 @@ async function onCabinetSelectChange(val) {
     } else {
       state._cabinetHits = localHits;
       locCards.innerHTML = localHits.map((f, fi) => {
-        const stratLabel = f.strategy === 'kml_cab_ref'  ? '\u2605 KML Match'
-          : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref'
-          : f.strategy === 'client_name'  ? '\u2B50 Client'
-          : f.strategy === 'name_match'   ? 'Name Match'
-          : f.strategy === 'page_ref'     ? 'Page Ref'
-          : (f.strategy || 'match');
-        const isTop = f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name';
+        const stratLabel = f.strategy === 'doc_number' ? '\u2605 Doc# Match'
+          : f.strategy === 'kml_cab_ref' ? '\u2605 KML Match'
+            : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref'
+              : f.strategy === 'client_name' ? '\u2B50 Client'
+                : f.strategy === 'name_match' ? 'Name Match'
+                  : f.strategy === 'page_ref' ? 'Page Ref'
+                    : (f.strategy || 'match');
+        const isTop = f.strategy === 'doc_number' || f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name';
+        const docNumBadge = f.doc_number
+          ? ' <span style="font-family:monospace;font-size:10px;opacity:.7">Doc# ' + escHtml(f.doc_number) + '</span>'
+          : '';
         return '<div class="plat-item' + (isTop ? ' plat-item-client' : '') + '">' +
           '<div class="plat-info">' +
-            '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
-            '<span class="plat-meta">Cabinet ' + (f.cabinet||'') + ' \u00A0\u00B7\u00A0 ' + stratLabel + '</span>' +
+          '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
+          '<span class="plat-meta">Cabinet ' + (f.cabinet || '') + ' \u00A0\u00B7\u00A0 ' + stratLabel + docNumBadge + '</span>' +
           '</div>' +
           '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
-        '</div>';
+          '</div>';
       }).join('');
       if (targetingReason) {
         locCards.insertAdjacentHTML('afterbegin',
           `<div class="text-xs text-text3 p-2 pb-0 opacity-60">\uD83C\uDFAF ${escHtml(targetingReason)}</div>`);
       }
     }
-  } catch(e) {
+  } catch (e) {
     locCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">Cabinet scan failed: ' + escHtml(e.message) + '</div>';
   }
 }
@@ -862,7 +1514,7 @@ async function doStep3Search() {
   const noDeed = !state.selectedDetail;
   const noDeedBanner = noDeed
     ? '<div class="text-xs p-2" style="background:rgba(227,197,90,.08);border-bottom:1px solid rgba(227,197,90,.2);color:var(--accent2)">' +
-      '⚠ No deed selected — searching by client name only. Select a deed in Step 2 for more targeted results.</div>'
+    '⚠ No deed selected — searching by client name only. Select a deed in Step 2 for more targeted results.</div>'
     : '';
 
   // Use an empty detail object when no deed is available so we can still call
@@ -880,7 +1532,7 @@ async function doStep3Search() {
     try {
       const fastRes = await apiFetch('/find-plat', 'POST', { detail });
       cabRefs = (fastRes && fastRes.cabinet_refs) || [];
-    } catch(e) { /* ignore */ }
+    } catch (e) { /* ignore */ }
   }
 
   // Pull grantor/grantee from the deed detail (prefer detail, fall back to selectedDoc search row)
@@ -903,7 +1555,7 @@ async function doStep3Search() {
     detail,
     client_name: activeOwner || clientName,
     grantee,
-    grantor:     activeOwner || grantor,
+    grantor: activeOwner || grantor,
     prior_owners: priorOwners,
   })
     .then(res => {
@@ -913,16 +1565,16 @@ async function doStep3Search() {
       } else {
         onlCards.innerHTML = surveyHits.map(r =>
           '<div class="plat-item">' +
-            '<div class="plat-info">' +
-              '<span class="plat-name" title="' + escHtml(r.location||'') + '">' +
-                escHtml((r.grantor||'').split(',')[0] || r.grantor||'') + '</span>' +
-              '<span class="plat-meta">' + escHtml(r.instrument_type||'') +
-                ' &nbsp;&nbsp; ' + escHtml(r.recorded_date||r.date||'') +
-                ' &nbsp;&nbsp; Doc <span class="text-accent2">' + escHtml(r.doc_no) + '</span></span>' +
-            '</div>' +
-            '<button class="btn btn-outline btn-sm" ' +
-              'onclick="saveClientPlatOnline(\'' + r.doc_no + '\',\'' + escHtml(r.location||'') + '\')">' +
-              '\u2B07 Download</button>' +
+          '<div class="plat-info">' +
+          '<span class="plat-name" title="' + escHtml(r.location || '') + '">' +
+          escHtml((r.grantor || '').split(',')[0] || r.grantor || '') + '</span>' +
+          '<span class="plat-meta">' + escHtml(r.instrument_type || '') +
+          ' &nbsp;&nbsp; ' + escHtml(r.recorded_date || r.date || '') +
+          ' &nbsp;&nbsp; Doc <span class="text-accent2">' + escHtml(r.doc_no) + '</span></span>' +
+          '</div>' +
+          '<button class="btn btn-outline btn-sm" ' +
+          'onclick="saveClientPlatOnline(\'' + r.doc_no + '\',\'' + escHtml(r.location || '') + '\')">' +
+          '\u2B07 Download</button>' +
           '</div>'
         ).join('');
       }
@@ -968,77 +1620,90 @@ async function doStep3Search() {
 
     const payload = {
       detail,
-      cabinet_refs:  cabinetOverride ? [] : cabRefs,
-      kml_matches:   cabinetOverride ? [] : kmlHits,
-      client_name:   activeOwner || clientName,
-      grantor:       activeOwner || grantor,
+      cabinet_refs: cabinetOverride ? [] : cabRefs,
+      kml_matches: cabinetOverride ? [] : kmlHits,
+      client_name: activeOwner || clientName,
+      grantor: activeOwner || grantor,
       grantee,
-      prior_owners:  priorOwners,   // also search under prior owner names
+      prior_owners: priorOwners,   // also search under prior owner names
     };
     if (cabinetOverride) payload.forced_cabinets = [cabinetOverride];
 
     return apiFetch('/find-plat-local', 'POST', payload);
   })
-  .then(res => {
-    const localHits = (res && res.local) || [];
-    const targetCabs = (res && res.target_cabinets) || [];
-    const targetingReason = (res && res.targeting_reason) || '';
-    const cabLabel = targetCabs.length && targetCabs.length < 6
-      ? `Cabinet${targetCabs.length > 1 ? 's' : ''} ${targetCabs.join(', ')}`
-      : 'all cabinets';
+    .then(res => {
+      const localHits = (res && res.local) || [];
+      const targetCabs = (res && res.target_cabinets) || [];
+      const targetingReason = (res && res.targeting_reason) || '';
+      const cabLabel = targetCabs.length && targetCabs.length < 6
+        ? `Cabinet${targetCabs.length > 1 ? 's' : ''} ${targetCabs.join(', ')}`
+        : 'all cabinets';
 
-    if (!localHits.length) {
-      locCards.innerHTML = noDeedBanner +
-        '<div class="empty-state text-text3 text-sm p-4">' +
-        '<div class="text-3xl mb-2">\u{1F5C4}\uFE0F</div>' +
-        `No cabinet plats matched in ${cabLabel}.<br>` +
-        (targetingReason ? `<span class="text-xs opacity-50">${escHtml(targetingReason)}</span><br><br>` : '<br>') +
-        '<button class="btn btn-outline btn-sm" onclick="openGlobalCabinetBrowser()">Browse Cabinets Manually</button></div>';
-    } else {
-      state._cabinetHits = localHits;
-      const hitRows = localHits.map((f, fi) => {
-        const stratLabel = f.strategy === 'kml_cab_ref'  ? '\u2605 KML Ref Match'
-          : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
-          : f.strategy === 'client_name'  ? '\u2B50 Client Match'
-          : f.strategy === 'prior_owner'  ? '\uD83D\uDC64 Prior Owner'
-          : f.strategy === 'name_match'   ? 'Name Match'
-          : f.strategy === 'page_ref'     ? 'Page Ref'
-          : (f.strategy || 'match');
-        const isTop = f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
-        return '<div class="plat-item' + (isTop ? ' plat-item-client' : '') + '">' +
-
+      if (!localHits.length) {
+        locCards.innerHTML = noDeedBanner +
+          '<div class="empty-state text-text3 text-sm p-4">' +
+          '<div class="text-3xl mb-2">\u{1F5C4}\uFE0F</div>' +
+          `No cabinet plats matched in ${cabLabel}.<br>` +
+          (targetingReason ? `<span class="text-xs opacity-50">${escHtml(targetingReason)}</span><br><br>` : '<br>') +
+          '<button class="btn btn-outline btn-sm" onclick="openGlobalCabinetBrowser()">Browse Cabinets Manually</button></div>';
+      } else {
+        state._cabinetHits = localHits;
+        const hitRows = localHits.map((f, fi) => {
+          const confidencePct = _calcPlatConfidence(f);
+          const stratLabel = f.strategy === 'doc_number' ? '\u2605 Doc# Match'
+            : f.strategy === 'kml_cab_ref' ? '\u2605 KML Ref Match'
+              : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
+                : f.strategy === 'client_name' ? '\u2B50 Client Match'
+                  : f.strategy === 'prior_owner' ? '\uD83D\uDC64 Prior Owner'
+                    : f.strategy === 'name_match' ? 'Name Match'
+                      : f.strategy === 'page_ref' ? 'Page Ref'
+                        : (f.strategy || 'match');
+          const isTop = f.strategy === 'doc_number' || f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
+          const docNumBadge = f.doc_number
+            ? ' <span style="font-family:monospace;font-size:10px;opacity:.7">Doc# ' + escHtml(f.doc_number) + '</span>'
+            : '';
+          const previewBtn = f.path
+            ? '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:3px 7px" ' +
+            'onclick="event.stopPropagation(); showPlatPreview(\'' + escHtml(f.path).replace(/'/g, "\\'") + '\',\'' + escHtml(f.display_name || f.file).replace(/'/g, "\\'") + '\',\'savePlatByIndex(' + fi + ')\')">👁 Preview</button>'
+            : '';
+          return '<div class="plat-item' + (isTop ? ' plat-item-client' : '') + '" style="gap:10px">' +
+            _confidenceRingHtml(confidencePct) +
+            '<div class="plat-info" style="flex:1">' +
             '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
-            '<span class="plat-meta">Cabinet ' + (f.cabinet||'') + ' \u00A0\u00B7\u00A0 ' + stratLabel + '</span>' +
-          '</div>' +
-          '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
-        '</div>';
-      }).join('');
+            '<span class="plat-meta">Cabinet ' + (f.cabinet || '') + ' \u00A0\u00B7\u00A0 ' + stratLabel + docNumBadge + '</span>' +
+            '</div>' +
+            '<div style="display:flex;gap:6px;align-items:center">' +
+            previewBtn +
+            '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
+            '</div>' +
+            '</div>';
+        }).join('');
 
-      locCards.innerHTML = noDeedBanner + hitRows;
+        locCards.innerHTML = noDeedBanner + hitRows;
 
-      if (targetingReason) {
-        locCards.insertAdjacentHTML('afterbegin',
-          `<div class="text-xs text-text3 p-2 pb-0 opacity-60">\u{1F3AF} ${escHtml(targetingReason)}</div>`);
+        if (targetingReason) {
+          locCards.insertAdjacentHTML('afterbegin',
+            `<div class="text-xs text-text3 p-2 pb-0 opacity-60">\u{1F3AF} ${escHtml(targetingReason)}</div>`);
+        }
       }
-    }
-  })
-  .catch(() => {
-    locCards.innerHTML = noDeedBanner +
-      '<div class="empty-state text-text3 text-sm p-4">Cabinet scan unavailable.</div>';
-  });
+    })
+    .catch(() => {
+      locCards.innerHTML = noDeedBanner +
+        '<div class="empty-state text-text3 text-sm p-4">Cabinet scan unavailable.</div>';
+    });
 }
 
 
 function _renderKmlHits(container, kmlHits, selectedIdx) {
   container.innerHTML = kmlHits.map((p, pi) => {
-    const ct        = p.centroid ? 'Lat: ' + p.centroid[1].toFixed(5) + ', Lng: ' + p.centroid[0].toFixed(5) : '';
+    const ct = p.centroid ? 'Lat: ' + p.centroid[1].toFixed(5) + ', Lng: ' + p.centroid[0].toFixed(5) : '';
     const isSelected = pi === selectedIdx;
-    const saveBtns  = (p.local_files && p.local_files.length)
+    const saveBtns = (p.local_files && p.local_files.length)
       ? p.local_files.map((lf, lfi) =>
-          '<button class="btn btn-success btn-sm" style="font-size:10px;padding:3px 7px;white-space:nowrap" ' +
-          'onclick="saveKmlLocalFile(' + pi + ',' + lfi + ')" title="' + escHtml(lf.file) + '">' +
-          '\u2B07 ' + escHtml(lf.cab_ref || (lf.cabinet + '-' + lf.doc)) + '</button>'
-        ).join('')
+        '<button class="btn btn-success btn-sm" style="font-size:10px;padding:3px 7px;white-space:nowrap" ' +
+        'onclick="saveKmlLocalFile(' + pi + ',' + lfi + ')" title="' + escHtml(lf.file) + '">' +
+        '\u2B07 ' + escHtml(lf.cab_ref || (lf.cabinet + '-' + lf.doc)) + '</button>'
+      ).join('')
       : '';
     const searchBtn =
       '<button class="btn btn-sm kml-search-cab-btn' + (isSelected ? ' kml-search-cab-active' : '') + '" ' +
@@ -1046,21 +1711,22 @@ function _renderKmlHits(container, kmlHits, selectedIdx) {
       '\uD83D\uDD0D Cabinet</button>';
     return '<div class="plat-item kml-parcel-item' + (isSelected ? ' kml-parcel-selected' : '') + '" id="kml-parcel-' + pi + '">' +
       '<div class="plat-info" style="flex:1">' +
-        '<span class="plat-name" title="' + escHtml(ct) + '">' + escHtml(p.owner) + '</span>' +
-        '<div class="kml-meta-row">' +
-          (p.upc   ? '<span class="kml-chip chip-upc">UPC: ' + escHtml(p.upc) + '</span>' : '') +
-          (p.book  ? '<span class="kml-chip chip-book">Bk/Pg: ' + escHtml(p.book) + '/' + escHtml(p.page) + '</span>' : '') +
-          (p.cab_refs_str ? '<span class="kml-chip chip-cab">' + escHtml(p.cab_refs_str) + '</span>' : '') +
-        '</div>' +
-        (p.match_reason ? '<span class="plat-meta text-xs" style="color:var(--accent2)">' + escHtml(p.match_reason) + '</span>' : '') +
-        (p.plat ? '<span class="plat-meta text-xs" title="' + escHtml(p.plat) + '">' +
-          escHtml(p.plat.substring(0,60)) + (p.plat.length > 60 ? '\u2026' : '') + '</span>' : '') +
+      '<span class="plat-name" title="' + escHtml(ct) + '">' + escHtml(p.owner) + '</span>' +
+      '<div class="kml-meta-row">' +
+      (p.upc ? '<span class="kml-chip chip-upc">UPC: ' + escHtml(p.upc) + '</span>' : '') +
+      (p.book ? '<span class="kml-chip chip-book">Bk/Pg: ' + escHtml(p.book) + '/' + escHtml(p.page) + '</span>' : '') +
+      (p.cab_refs_str ? '<span class="kml-chip chip-cab">' + escHtml(p.cab_refs_str) + '</span>' : '') +
+      '<span class="kml-chip chip-addr-placeholder" id="kml-addr-' + pi + '" style="cursor:pointer;background:rgba(78,205,196,.08);color:#4ecdc4;border-color:rgba(78,205,196,.2)" onclick="event.stopPropagation();_lookupKmlCardAddress(' + pi + ')" title="Click to look up property address">📍 Address</span>' +
+      '</div>' +
+      (p.match_reason ? '<span class="plat-meta text-xs" style="color:var(--accent2)">' + escHtml(p.match_reason) + '</span>' : '') +
+      (p.plat ? '<span class="plat-meta text-xs" title="' + escHtml(p.plat) + '">' +
+        escHtml(p.plat.substring(0, 60)) + (p.plat.length > 60 ? '\u2026' : '') + '</span>' : '') +
       '</div>' +
       '<div class="flex-col gap-1" style="min-width:100px;align-items:flex-end">' +
-        searchBtn +
-        (saveBtns ? '<div style="margin-top:3px;display:flex;flex-direction:column;gap:2px">' + saveBtns + '</div>' : '') +
+      searchBtn +
+      (saveBtns ? '<div style="margin-top:3px;display:flex;flex-direction:column;gap:2px">' + saveBtns + '</div>' : '') +
       '</div>' +
-    '</div>';
+      '</div>';
   }).join('');
 }
 
@@ -1078,7 +1744,7 @@ function _extractPlatName(platStr) {
 function searchCabinetFromKml(pi) {
   const kmlHits = state._kmlHits;
   if (!kmlHits || !kmlHits[pi]) { showToast('KML parcel not found', 'error'); return; }
-  const p        = kmlHits[pi];
+  const p = kmlHits[pi];
   const kmlCards = document.getElementById('s3KmlPlats');
   const locCards = document.getElementById('s3LocalPlats');
 
@@ -1088,8 +1754,8 @@ function searchCabinetFromKml(pi) {
   if (selEl) selEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   // Pre-fill values from this KML parcel
-  const cabRef     = p.cab_refs_str || '';   // e.g. "C-191-A" — used for folder targeting only
-  const platHint   = p.plat         || '';   // full PLAT field (shown as tooltip)
+  const cabRef = p.cab_refs_str || '';   // e.g. "C-191-A" — used for folder targeting only
+  const platHint = p.plat || '';   // full PLAT field (shown as tooltip)
   // Cabinet files are named after the current owner (e.g. "Rael Adela.pdf"),
   // NOT after the original surveyor in the PLAT field. Use p.owner for matching.
   const nameDefault = p.owner || _extractPlatName(p.plat || '') || '';
@@ -1098,57 +1764,57 @@ function searchCabinetFromKml(pi) {
   locCards.innerHTML =
     '<div class="cab-filter-panel">' +
 
-      // Header: show cabinet ref as context chip, name as the primary label
-      '<div class="cab-filter-header">' +
-        '<span class="cab-filter-title">\uD83D\uDD0D Cabinet Search' +
-          (cabRef ? ' &nbsp;<span style="font-family:monospace;font-size:10px;' +
-            'background:rgba(176,128,224,0.15);color:#b080e0;padding:1px 6px;' +
-            'border-radius:6px;border:1px solid rgba(176,128,224,0.3)">' +
-            escHtml(cabRef) + '</span>' : '') +
-        '</span>' +
-        '<span class="cab-filter-subtitle" title="' + escHtml(platHint) + '">' +
-          escHtml(nameDefault || 'Unknown parcel') +
-        '</span>' +
-      '</div>' +
+    // Header: show cabinet ref as context chip, name as the primary label
+    '<div class="cab-filter-header">' +
+    '<span class="cab-filter-title">\uD83D\uDD0D Cabinet Search' +
+    (cabRef ? ' &nbsp;<span style="font-family:monospace;font-size:10px;' +
+      'background:rgba(176,128,224,0.15);color:#b080e0;padding:1px 6px;' +
+      'border-radius:6px;border:1px solid rgba(176,128,224,0.3)">' +
+      escHtml(cabRef) + '</span>' : '') +
+    '</span>' +
+    '<span class="cab-filter-subtitle" title="' + escHtml(platHint) + '">' +
+    escHtml(nameDefault || 'Unknown parcel') +
+    '</span>' +
+    '</div>' +
 
-      // Fields
-      '<div class="cab-filter-body">' +
+    // Fields
+    '<div class="cab-filter-body">' +
 
-        '<div class="cab-filter-row">' +
-          '<label class="cab-filter-label" for="cabFilterRef">Cabinet Ref</label>' +
-          '<input id="cabFilterRef" class="inp cab-filter-inp" ' +
-            'value="' + escHtml(cabRef) + '" ' +
-            'placeholder="e.g. C-191-A" />' +
-          '<span class="cab-filter-hint">Targets the cabinet folder (C, B, etc.) — not used for filename matching</span>' +
-        '</div>' +
+    '<div class="cab-filter-row">' +
+    '<label class="cab-filter-label" for="cabFilterRef">Cabinet Ref</label>' +
+    '<input id="cabFilterRef" class="inp cab-filter-inp" ' +
+    'value="' + escHtml(cabRef) + '" ' +
+    'placeholder="e.g. C-191-A" />' +
+    '<span class="cab-filter-hint">Targets the cabinet folder (C, B, etc.) — not used for filename matching</span>' +
+    '</div>' +
 
-        '<div class="cab-filter-row">' +
-          '<label class="cab-filter-label" for="cabFilterName">Name <span style="opacity:.5">(matched against filenames)</span></label>' +
-          '<input id="cabFilterName" class="inp cab-filter-inp" ' +
-            'value="' + escHtml(nameDefault) + '" ' +
-            'placeholder="e.g. ADELA RAEL" />' +
-          '<span class="cab-filter-hint">Current owner name — edit if the file is named differently</span>' +
-        '</div>' +
+    '<div class="cab-filter-row">' +
+    '<label class="cab-filter-label" for="cabFilterName">Name <span style="opacity:.5">(matched against filenames)</span></label>' +
+    '<input id="cabFilterName" class="inp cab-filter-inp" ' +
+    'value="' + escHtml(nameDefault) + '" ' +
+    'placeholder="e.g. ADELA RAEL" />' +
+    '<span class="cab-filter-hint">Current owner name — edit if the file is named differently</span>' +
+    '</div>' +
 
-        '<div class="cab-filter-row" style="flex-direction:row;align-items:center;gap:8px;padding-top:2px">' +
-          '<input type="checkbox" id="cabFilterAllCabs" style="accent-color:var(--accent2);width:14px;height:14px">' +
-          '<label for="cabFilterAllCabs" style="font-size:12px;color:var(--text2);cursor:pointer">' +
-            'Search all cabinets (ignore cabinet ref for targeting)' +
-          '</label>' +
-        '</div>' +
+    '<div class="cab-filter-row" style="flex-direction:row;align-items:center;gap:8px;padding-top:2px">' +
+    '<input type="checkbox" id="cabFilterAllCabs" style="accent-color:var(--accent2);width:14px;height:14px">' +
+    '<label for="cabFilterAllCabs" style="font-size:12px;color:var(--text2);cursor:pointer">' +
+    'Search all cabinets (ignore cabinet ref for targeting)' +
+    '</label>' +
+    '</div>' +
 
-      '</div>' +
+    '</div>' +
 
-      // Actions
-      '<div class="cab-filter-actions">' +
-        '<button class="btn btn-primary flex-1" ' +
-          'onclick="_executeKmlCabinetSearch(' + pi + ')">' +
-          'Search Cabinet \u2192' +
-        '</button>' +
-        '<button class="btn btn-outline btn-sm" onclick="openGlobalCabinetBrowser()">' +
-          'Browse Manually' +
-        '</button>' +
-      '</div>' +
+    // Actions
+    '<div class="cab-filter-actions">' +
+    '<button class="btn btn-primary flex-1" ' +
+    'onclick="_executeKmlCabinetSearch(' + pi + ')">' +
+    'Search Cabinet \u2192' +
+    '</button>' +
+    '<button class="btn btn-outline btn-sm" onclick="openGlobalCabinetBrowser()">' +
+    'Browse Manually' +
+    '</button>' +
+    '</div>' +
 
     '</div>';
 }
@@ -1160,15 +1826,15 @@ async function _executeKmlCabinetSearch(pi) {
   const p = kmlHits[pi];
 
   // Read filter panel values
-  const cabRefInput  = (document.getElementById('cabFilterRef')  || {}).value || '';
-  const nameInput    = (document.getElementById('cabFilterName') || {}).value || '';
+  const cabRefInput = (document.getElementById('cabFilterRef') || {}).value || '';
+  const nameInput = (document.getElementById('cabFilterName') || {}).value || '';
   const searchAllCabs = document.getElementById('cabFilterAllCabs')?.checked || false;
-  const clientName   = state.researchSession?.client_name || '';
+  const clientName = state.researchSession?.client_name || '';
 
   // Label for display: just the name being searched (cabinet ref shown separately in header)
-  const searchName   = nameInput.trim() || p.owner || '';
-  const parcelLabel  = searchName;
-  const locCards     = document.getElementById('s3LocalPlats');
+  const searchName = nameInput.trim() || p.owner || '';
+  const parcelLabel = searchName;
+  const locCards = document.getElementById('s3LocalPlats');
 
   // Build a modified parcel object for the backend.
   // Cabinet ref is ONLY used to target the correct folder (letter = "C", "B", etc.).
@@ -1184,7 +1850,7 @@ async function _executeKmlCabinetSearch(pi) {
 
   const overrideParcel = {
     ...p,
-    cab_refs:     cabRefs,
+    cab_refs: cabRefs,
     cab_refs_str: cabRefs.join(', '),
     // If user left name blank, clear owner so backend doesn't name-match on it
     owner: nameInput.trim() || '',
@@ -1195,21 +1861,21 @@ async function _executeKmlCabinetSearch(pi) {
 
   try {
     const payload = {
-      detail:       state.selectedDetail,
+      detail: state.selectedDetail,
       cabinet_refs: [],
-      kml_matches:  searchAllCabs ? [] : [overrideParcel],
-      client_name:  clientName,
+      kml_matches: searchAllCabs ? [] : [overrideParcel],
+      client_name: clientName,
     };
     // If the user typed a name override, pass it as grantor for name matching
     if (nameInput.trim()) {
       payload.grantor = nameInput.trim();
     }
 
-    const res             = await apiFetch('/find-plat-local', 'POST', payload);
-    const localHits       = (res && res.local)            || [];
-    const targetCabs      = (res && res.target_cabinets)  || [];
+    const res = await apiFetch('/find-plat-local', 'POST', payload);
+    const localHits = (res && res.local) || [];
+    const targetCabs = (res && res.target_cabinets) || [];
     const targetingReason = (res && res.targeting_reason) || '';
-    const cabLabel        = targetCabs.length && targetCabs.length < 6
+    const cabLabel = targetCabs.length && targetCabs.length < 6
       ? 'Cabinet' + (targetCabs.length > 1 ? 's' : '') + ' ' + targetCabs.join(', ')
       : 'all cabinets';
 
@@ -1220,7 +1886,7 @@ async function _executeKmlCabinetSearch(pi) {
         'No cabinet plats matched in ' + cabLabel + ' for <strong>' + escHtml(parcelLabel) + '</strong>.<br>' +
         (targetingReason ? '<span class="text-xs opacity-50">' + escHtml(targetingReason) + '</span><br><br>' : '<br>') +
         '<button class="btn btn-outline btn-sm" style="margin-top:8px" ' +
-          'onclick="searchCabinetFromKml(' + pi + ')">\u21A9 Adjust Filters</button>' +
+        'onclick="searchCabinetFromKml(' + pi + ')">\u21A9 Adjust Filters</button>' +
         ' &nbsp; ' +
         '<button class="btn btn-outline btn-sm" onclick="openGlobalCabinetBrowser()">Browse Manually</button>' +
         '</div>';
@@ -1236,20 +1902,24 @@ async function _executeKmlCabinetSearch(pi) {
         adjLink +
         '</div>';
       locCards.innerHTML = header + localHits.map((f, fi) => {
-        const stratLabel = f.strategy === 'kml_cab_ref'  ? '\u2605 KML Ref Match'
-          : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
-          : f.strategy === 'client_name'  ? '\u2B50 Client Match'
-          : f.strategy === 'name_match'   ? 'Name Match'
-          : f.strategy === 'name_match'   ? 'Name Match'
-          : (f.strategy || 'match');
-        const isTop = f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
+        const stratLabel = f.strategy === 'doc_number' ? '\u2605 Doc# Match'
+          : f.strategy === 'kml_cab_ref' ? '\u2605 KML Ref Match'
+            : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
+              : f.strategy === 'client_name' ? '\u2B50 Client Match'
+                : f.strategy === 'name_match' ? 'Name Match'
+                  : f.strategy === 'page_ref' ? 'Page Ref'
+                    : (f.strategy || 'match');
+        const isTop = f.strategy === 'doc_number' || f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
+        const docNumBadge = f.doc_number
+          ? ' <span style="font-family:monospace;font-size:10px;opacity:.7">Doc# ' + escHtml(f.doc_number) + '</span>'
+          : '';
         return '<div class="plat-item' + (isTop ? ' plat-item-client' : '') + '">' +
           '<div class="plat-info">' +
-            '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
-            '<span class="plat-meta">Cabinet ' + (f.cabinet||'') + ' \u00A0\u00B7\u00A0 ' + stratLabel + '</span>' +
+          '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
+          '<span class="plat-meta">Cabinet ' + (f.cabinet || '') + ' \u00A0\u00B7\u00A0 ' + stratLabel + docNumBadge + '</span>' +
           '</div>' +
           '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
-        '</div>';
+          '</div>';
       }).join('');
 
       if (targetingReason) {
@@ -1257,7 +1927,7 @@ async function _executeKmlCabinetSearch(pi) {
           '<div class="text-xs text-text3 p-2 pb-0 opacity-60">\uD83C\uDFAF ' + escHtml(targetingReason) + '</div>');
       }
     }
-  } catch(e) {
+  } catch (e) {
     locCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">Cabinet scan failed: ' +
       escHtml(e.message) + '<br><br>' +
       '<button class="btn btn-outline btn-sm" onclick="searchCabinetFromKml(' + pi + ')">\u21A9 Adjust Filters</button>' +
@@ -1270,7 +1940,7 @@ async function _executeKmlCabinetSearch(pi) {
 async function saveKmlLocalFile(kmlIdx, fileIdx) {
   const rs = state.researchSession;
   if (!rs) { showToast('No active session', 'error'); return; }
-  const p  = state._kmlHits && state._kmlHits[kmlIdx];
+  const p = state._kmlHits && state._kmlHits[kmlIdx];
   if (!p || !p.local_files || !p.local_files[fileIdx]) { showToast('File not found', 'error'); return; }
   const lf = p.local_files[fileIdx];
   const clientSubj = rs.subjects.find(s => s.type === 'client');
@@ -1287,9 +1957,10 @@ async function saveKmlLocalFile(kmlIdx, fileIdx) {
         if (res.saved_to) clientSubj.plat_path = res.saved_to;
         await persistSession();
       }
+      _prefetchAdjoinerDiscovery();  // Fire-and-forget: pre-scan adjoiners
       setTimeout(() => goToStep(4), 800);
     } else { showToast('Save failed: ' + res.error, 'error'); }
-  } catch(e) { showToast('Error: ' + e.message, 'error'); }
+  } catch (e) { showToast('Error: ' + e.message, 'error'); }
 }
 
 // ── KML Index Status Modal ───────────────────────────────────────────────────
@@ -1312,18 +1983,18 @@ async function showKmlIndexModal() {
     body.innerHTML =
       '<div class="kml-status-block ' + (res.exists ? 'kml-ok' : 'kml-warn') + '">' +
       (res.exists
-        ? '<strong style="color:var(--accent2)">\u2705 Index Ready</strong> &nbsp;\u2014&nbsp; ' + (res.total||0).toLocaleString() + ' parcels<br>' +
-          '<span class="text-xs text-text3">Built: ' + (res.built_at||'unknown') + ' &nbsp;\u00B7&nbsp; ' + (res.size_mb||'?') + ' MB</span>'
+        ? '<strong style="color:var(--accent2)">\u2705 Index Ready</strong> &nbsp;\u2014&nbsp; ' + (res.total || 0).toLocaleString() + ' parcels<br>' +
+        '<span class="text-xs text-text3">Built: ' + (res.built_at || 'unknown') + ' &nbsp;\u00B7&nbsp; ' + (res.size_mb || '?') + ' MB</span>'
         : '<strong style="color:#ff7b72">\u26A0 No Index Yet</strong> \u2014 Build it below to enable KML parcel search.') +
       '</div>' +
       (res.exists && srcRows
         ? '<div class="mt-3"><div class="text-xs font-bold uppercase text-text3 mb-1">Indexed Sources</div>' +
-          '<table class="data-table"><tbody>' + srcRows + '</tbody></table></div>' : '') +
+        '<table class="data-table"><tbody>' + srcRows + '</tbody></table></div>' : '') +
       (fileRows
         ? '<div class="mt-3"><div class="text-xs font-bold uppercase text-text3 mb-1">KML / KMZ Files Available</div>' +
-          '<table class="data-table"><tbody>' + fileRows + '</tbody></table></div>'
+        '<table class="data-table"><tbody>' + fileRows + '</tbody></table></div>'
         : '<div class="empty-state text-sm mt-3">No KML/KMZ files found in Survey Data\\XML folder.</div>');
-  } catch(e) {
+  } catch (e) {
     body.innerHTML = '<div class="text-danger p-3">Error: ' + e.message + '</div>';
   }
 }
@@ -1339,9 +2010,9 @@ async function buildKmlIndex() {
   try {
     const res = await apiFetch('/xml/build-index', 'POST', {});
     if (!res.success) throw new Error(res.error);
-    showToast('KML index built: ' + (res.total||0).toLocaleString() + ' parcels in ' + res.elapsed_sec + 's', 'success');
+    showToast('KML index built: ' + (res.total || 0).toLocaleString() + ' parcels in ' + res.elapsed_sec + 's', 'success');
     await showKmlIndexModal();
-  } catch(e) {
+  } catch (e) {
     showToast('Build failed: ' + e.message, 'error');
     document.getElementById('kmlIndexBody').innerHTML = '<div class="text-danger p-3">Error: ' + e.message + '</div>';
   } finally {
@@ -1371,6 +2042,7 @@ async function saveClientPlatLocal(filePath, filename) {
       showToast(`Plat saved to project: ${res.filename}`, "success");
       if (clientSubj) { clientSubj.plat_saved = true; if (res.saved_to) clientSubj.plat_path = res.saved_to; }
       await persistSession();
+      _prefetchAdjoinerDiscovery();  // Fire-and-forget: pre-scan adjoiners
       goToStep(4);
     } else {
       showToast("Save failed: " + res.error, "error");
@@ -1383,7 +2055,7 @@ async function saveClientPlatLocal(filePath, filename) {
 async function saveClientPlatOnline(docNo, loc) {
   const rs = state.researchSession;
   if (!rs) { showToast("No active session", "error"); return; }
-  
+
   const clientSubj = rs.subjects.find(s => s.type === "client");
 
   try {
@@ -1398,6 +2070,7 @@ async function saveClientPlatOnline(docNo, loc) {
       clientSubj.plat_saved = true;
       if (res.saved_to) clientSubj.plat_path = res.saved_to;
       await persistSession();
+      _prefetchAdjoinerDiscovery();  // Fire-and-forget: pre-scan adjoiners
       goToStep(4);
     } else {
       showToast("Download failed: " + res.error, "error");
@@ -1410,36 +2083,72 @@ async function saveClientPlatOnline(docNo, loc) {
 // 
 // STEP 4: ADJOINER DISCOVERY
 // 
+/**
+ * Fire-and-forget: pre-scan adjoiners in the background after plat save.
+ * Results are cached in state._prefetchedAdjoiners so Step 4 renders instantly.
+ */
+function _prefetchAdjoinerDiscovery() {
+  const rs = state.researchSession;
+  if (!rs) return;
+  const clientSubj = rs.subjects.find(s => s.type === 'client');
+  if (!clientSubj || !clientSubj.deed_saved) return;
+
+  state._prefetchedAdjoiners = null;  // clear any stale cache
+  state._adjDiscoveryRan = true;      // prevent redundant auto-run in updateStepUI
+
+  apiFetch('/find-adjoiners', 'POST', {
+    detail: state.selectedDetail || {},
+    deed_path: clientSubj.deed_path || '',
+    job_number: rs.job_number,
+    client_name: rs.client_name,
+    job_type: rs.job_type,
+  })
+    .then(res => {
+      if (res.success) {
+        state._prefetchedAdjoiners = res;
+        console.log(`[prefetch] Adjoiner discovery cached: ${(res.adjoiners || []).length} found`);
+      }
+    })
+    .catch(e => console.warn('[prefetch] Adjoiner discovery failed:', e.message));
+}
+
 async function runAdjoinerDiscovery(autoMode = false) {
   const rs = state.researchSession;
   if (!rs) { if (!autoMode) showToast("No active session", "error"); return; }
-  
+
   const clientSubj = rs.subjects.find(s => s.type === "client");
   if (!clientSubj || !clientSubj.deed_saved) {
     if (!autoMode) showToast("Save the client deed first", "warn");
     return;
   }
 
-  const btn     = document.getElementById("btnDiscoverAdjoiners");
-  const grid    = document.getElementById("s4AdjoinerGrid");
+  const btn = document.getElementById("btnDiscoverAdjoiners");
+  const grid = document.getElementById("s4AdjoinerGrid");
   const resArea = document.getElementById("s4DiscoveryResults");
   const countEl = document.getElementById("s4CountText");
 
-  if (btn)     { btn.disabled = true; btn.innerHTML = `<div class="spinner"></div> Scanning...`; }
+  if (btn) { btn.disabled = true; btn.innerHTML = `<div class="spinner"></div> Scanning...`; }
   if (resArea) resArea.classList.remove("hidden");
-  if (grid)    grid.innerHTML = `<div class="loading-state col-span-full">Running OCR on plat and scanning online records\u2026</div>`;
+  if (grid) grid.innerHTML = `<div class="loading-state col-span-full">Running OCR on plat and scanning online records\u2026</div>`;
   if (countEl) countEl.textContent = "...";
 
   if (autoMode) showToast("\ud83d\udd0d Auto-running adjoiner discovery\u2026", "info");
 
   try {
-    const res = await apiFetch("/find-adjoiners", "POST", {
-      detail: state.selectedDetail || {},
-      deed_path: clientSubj.deed_path || "",
-      job_number: rs.job_number,
-      client_name: rs.client_name,
-      job_type: rs.job_type,
-    });
+    // Use prefetched results if available (fired during plat save)
+    let res = state._prefetchedAdjoiners;
+    if (res && res.success) {
+      state._prefetchedAdjoiners = null;  // consume once
+      if (autoMode) showToast('✓ Adjoiner scan ready (pre-fetched)', 'success');
+    } else {
+      res = await apiFetch("/find-adjoiners", "POST", {
+        detail: state.selectedDetail || {},
+        deed_path: clientSubj.deed_path || "",
+        job_number: rs.job_number,
+        client_name: rs.client_name,
+        job_type: rs.job_type,
+      });
+    }
 
     if (!res.success) throw new Error(res.error);
 
@@ -1462,7 +2171,7 @@ async function runAdjoinerDiscovery(autoMode = false) {
             <span class="adjoiner-chip-name">${j.name}</span>
             <span class="source-tag text-text3">${j.source}</span>
           </div>
-          <button class="btn btn-outline btn-sm" onclick="addFoundAdjoiner(\'${j.name.replace(/\'/g,"\\\'")}\')">+ Add</button>
+          <button class="btn btn-outline btn-sm" onclick="addFoundAdjoiner(\'${j.name.replace(/\'/g, "\\\'")}\')">+ Add</button>
         </div>
       `).join("");
       grid.innerHTML = html;
@@ -1478,10 +2187,13 @@ async function runAdjoinerDiscovery(autoMode = false) {
 
 async function addFoundAdjoiner(name) {
   const rs = state.researchSession;
-  if (!rs) return;
+  if (!rs) {
+    showToast("No active session — adjoiner not saved", "error");
+    return false;
+  }
 
   const exists = rs.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === name.toLowerCase());
-  if (exists) { showToast("Already on board", "info"); return; }
+  if (exists) { showToast("Already on board", "info"); return true; }
 
   rs.subjects.push({
     id: "adj_" + Date.now() + Math.random().toString(36).substr(2, 5),
@@ -1489,9 +2201,16 @@ async function addFoundAdjoiner(name) {
     name: name,
     deed_saved: false, plat_saved: false, status: "pending", notes: ""
   });
-  
-  await persistSession();
-  showToast(`Added ${name} to research board`, "success");
+
+  const ok = await persistSession();
+  if (ok) {
+    showToast(`Added ${name} to research board`, "success");
+  } else {
+    // Roll back the in-memory push so state stays consistent
+    rs.subjects.pop();
+    showToast(`Failed to save ${name} — not added`, "error");
+  }
+  return ok;
 }
 
 async function addAllDiscoveredToBoard() {
@@ -1512,7 +2231,7 @@ async function addAllAndContinue() {
     const exists = rs.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === j.name.toLowerCase());
     if (!exists) {
       rs.subjects.push({
-        id: "adj_" + Date.now() + "_" + Math.random().toString(36).substr(2,5),
+        id: "adj_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
         type: "adjoiner",
         name: j.name,
         deed_saved: false, plat_saved: false, status: "pending", notes: ""
@@ -1555,7 +2274,7 @@ async function manualAddAdjoiner() {
   const inp = document.getElementById("s4ManualName");
   const name = inp.value.trim();
   if (!name || name.length < 2) return;
-  
+
   await addFoundAdjoiner(name);
   inp.value = "";
 }
@@ -1570,31 +2289,34 @@ function closeCabinetBrowser() {
 }
 
 let _cabState = { cab: 'C', filter: '', page: 1 };
-async function browseCabinet(cab, page=1) {
+async function browseCabinet(cab, page = 1) {
   _cabState.cab = cab; _cabState.page = page;
-  
+
   document.querySelectorAll('.cab-tab').forEach(b => b.classList.toggle('active', b.dataset.cab === cab));
   const body = document.getElementById('cabinetBody');
   body.innerHTML = `<div class="loading-state">Loading...</div>`;
-  
+
   try {
     const res = await apiFetch(`/cabinet-browse?cabinet=${cab}&filter=${encodeURIComponent(_cabState.filter)}&page=${page}&per_page=50`);
     if (!res.success) throw new Error(res.error);
-    
+
     document.getElementById('cabinetCount').textContent = `Total: ${res.total} files`;
-    
+
     if (!res.files.length) {
       body.innerHTML = `<div class="empty-state text-sm">No files match.</div>`;
       return;
     }
-    
+
     let html = `<table class="data-table"><tbody>`;
     res.files.forEach(f => {
       const escapedPath = f.path.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       const escapedFile = (f.file || '').replace(/'/g, "\\'");
       html += `
         <tr>
-          <td class="text-xs" title="${escHtml(f.file)}">${escHtml(f.display_name || f.file)}</td>
+          <td class="text-xs" title="${escHtml(f.file)}">
+            ${escHtml(f.display_name || f.file)}
+            ${f.doc_number ? `<span style="font-family:monospace;font-size:10px;opacity:.6;margin-left:5px">Doc# ${escHtml(f.doc_number)}</span>` : ''}
+          </td>
           <td class="text-text3 text-xs w-16">${f.size_kb} KB</td>
           <td style="white-space:nowrap">
             <button class="btn btn-outline btn-sm" style="margin-right:4px" onclick="apiFetch('/open-file','POST',{path:'${escapedPath}'})">&#128065; Open</button>
@@ -1624,13 +2346,13 @@ async function saveFromCabinetBrowser(filePath, filename) {
 
   try {
     const res = await apiFetch('/save-plat', 'POST', {
-      source:      'local',
-      file_path:   filePath,
-      filename:    filename,
-      job_number:  rs.job_number,
+      source: 'local',
+      file_path: filePath,
+      filename: filename,
+      job_number: rs.job_number,
       client_name: rs.client_name,
-      job_type:    rs.job_type,
-      subject_id:  clientSubj ? clientSubj.id : 'client'
+      job_type: rs.job_type,
+      subject_id: clientSubj ? clientSubj.id : 'client'
     });
     if (res.success) {
       showToast(res.skipped ? 'Plat already exists in project (skipped)' : '\u2B07 Plat saved: ' + res.filename, 'success');
@@ -1644,7 +2366,7 @@ async function saveFromCabinetBrowser(filePath, filename) {
     } else {
       showToast('Save failed: ' + res.error, 'error');
     }
-  } catch(e) {
+  } catch (e) {
     showToast('Error: ' + e.message, 'error');
   }
 }
@@ -1660,7 +2382,7 @@ function renderResearchBoard() {
   }
 
   const adjoiners = rs.subjects.filter(s => s.type === "adjoiner");
-  const client    = rs.subjects.find(s => s.type === "client");
+  const client = rs.subjects.find(s => s.type === "client");
   let html = "";
 
   // Client card first
@@ -1676,14 +2398,14 @@ function buildSubjectCard(s, rs) {
   const accentColor = isClient ? "var(--accent)" : "#7a4f9a";
 
   const deedChip = s.deed_saved
-    ? `<span class="chip chip-done"> Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="Open deed" onclick="openFile('${s.deed_path.replace(/\\/g,"\\\\").replace(/'/g,"\\'")}')"></button>` : ""}`
+    ? `<span class="chip chip-done"> Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="Open deed" onclick="openFile('${s.deed_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')"></button>` : ""}`
     : `<span class="chip chip-todo"> Deed</span>`;
   const platChip = s.plat_saved
-    ? `<span class="chip chip-done"> Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="Open plat" onclick="openFile('${s.plat_path.replace(/\\/g,"\\\\").replace(/'/g,"\\'")}')"></button>` : ""}`
+    ? `<span class="chip chip-done"> Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="Open plat" onclick="openFile('${s.plat_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')"></button>` : ""}`
     : `<span class="chip chip-todo"> Plat</span>`;
 
   const statusColors = { done: "#1a3028;color:#56d3a0", na: "#281a1a;color:#888", pending: "var(--bg3);color:var(--text3)" };
-  const statusLabel  = { done: " Done", na: " N/A", pending: " Pending" }[st];
+  const statusLabel = { done: " Done", na: " N/A", pending: " Pending" }[st];
 
   return `
     <div class="adjoiner-card status-${st}" id="card_${s.id}" style="border-top-color:${accentColor}">
@@ -1716,7 +2438,7 @@ function buildSubjectCard(s, rs) {
 
         <!-- Actions -->
         <div class="row-layout gap-2 flex-wrap border-t pt-2" style="border-color:var(--border)">
-          <button class="btn btn-outline btn-sm flex-1" onclick="searchForSubject('${escHtml(s.name.split(",")[0]).replace(/'/g,"\\'")}')">
+          <button class="btn btn-outline btn-sm flex-1" onclick="searchForSubject('${escHtml(s.name.split(",")[0]).replace(/'/g, "\\'")}')">
              Search
           </button>
           ${!isClient ? `
@@ -1744,12 +2466,12 @@ function buildExceptionFlags(s) {
   return `<div class="row-layout gap-1 flex-wrap">` +
     FLAGS.map(f => `<span class="exc-chip ${exc[f.key] ? "exc-active" : "exc-off"}"
       onclick="toggleException('${s.id}','${f.key}')" title="Toggle ${f.label}">${f.label}</span>`).join("") +
-  `</div>`;
+    `</div>`;
 }
 
 function buildChainTracker(s) {
-  const years = (s.chain_years || []).sort((a,b) => b-a);
-  const goal  = s.chain_goal || null;
+  const years = (s.chain_years || []).sort((a, b) => b - a);
+  const goal = s.chain_goal || null;
   const reached = goal && years.length && Math.min(...years) <= goal;
 
   return `<div class="chain-box">
@@ -1757,8 +2479,8 @@ function buildChainTracker(s) {
       <span class="text-xs text-text3 font-bold uppercase">Chain of Title</span>
       <div class="row-layout gap-2">
         ${goal
-          ? `<span class="text-xs" style="color:${reached ? "#56d3a0" : "#e3c55a"}">${reached ? "" : ""} Goal: ${goal}</span>`
-          : `<button class="link-btn" onclick="setChainGoal('${s.id}')">+ Set goal year</button>`}
+      ? `<span class="text-xs" style="color:${reached ? "#56d3a0" : "#e3c55a"}">${reached ? "" : ""} Goal: ${goal}</span>`
+      : `<button class="link-btn" onclick="setChainGoal('${s.id}')">+ Set goal year</button>`}
         <button class="link-btn text-accent2" onclick="addChainYear('${s.id}')">+ Add year</button>
       </div>
     </div>
@@ -1788,7 +2510,7 @@ async function saveAdjDeed(subjId) {
   const loadedGrantor = (state.selectedDetail?.['Grantor'] || '').toLowerCase();
   const loadedGrantee = (state.selectedDetail?.['Grantee'] || '').toLowerCase();
   if (state.selectedDoc && state.selectedDetail &&
-      (loadedGrantor.includes(adjLast) || loadedGrantee.includes(adjLast))) {
+    (loadedGrantor.includes(adjLast) || loadedGrantee.includes(adjLast))) {
     await _doSaveAdjDeedFromLoaded(subjId, rs, subj);
     return;
   }
@@ -1813,7 +2535,7 @@ async function saveAdjDeed(subjId) {
       return;
     }
     _showAdjDeedPickModal(subjId, subj.name, res.results);
-  } catch(e) {
+  } catch (e) {
     showToast('Search failed: ' + e.message, 'error');
   }
 }
@@ -1840,7 +2562,7 @@ function _showAdjDeedPickModal(subjId, adjName, results) {
 
   // Store results in state temporarily
   state._adjPickResults = results;
-  state._adjPickSubjId  = subjId;
+  state._adjPickSubjId = subjId;
 
   overlay.innerHTML = `
     <div class="glass-card" style="width:min(960px,95vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden">
@@ -1872,9 +2594,9 @@ function _showAdjDeedPickModal(subjId, adjName, results) {
 }
 
 async function _pickAdjDeed(subjId, idx) {
-  const rs    = state.researchSession;
-  const subj  = rs.subjects.find(s => s.id === subjId);
-  const r     = state._adjPickResults?.[idx];
+  const rs = state.researchSession;
+  const subj = rs.subjects.find(s => s.id === subjId);
+  const r = state._adjPickResults?.[idx];
   if (!subj || !r) return;
 
   // Highlight selected row
@@ -1885,17 +2607,17 @@ async function _pickAdjDeed(subjId, idx) {
   showToast(`Downloading deed ${r.doc_no}...`, 'info');
   try {
     const res = await apiFetch('/download', 'POST', {
-      doc_no:         r.doc_no,
-      grantor:        r.grantor || '',
-      grantee:        r.grantee || '',
-      location:       r.location || '',
-      job_number:     rs.job_number,
-      client_name:    rs.client_name,
-      job_type:       rs.job_type,
+      doc_no: r.doc_no,
+      grantor: r.grantor || '',
+      grantee: r.grantee || '',
+      location: r.location || '',
+      job_number: rs.job_number,
+      client_name: rs.client_name,
+      job_type: rs.job_type,
       create_project: true,
-      is_adjoiner:    true,
-      adjoiner_name:  subj.name,
-      subject_id:     subjId,
+      is_adjoiner: true,
+      adjoiner_name: subj.name,
+      subject_id: subjId,
     });
     if (res.success) {
       subj.deed_saved = true;
@@ -1907,7 +2629,7 @@ async function _pickAdjDeed(subjId, idx) {
     } else {
       showToast('Save failed: ' + res.error, 'error');
     }
-  } catch(e) {
+  } catch (e) {
     showToast('Error: ' + e.message, 'error');
   }
 }
@@ -1915,17 +2637,17 @@ async function _pickAdjDeed(subjId, idx) {
 async function _doSaveAdjDeedFromLoaded(subjId, rs, subj) {
   try {
     const res = await apiFetch('/download', 'POST', {
-      doc_no:         state.selectedDoc.doc_no,
-      grantor:        state.selectedDetail['Grantor'] || '',
-      grantee:        state.selectedDetail['Grantee'] || '',
-      location:       state.selectedDetail['Location'] || '',
-      job_number:     rs.job_number,
-      client_name:    rs.client_name,
-      job_type:       rs.job_type,
+      doc_no: state.selectedDoc.doc_no,
+      grantor: state.selectedDetail['Grantor'] || '',
+      grantee: state.selectedDetail['Grantee'] || '',
+      location: state.selectedDetail['Location'] || '',
+      job_number: rs.job_number,
+      client_name: rs.client_name,
+      job_type: rs.job_type,
       create_project: true,
-      is_adjoiner:    true,
-      adjoiner_name:  subj.name,
-      subject_id:     subjId,
+      is_adjoiner: true,
+      adjoiner_name: subj.name,
+      subject_id: subjId,
     });
     if (res.success) {
       subj.deed_saved = true;
@@ -1936,7 +2658,7 @@ async function _doSaveAdjDeedFromLoaded(subjId, rs, subj) {
     } else {
       showToast('Save failed: ' + res.error, 'error');
     }
-  } catch(e) {
+  } catch (e) {
     showToast('Error: ' + e.message, 'error');
   }
 }
@@ -1948,8 +2670,8 @@ async function saveAdjPlat(subjId) {
   if (!subj) return;
 
   const clientName = rs.client_name;
-  const adjName    = subj.name;
-  const lastName   = adjName.split(',')[0].trim();
+  const adjName = subj.name;
+  const lastName = adjName.split(',')[0].trim();
 
   // Synthesize a minimal deed detail using the adjoiner name
   const searchDetail = { 'Grantor': adjName, 'Grantee': '' };
@@ -1963,7 +2685,7 @@ async function saveAdjPlat(subjId) {
     try {
       const fastRes = await apiFetch('/find-plat', 'POST', { detail: searchDetail });
       cabRefs = (fastRes && fastRes.cabinet_refs) || [];
-    } catch(e) {}
+    } catch (e) { }
 
     // 2. KML lookup (by name)
     const kmlRes = await apiFetch('/find-plat-kml', 'POST', { detail: searchDetail, client_name: adjName });
@@ -1973,17 +2695,17 @@ async function saveAdjPlat(subjId) {
     const localRes = await apiFetch('/find-plat-local', 'POST', {
       detail: searchDetail,
       cabinet_refs: cabRefs,
-      kml_matches:  kmlHits,
-      client_name:  adjName,
-      grantor:      adjName,
-      grantee:      '',
+      kml_matches: kmlHits,
+      client_name: adjName,
+      grantor: adjName,
+      grantee: '',
     });
     const localHits = (localRes && localRes.local) || [];
 
     // Collect all candidates in priority order
     const allCandidates = [
       ...localHits,
-      ...(kmlHits.flatMap(k => (k.local_files || []).map(lf => ({...lf, strategy: 'kml_local'})))),
+      ...(kmlHits.flatMap(k => (k.local_files || []).map(lf => ({ ...lf, strategy: 'kml_local' })))),
     ];
 
     if (allCandidates.length) {
@@ -2001,7 +2723,7 @@ async function saveAdjPlat(subjId) {
         showToast(`No plat found for "${lastName}" in cabinet, KML, or online records.`, 'warn');
       }
     }
-  } catch(e) {
+  } catch (e) {
     showToast('Plat search error: ' + e.message, 'error');
   }
 }
@@ -2031,7 +2753,7 @@ function _showAdjPlatPickModal(subjId, subj, localHits, onlineHits = []) {
       <td style="padding:7px 10px"><span class="badge badge-online">Online Doc ${escHtml(r.doc_no || '')}</span></td>
     </tr>`);
 
-  state._adjPlatSubjId    = subjId;
+  state._adjPlatSubjId = subjId;
   state._adjPlatLocalHits = localHits;
   state._adjPlatOnlineHits = onlineHits;
 
@@ -2081,7 +2803,7 @@ async function _pickAdjPlat(subjId, type, idx) {
       document.getElementById('adjPlatPickOverlay')?.remove();
       renderResearchBoard();
     } else { showToast('Save failed: ' + res.error, 'error'); }
-  } catch(e) { showToast('Error: ' + e.message, 'error'); }
+  } catch (e) { showToast('Error: ' + e.message, 'error'); }
 }
 
 async function _pickAdjPlatOnline(subjId, idx) {
@@ -2103,7 +2825,7 @@ async function _pickAdjPlatOnline(subjId, idx) {
       document.getElementById('adjPlatPickOverlay')?.remove();
       renderResearchBoard();
     } else { showToast('Download failed: ' + res.error, 'error'); }
-  } catch(e) { showToast('Error: ' + e.message, 'error'); }
+  } catch (e) { showToast('Error: ' + e.message, 'error'); }
 }
 
 //  Board persistence helpers 
@@ -2186,7 +2908,7 @@ async function bulkSearchAdjoiners() {
         const header = card.querySelector(".adjoiner-card-header");
         if (header) header.appendChild(indicator);
       }
-    } catch {}
+    } catch { }
     await new Promise(r => setTimeout(r, 300));
   }
   showToast("Bulk search complete", "success");
@@ -2196,14 +2918,14 @@ async function openFolderForContext() {
   const rs = state.researchSession;
   if (!rs) { showToast("No active session", "warn"); return; }
   try {
-    const drv    = await apiFetch("/drive-status");
-    const drive  = (drv.drive_ok && drv.drive) ? drv.drive : "F";
+    const drv = await apiFetch("/drive-status");
+    const drive = (drv.drive_ok && drv.drive) ? drv.drive : "F";
     const rstart = Math.floor(parseInt(rs.job_number) / 100) * 100;
-    const last   = rs.client_name.split(",")[0].trim();
-    const path   = `${drive}:\\AI DATA CENTER\\Survey Data\\${rstart}-${rstart+99}\\${rs.job_number} ${rs.client_name}\\${rs.job_number}-01-${rs.job_type} ${last}\\E Research`;
-    apiFetch("/open-folder", "POST", { path }).catch(()=>{});
+    const last = rs.client_name.split(",")[0].trim();
+    const path = `${drive}:\\AI DATA CENTER\\Survey Data\\${rstart}-${rstart + 99}\\${rs.job_number} ${rs.client_name}\\${rs.job_number}-01-${rs.job_type} ${last}\\E Research`;
+    apiFetch("/open-folder", "POST", { path }).catch(() => { });
     showToast("Opening E Research folder...", "info");
-  } catch(e) {
+  } catch (e) {
     showToast("Could not resolve drive path", "warn");
   }
 }
@@ -2217,8 +2939,8 @@ function openFile(filePath) {
 // STEP 6: BOUNDARY LINES (DXF)
 // 
 function switchS6Tab(tab) {
-  ["calls","parcels","options"].forEach(t => {
-    document.getElementById(`s6Tab${t.charAt(0).toUpperCase()+t.slice(1)}`)?.classList.toggle("hidden", t !== tab);
+  ["calls", "parcels", "options"].forEach(t => {
+    document.getElementById(`s6Tab${t.charAt(0).toUpperCase() + t.slice(1)}`)?.classList.toggle("hidden", t !== tab);
     const btn = document.querySelector(`[onclick="switchS6Tab('${t}')"]`);
     if (btn) btn.classList.toggle("active", t === tab);
   });
@@ -2226,19 +2948,43 @@ function switchS6Tab(tab) {
 }
 
 async function reparseClientCallsFromSession(silent = false) {
-  if (!state.selectedDetail) {
-    if (!silent) showToast("No deed detail loaded — search in Step 2 first", "warn");
+  // Strategy 1: Use in-memory deed detail (fastest — no I/O)
+  if (state.selectedDetail) {
+    try {
+      const res = await apiFetch("/parse-calls", "POST", { detail: state.selectedDetail });
+      if (!res.success) { if (!silent) showToast("Parse error: " + res.error, "error"); return; }
+      state.parsedCalls = res.calls || [];
+      renderS6CallsTable(res);
+      if (!silent) showToast(`${res.count} call${res.count !== 1 ? "s" : ""} parsed from deed`, res.count ? "success" : "warn");
+      else if (res.count) showToast(`✓ ${res.count} boundary calls imported from deed`, "success");
+      return;
+    } catch (e) {
+      if (!silent) showToast("Error: " + e.message, "error");
+      return;
+    }
+  }
+
+  // Strategy 2: Fall back to reading the saved deed PDF from disk
+  const rs = state.researchSession;
+  const clientSubj = rs && rs.subjects ? rs.subjects.find(s => s.type === 'client') : null;
+  const deedPath = clientSubj && clientSubj.deed_path;
+
+  if (!deedPath) {
+    if (!silent) showToast("No deed detail in memory and no saved deed PDF found — search in Step 2 first", "warn");
     return;
   }
+
+  if (!silent) showToast("📄 Extracting calls from saved deed PDF…", "info");
   try {
-    const res = await apiFetch("/parse-calls", "POST", { detail: state.selectedDetail });
-    if (!res.success) { if (!silent) showToast("Parse error: " + res.error, "error"); return; }
+    const res = await apiFetch("/extract-calls-from-pdf", "POST", { pdf_path: deedPath });
+    if (!res.success) { if (!silent) showToast("PDF extraction error: " + res.error, "error"); return; }
     state.parsedCalls = res.calls || [];
     renderS6CallsTable(res);
-    if (!silent) showToast(`${res.count} call${res.count !== 1 ? "s" : ""} parsed from deed`, res.count ? "success" : "warn");
-    else if (res.count) showToast(`✓ ${res.count} boundary calls imported from deed`, "success");
-  } catch(e) {
-    if (!silent) showToast("Error: " + e.message, "error");
+    const src = res.source === 'ocr' ? ' (via OCR)' : '';
+    if (!silent) showToast(`${res.count} call${res.count !== 1 ? "s" : ""} extracted from ${res.filename || 'deed PDF'}${src}`, res.count ? "success" : "warn");
+    else if (res.count) showToast(`✓ ${res.count} boundary calls imported from saved deed${src}`, "success");
+  } catch (e) {
+    if (!silent) showToast("Error reading deed PDF: " + e.message, "error");
   }
 }
 
@@ -2251,7 +2997,7 @@ async function parseS6Text() {
     state.parsedCalls = res.calls || [];
     renderS6CallsTable(res);
     showToast(`${res.count} calls parsed`, res.count ? "success" : "warn");
-  } catch(e) {
+  } catch (e) {
     showToast("Error: " + e.message, "error");
   }
 }
@@ -2277,7 +3023,7 @@ function renderS6CallsTable(res) {
 
   tbody.innerHTML = calls.map((c, i) => `
     <tr class="call-row">
-      <td class="text-text3 text-center">${i+1}</td>
+      <td class="text-text3 text-center">${i + 1}</td>
       <td><input class="inp" style="font-family:monospace;font-size:11px;padding:4px 6px" value="${escHtml(c.bearing_label)}"
         onchange="updateCallField(${i},'bearing_label',this.value)"></td>
       <td><input class="inp" type="number" step="0.001" style="font-size:11px;padding:4px 6px" value="${c.distance}"
@@ -2295,11 +3041,11 @@ function updateCallField(idx, field, value) {
   if (field === "bearing_label") {
     const m = value.trim().toUpperCase().match(/^([NS])(\d+)°(\d+)'(\d+)"([EW])$/);
     if (m) {
-      const [,ns,deg,mn,sec,ew] = m;
-      let az = +deg + +mn/60 + +sec/3600;
-      if (ns==="S"&&ew==="E") az=180-az;
-      else if(ns==="S"&&ew==="W") az=180+az;
-      else if(ns==="N"&&ew==="W") az=360-az;
+      const [, ns, deg, mn, sec, ew] = m;
+      let az = +deg + +mn / 60 + +sec / 3600;
+      if (ns === "S" && ew === "E") az = 180 - az;
+      else if (ns === "S" && ew === "W") az = 180 + az;
+      else if (ns === "N" && ew === "W") az = 360 - az;
       state.parsedCalls[idx].azimuth = +az.toFixed(6);
     }
   }
@@ -2325,13 +3071,13 @@ function addManualCall() {
 function recalcS6Closure() {
   const calls = state.parsedCalls;
   if (!calls.length) return;
-  let x=0, y=0;
-  calls.forEach(c => { const az=c.azimuth*Math.PI/180; x+=c.distance*Math.sin(az); y+=c.distance*Math.cos(az); });
-  const err = Math.hypot(x,y);
+  let x = 0, y = 0;
+  calls.forEach(c => { const az = c.azimuth * Math.PI / 180; x += c.distance * Math.sin(az); y += c.distance * Math.cos(az); });
+  const err = Math.hypot(x, y);
   const txt = document.getElementById("s6ClosureText");
   if (txt) {
-    const cls = err<0.5 ? "text-accent2" : err<2 ? "text-gold" : "text-danger";
-    txt.innerHTML = `<span class="${cls}">${err<0.01 ? " Perfect closure" : ` ${err.toFixed(4)} ft`}</span> &nbsp;&nbsp; ${calls.length} calls`;
+    const cls = err < 0.5 ? "text-accent2" : err < 2 ? "text-gold" : "text-danger";
+    txt.innerHTML = `<span class="${cls}">${err < 0.01 ? " Perfect closure" : ` ${err.toFixed(4)} ft`}</span> &nbsp;&nbsp; ${calls.length} calls`;
   }
 }
 
@@ -2358,8 +3104,8 @@ function renderS6ParcelList() {
           </div>
         </div>
         ${p.deed_path
-          ? `<button class="btn btn-outline btn-sm w-full mb-1" onclick="extractCallsFromPdf(${pi},'${p.deed_path.replace(/\\/g,"\\\\").replace(/'/g,"\\'")}')"> Extract Calls from Deed PDF</button>`
-          : `<span class="text-xs text-text3">No deed saved yet</span>`}
+        ? `<button class="btn btn-outline btn-sm w-full mb-1" onclick="extractCallsFromPdf(${pi},'${p.deed_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')"> Extract Calls from Deed PDF</button>`
+        : `<span class="text-xs text-text3">No deed saved yet</span>`}
         <textarea class="inp mt-1" rows="2" id="adjText${pi}" style="font-size:11px;font-family:monospace;resize:vertical"
           placeholder="Or paste deed text here..."></textarea>
         <button class="btn btn-outline btn-sm mt-1 w-full" onclick="parseAdjoinerText(${pi})">Parse Text</button>
@@ -2380,7 +3126,7 @@ function autoPopulateAdjoiners(silent = false) {
   let added = 0;
   adjs.forEach(subj => {
     if (!state.adjoinParcels.some(p => p.label.toLowerCase() === subj.name.toLowerCase())) {
-      state.adjoinParcels.push({ label: subj.name, layer: "ADJOINERS", calls: [], start_x: 0, start_y: 0, deed_path: subj.deed_path||"", plat_path: subj.plat_path||"", extracting: false });
+      state.adjoinParcels.push({ label: subj.name, layer: "ADJOINERS", calls: [], start_x: 0, start_y: 0, deed_path: subj.deed_path || "", plat_path: subj.plat_path || "", extracting: false });
       added++;
     }
   });
@@ -2390,11 +3136,11 @@ function autoPopulateAdjoiners(silent = false) {
 }
 
 function addAdjoinerParcel() {
-  const suggestions = (state.researchSession?.subjects||[]).filter(s=>s.type==="adjoiner").map(s=>s.name);
-  const label = prompt("Adjoiner label:\n" + (suggestions.length ? "Suggestions: " + suggestions.join(", ") : "(none)"), suggestions[0]||"Adjoiner");
+  const suggestions = (state.researchSession?.subjects || []).filter(s => s.type === "adjoiner").map(s => s.name);
+  const label = prompt("Adjoiner label:\n" + (suggestions.length ? "Suggestions: " + suggestions.join(", ") : "(none)"), suggestions[0] || "Adjoiner");
   if (!label) return;
-  const subj = (state.researchSession?.subjects||[]).find(s=>s.type==="adjoiner"&&s.name.toLowerCase()===label.toLowerCase());
-  state.adjoinParcels.push({ label, layer:"ADJOINERS", calls:[], start_x:0, start_y:0, deed_path:subj?.deed_path||"", plat_path:subj?.plat_path||"", extracting:false });
+  const subj = (state.researchSession?.subjects || []).find(s => s.type === "adjoiner" && s.name.toLowerCase() === label.toLowerCase());
+  state.adjoinParcels.push({ label, layer: "ADJOINERS", calls: [], start_x: 0, start_y: 0, deed_path: subj?.deed_path || "", plat_path: subj?.plat_path || "", extracting: false });
   renderS6ParcelList();
 }
 
@@ -2429,7 +3175,7 @@ async function extractCallsFromPdf(idx, pdfPath) {
     if (!res.success) { showToast("Extract failed: " + res.error, "error"); return; }
     state.adjoinParcels[idx].calls = res.calls;
     showToast(res.count ? `${res.count} calls from ${res.filename}` : "No metes & bounds found  paste manually", res.count ? "success" : "warn");
-  } catch(e) {
+  } catch (e) {
     showToast("Error: " + e.message, "error");
   } finally {
     state.adjoinParcels[idx].extracting = false;
@@ -2441,7 +3187,7 @@ async function extractCallsFromPdf(idx, pdfPath) {
 async function doGenerateDxf() {
   const rs = state.researchSession;
   if (!rs) { showToast("Load a session first", "warn"); return; }
-  if (!state.parsedCalls.length && !state.adjoinParcels.some(p=>p.calls.length)) {
+  if (!state.parsedCalls.length && !state.adjoinParcels.some(p => p.calls.length)) {
     showToast("No boundary calls to generate", "warn"); return;
   }
 
@@ -2453,18 +3199,18 @@ async function doGenerateDxf() {
 
   const parcels = [];
   if (state.parsedCalls.length) {
-    parcels.push({ label:`Client  ${rs.client_name}`, layer:"CLIENT", calls:state.parsedCalls, start_x:0, start_y:0 });
+    parcels.push({ label: `Client  ${rs.client_name}`, layer: "CLIENT", calls: state.parsedCalls, start_x: 0, start_y: 0 });
   }
   state.adjoinParcels.forEach(p => {
-    if (p.calls.length) parcels.push({ label:p.label, layer:p.layer||"ADJOINERS", calls:p.calls, start_x:p.start_x||0, start_y:p.start_y||0 });
+    if (p.calls.length) parcels.push({ label: p.label, layer: p.layer || "ADJOINERS", calls: p.calls, start_x: p.start_x || 0, start_y: p.start_y || 0 });
   });
 
   const options = {
-    draw_boundary:   document.getElementById("optDrawBoundary")?.checked ?? true,
-    draw_labels:     document.getElementById("optDrawLabels")?.checked   ?? true,
-    draw_endpoints:  document.getElementById("optDrawEndpoints")?.checked ?? false,
-    label_size:      parseFloat(document.getElementById("optLabelSize")?.value) || 2.0,
-    close_tolerance: parseFloat(document.getElementById("optCloseTol")?.value)  || 0.5,
+    draw_boundary: document.getElementById("optDrawBoundary")?.checked ?? true,
+    draw_labels: document.getElementById("optDrawLabels")?.checked ?? true,
+    draw_endpoints: document.getElementById("optDrawEndpoints")?.checked ?? false,
+    label_size: parseFloat(document.getElementById("optLabelSize")?.value) || 2.0,
+    close_tolerance: parseFloat(document.getElementById("optCloseTol")?.value) || 0.5,
   };
 
   try {
@@ -2477,9 +3223,9 @@ async function doGenerateDxf() {
     status.innerHTML = `<span class="text-accent2"> ${escHtml(res.filename)}</span>`;
     setTimeout(() => {
       const dir = res.saved_to.substring(0, res.saved_to.lastIndexOf("\\"));
-      apiFetch("/open-folder", "POST", { path: dir }).catch(()=>{});
+      apiFetch("/open-folder", "POST", { path: dir }).catch(() => { });
     }, 500);
-  } catch(e) {
+  } catch (e) {
     showToast("Error: " + e.message, "error");
   } finally {
     btn.disabled = false;
@@ -2491,7 +3237,7 @@ async function doGenerateDxf() {
 function updateS6Sketch() {
   const calls = state.parsedCalls;
   const sketchWrap = document.getElementById("s6SketchWrap");
-  const noSketch   = document.getElementById("s6NoSketch");
+  const noSketch = document.getElementById("s6NoSketch");
 
   if (!calls.length) {
     sketchWrap.classList.add("hidden");
@@ -2503,53 +3249,53 @@ function updateS6Sketch() {
   sketchWrap.classList.remove("hidden");
   noSketch.classList.add("hidden");
 
-  let x=0, y=0;
-  const pts = [[0,0]];
+  let x = 0, y = 0;
+  const pts = [[0, 0]];
   calls.forEach(c => {
-    const az = c.azimuth*Math.PI/180;
-    x += c.distance*Math.sin(az);
-    y += c.distance*Math.cos(az);
+    const az = c.azimuth * Math.PI / 180;
+    x += c.distance * Math.sin(az);
+    y += c.distance * Math.cos(az);
     pts.push([+x.toFixed(4), +y.toFixed(4)]);
   });
 
   // Area (Shoelace) & Perimeter
-  let area=0, perim=0;
-  for (let i=0; i<pts.length-1; i++) {
-    area += pts[i][0]*pts[i+1][1] - pts[i+1][0]*pts[i][1];
-    perim += Math.hypot(pts[i+1][0]-pts[i][0], pts[i+1][1]-pts[i][1]);
+  let area = 0, perim = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    area += pts[i][0] * pts[i + 1][1] - pts[i + 1][0] * pts[i][1];
+    perim += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
   }
-  const last = pts[pts.length-1];
-  area += last[0]*pts[0][1] - pts[0][0]*last[1];
-  area = Math.abs(area)/2;
+  const last = pts[pts.length - 1];
+  area += last[0] * pts[0][1] - pts[0][0] * last[1];
+  area = Math.abs(area) / 2;
 
   document.getElementById("s6AreaStats").innerHTML =
-    `<span class="text-accent2 font-bold">${(area/43560).toFixed(4)} ac</span> &nbsp;&nbsp; ${area.toFixed(0)} sq ft &nbsp;&nbsp; Perim: ${perim.toFixed(1)} ft`;
+    `<span class="text-accent2 font-bold">${(area / 43560).toFixed(4)} ac</span> &nbsp;&nbsp; ${area.toFixed(0)} sq ft &nbsp;&nbsp; Perim: ${perim.toFixed(1)} ft`;
 
   // SVG
   const svg = document.getElementById("s6SketchSvg");
-  const W = svg.clientWidth||420, H=300;
-  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const W = svg.clientWidth || 420, H = 300;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
 
-  const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
-  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
-  const pad=28, scaleX=(maxX===minX)?1:(W-pad*2)/(maxX-minX), scaleY=(maxY===minY)?1:(H-pad*2)/(maxY-minY);
-  const scale=Math.min(scaleX,scaleY);
-  const tx=p=>(p[0]-minX)*scale+pad, ty=p=>H-((p[1]-minY)*scale+pad);
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const pad = 28, scaleX = (maxX === minX) ? 1 : (W - pad * 2) / (maxX - minX), scaleY = (maxY === minY) ? 1 : (H - pad * 2) / (maxY - minY);
+  const scale = Math.min(scaleX, scaleY);
+  const tx = p => (p[0] - minX) * scale + pad, ty = p => H - ((p[1] - minY) * scale + pad);
 
-  const polyPts = pts.map(p=>`${tx(p).toFixed(1)},${ty(p).toFixed(1)}`).join(" ");
-  const isClosed = Math.hypot(last[0]-pts[0][0],last[1]-pts[0][1])<0.5;
+  const polyPts = pts.map(p => `${tx(p).toFixed(1)},${ty(p).toFixed(1)}`).join(" ");
+  const isClosed = Math.hypot(last[0] - pts[0][0], last[1] - pts[0][1]) < 0.5;
 
   let s = `<rect width="${W}" height="${H}" fill="rgba(0,0,0,0.1)" rx="4"/>`;
-  s += `<line x1="0" y1="${H/2}" x2="${W}" y2="${H/2}" stroke="#ffffff06" stroke-width="1"/>`;
-  s += `<line x1="${W/2}" y1="0" x2="${W/2}" y2="${H}" stroke="#ffffff06" stroke-width="1"/>`;
+  s += `<line x1="0" y1="${H / 2}" x2="${W}" y2="${H / 2}" stroke="#ffffff06" stroke-width="1"/>`;
+  s += `<line x1="${W / 2}" y1="0" x2="${W / 2}" y2="${H}" stroke="#ffffff06" stroke-width="1"/>`;
   if (!isClosed) s += `<line x1="${tx(last).toFixed(1)}" y1="${ty(last).toFixed(1)}" x2="${tx(pts[0]).toFixed(1)}" y2="${ty(pts[0]).toFixed(1)}" stroke="#ff7b72" stroke-width="1.5" stroke-dasharray="4,3" opacity=".7"/>`;
   s += `<polygon points="${polyPts}" fill="rgba(45,138,110,0.1)" stroke="#2d8a6e" stroke-width="2" stroke-linejoin="round"/>`;
   s += `<circle cx="${tx(pts[0]).toFixed(1)}" cy="${ty(pts[0]).toFixed(1)}" r="5" fill="#2d8a6e" stroke="#56d3a0" stroke-width="1.5"/>`;
   if (!isClosed) s += `<circle cx="${tx(last).toFixed(1)}" cy="${ty(last).toFixed(1)}" r="5" fill="#ff7b72" opacity=".8"/>`;
   // North arrow
-  s += `<text x="${W-16}" y="22" font-size="11" fill="#79a8e0" font-family="monospace" text-anchor="middle">N</text>`;
-  s += `<line x1="${W-16}" y1="26" x2="${W-16}" y2="42" stroke="#79a8e0" stroke-width="1.5"/>`;
-  s += `<polygon points="${W-16},26 ${W-20},34 ${W-12},34" fill="#79a8e0"/>`;
+  s += `<text x="${W - 16}" y="22" font-size="11" fill="#79a8e0" font-family="monospace" text-anchor="middle">N</text>`;
+  s += `<line x1="${W - 16}" y1="26" x2="${W - 16}" y2="42" stroke="#79a8e0" stroke-width="1.5"/>`;
+  s += `<polygon points="${W - 16},26 ${W - 20},34 ${W - 12},34" fill="#79a8e0"/>`;
   svg.innerHTML = s;
 }
 // 
@@ -2564,7 +3310,7 @@ function closeSettingsModal() {
 }
 
 async function loadDriveStatus() {
-  const dot  = document.getElementById("driveStatusDot");
+  const dot = document.getElementById("driveStatusDot");
   const text = document.getElementById("driveStatusText");
   if (!dot || !text) return;
   text.textContent = "Checking...";
@@ -2572,30 +3318,30 @@ async function loadDriveStatus() {
   try {
     const res = await apiFetch("/drive-status");
     updateDriveStatusUI(res);
-  } catch(e) {
+  } catch (e) {
     text.textContent = "Cannot reach server";
     dot.style.background = "var(--danger)";
   }
 }
 
 function updateDriveStatusUI(res) {
-  const dot  = document.getElementById("driveStatusDot");
+  const dot = document.getElementById("driveStatusDot");
   const text = document.getElementById("driveStatusText");
   if (!dot || !text) return;
   if (res.drive_ok) {
     dot.style.background = "var(--success2)";
-    dot.style.boxShadow  = "0 0 6px var(--success2)";
+    dot.style.boxShadow = "0 0 6px var(--success2)";
     text.innerHTML = `<span style="color:var(--accent2);font-weight:700">${res.drive}:\\</span> &nbsp; <span style="color:var(--text3);font-size:12px">${res.survey_path}</span>`;
     document.getElementById("driveOverrideInput").value = res.drive || "";
   } else {
     dot.style.background = "var(--danger)";
-    dot.style.boxShadow  = "none";
+    dot.style.boxShadow = "none";
     text.innerHTML = `<span style="color:#ff7b72">Drive not found</span> <span style="color:var(--text3);font-size:12px"> — plug in the drive then click ⟳ Rescan</span>`;
   }
 }
 
 async function rescanDrive() {
-  const btn  = document.getElementById("btnRescanDrive");
+  const btn = document.getElementById("btnRescanDrive");
   const text = document.getElementById("driveStatusText");
   btn.disabled = true;
   btn.textContent = "Scanning...";
@@ -2605,7 +3351,7 @@ async function rescanDrive() {
     updateDriveStatusUI(res);
     if (res.drive_ok) showToast(`Drive found: ${res.drive}:\\`, "success");
     else showToast("Drive not found. Plug it in and try again.", "warn");
-  } catch(e) {
+  } catch (e) {
     showToast("Scan error: " + e.message, "error");
   } finally {
     btn.disabled = false;
@@ -2623,13 +3369,13 @@ async function pinDrive(clear = false) {
     } else {
       showToast("Override failed: " + res.error, "error");
     }
-  } catch(e) {
+  } catch (e) {
     showToast("Error: " + e.message, "error");
   }
 }
 
 async function saveConfig() {
-  const url  = document.getElementById("cfgUrl").value.trim();
+  const url = document.getElementById("cfgUrl").value.trim();
   const user = document.getElementById("cfgUser").value.trim();
   const pass = document.getElementById("cfgPass").value;
   const status = document.getElementById("cfgStatus");
@@ -2659,7 +3405,7 @@ async function saveConfig() {
       showToast("Login failed: " + loginRes.error, "error");
       status.textContent = "Login failed: " + loginRes.error;
     }
-  } catch(e) {
+  } catch (e) {
     showToast("Connection error: " + e.message, "error");
     status.textContent = e.message;
   } finally {
@@ -2673,7 +3419,7 @@ async function saveConfig() {
 // 
 async function checkLogin() {
   try {
-    const url  = document.getElementById("cfgUrl").value.trim();
+    const url = document.getElementById("cfgUrl").value.trim();
     const user = document.getElementById("cfgUser").value.trim();
     const pass = document.getElementById("cfgPass").value;
     if (!user || !pass) {
@@ -2692,15 +3438,15 @@ async function checkLogin() {
       // Don't auto-open modal; user can click Settings button
       showToast("Login failed: " + (res.error || "Check username/password in Settings"), "warn");
     }
-  } catch(e) {
+  } catch (e) {
     setStatusDot("offline", "Offline");
   }
 }
 
 function setStatusDot(mode, text) {
-  const dot  = document.querySelector(".status-dot");
+  const dot = document.querySelector(".status-dot");
   const span = document.getElementById("statusText");
-  if (dot)  dot.className = `status-dot ${mode}`;
+  if (dot) dot.className = `status-dot ${mode}`;
   if (span) span.textContent = text;
 }
 
@@ -2711,12 +3457,12 @@ function updateGlobalProgress() {
   const rs = state.researchSession;
   if (!rs) return;
 
-  const all    = rs.subjects;
-  const deeds  = all.filter(s => s.deed_saved).length;
-  const plats  = all.filter(s => s.plat_saved).length;
-  const total  = all.length * 2; // each subject needs deed + plat
-  const done   = deeds + plats;
-  const pct    = total > 0 ? Math.round((done / total) * 100) : 0;
+  const all = rs.subjects;
+  const deeds = all.filter(s => s.deed_saved).length;
+  const plats = all.filter(s => s.plat_saved).length;
+  const total = all.length * 2; // each subject needs deed + plat
+  const done = deeds + plats;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
   // Reveal the footer stats bar (hidden on first load until a session exists)
   const statsBar = document.getElementById("footerStats");
@@ -2733,19 +3479,188 @@ function updateGlobalProgress() {
 async function exportSession() {
   const rs = state.researchSession;
   if (!rs) { showToast("No session loaded", "warn"); return; }
-  const headers = ["Job#","Name","Type","Deed","Plat","Status","Notes"];
-  const rows = rs.subjects.map(s => [
-    rs.job_number, s.name, s.type,
-    s.deed_saved?"Yes":"No", s.plat_saved?"Yes":"No",
-    s.status||"pending", (s.notes||"").replace(/"/g,'""')
-  ]);
-  const csv = [headers,...rows].map(r=>r.map(v=>`"${v}"`).join(",")).join("\n");
-  const blob = new Blob([csv],{type:"text/csv"});
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href=url; a.download=`Job${rs.job_number}_Research.csv`; a.click();
+
+  const line = (ch, len = 72) => ch.repeat(len);
+  const pad = (label, val) => `  ${(label + ':').padEnd(22)} ${val || '—'}`;
+  const now = new Date().toLocaleString();
+
+  const lines = [];
+  lines.push(line('═'));
+  lines.push(`  DEED & PLAT RESEARCH REPORT`);
+  lines.push(`  Red Tail Surveying`);
+  lines.push(line('═'));
+  lines.push('');
+  lines.push(pad('Job Number', rs.job_number));
+  lines.push(pad('Client', rs.client_name));
+  lines.push(pad('Job Type', rs.job_type));
+  lines.push(pad('Generated', now));
+  lines.push('');
+
+  // ── Progress summary ──
+  const subjects = rs.subjects || [];
+  const deeds = subjects.filter(s => s.deed_saved).length;
+  const plats = subjects.filter(s => s.plat_saved).length;
+  const done = subjects.filter(s => s.deed_saved && s.plat_saved).length;
+  lines.push(pad('Progress', `${done}/${subjects.length} complete  |  Deeds: ${deeds}  Plats: ${plats}`));
+  lines.push('');
+
+  // ── Deed detail (from current session state) ──
+  const detail = state.selectedDetail || {};
+  const clientSubj = subjects.find(s => s.type === 'client') || {};
+
+  const grantor = detail['Grantor'] || '';
+  const grantee = detail['Grantee'] || '';
+  const location = detail['Location'] || detail['Book/Page'] || '';
+  const recordedDate = detail['Recorded Date'] || detail['Record Date'] || detail['Instrument Date'] || '';
+  const instrumentType = detail['Document Type'] || detail['Type'] || detail['Instrument Type'] || '';
+  const consideration = detail['Consideration'] || detail['Amount'] || '';
+
+  if (grantor || grantee) {
+    lines.push(line('─'));
+    lines.push('  CLIENT DEED INFORMATION');
+    lines.push(line('─'));
+    if (grantor) lines.push(pad('Grantor', grantor));
+    if (grantee) lines.push(pad('Grantee', grantee));
+    if (instrumentType) lines.push(pad('Instrument Type', instrumentType));
+    if (location) lines.push(pad('Book / Page', location));
+    if (recordedDate) lines.push(pad('Recorded Date', recordedDate));
+    if (consideration) lines.push(pad('Consideration', consideration));
+
+    // Document numbers
+    ['Document Number', 'Instrument Number', 'GF Number', 'GF#', 'File Number'].forEach(k => {
+      if (detail[k]) lines.push(pad(k, detail[k]));
+    });
+
+    // TRS references
+    const trsRefs = detail._trs || clientSubj.trs_refs || [];
+    if (trsRefs.length) {
+      lines.push(pad('TRS Reference(s)', trsRefs.map(t => typeof t === 'string' ? t : t.trs).join('; ')));
+    }
+
+    // Acreage
+    if (clientSubj.area_acres) {
+      lines.push(pad('Area', `${clientSubj.area_acres} acres`));
+    }
+
+    lines.push('');
+  }
+
+  // ── Property description ──
+  const propDesc = clientSubj.property_description || '';
+  if (propDesc) {
+    lines.push(line('─'));
+    lines.push('  PROPERTY LEGAL DESCRIPTION');
+    lines.push(line('─'));
+    // Word-wrap to ~70 chars
+    const words = propDesc.split(/\s+/);
+    let currentLine = '  ';
+    words.forEach(word => {
+      if ((currentLine + ' ' + word).length > 74) {
+        lines.push(currentLine);
+        currentLine = '  ' + word;
+      } else {
+        currentLine += (currentLine.length > 2 ? ' ' : '') + word;
+      }
+    });
+    if (currentLine.trim()) lines.push(currentLine);
+    lines.push('');
+  }
+
+  // ── Plat references ──
+  const platHint = state._platHint || {};
+  if (platHint.cabRefs?.length || platHint.bookPageMatches?.length || platHint.platNameMatches?.length || platHint.surveyorRefs?.length) {
+    lines.push(line('─'));
+    lines.push('  PLAT REFERENCES (from deed)');
+    lines.push(line('─'));
+    if (platHint.cabRefs?.length) lines.push(pad('Cabinet Refs', platHint.cabRefs.join(', ')));
+    if (platHint.bookPageMatches?.length) lines.push(pad('Book/Page Refs', platHint.bookPageMatches.join(', ')));
+    if (platHint.platNameMatches?.length) lines.push(pad('Plat Name(s)', platHint.platNameMatches.join(', ')));
+    if (platHint.surveyorRefs?.length) lines.push(pad('Surveyor(s)', platHint.surveyorRefs.join(', ')));
+    lines.push('');
+  }
+
+  // ── Bearing / distance calls table ──
+  const calls = state.parsedCalls || [];
+  if (calls.length) {
+    lines.push(line('─'));
+    lines.push('  METES & BOUNDS CALLS');
+    lines.push(line('─'));
+    lines.push(`  ${'#'.padStart(3)}  ${'Bearing'.padEnd(24)}  ${'Distance'.padStart(12)}  Type`);
+    lines.push(`  ${'-'.repeat(3)}  ${'-'.repeat(24)}  ${'-'.repeat(12)}  ${'-'.repeat(8)}`);
+    calls.forEach((c, i) => {
+      const num = String(i + 1).padStart(3);
+      const brg = (c.bearing_label || c.bearing_raw || '—').padEnd(24);
+      const dist = (c.distance?.toFixed(2) + "'").padStart(12);
+      const type = (c.type || 'straight').padEnd(8);
+      lines.push(`  ${num}  ${brg}  ${dist}  ${type}`);
+    });
+
+    // Closure error
+    let closureErr = 0;
+    if (calls.length >= 2) {
+      let x = 0, y = 0;
+      calls.forEach(c => {
+        const az = (c.azimuth || 0) * Math.PI / 180;
+        const d = c.distance || 0;
+        x += d * Math.sin(az);
+        y += d * Math.cos(az);
+      });
+      closureErr = Math.hypot(x, y);
+    }
+    lines.push('');
+    lines.push(pad('Total Calls', calls.length));
+    lines.push(pad('Closure Error', closureErr < 0.01 ? 'PERFECT CLOSURE' : `${closureErr.toFixed(4)} ft`));
+
+    // Area from shoelace
+    let x = 0, y = 0;
+    const pts = [[0, 0]];
+    calls.forEach(c => {
+      const az = (c.azimuth || 0) * Math.PI / 180;
+      x += (c.distance || 0) * Math.sin(az);
+      y += (c.distance || 0) * Math.cos(az);
+      pts.push([x, y]);
+    });
+    let area = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      area += pts[i][0] * pts[i + 1][1] - pts[i + 1][0] * pts[i][1];
+    }
+    area += pts[pts.length - 1][0] * pts[0][1] - pts[0][0] * pts[pts.length - 1][1];
+    area = Math.abs(area) / 2;
+    lines.push(pad('Computed Area', `${(area / 43560).toFixed(4)} acres  (${area.toFixed(0)} sq ft)`));
+    lines.push('');
+  }
+
+  // ── Subject table ──
+  lines.push(line('─'));
+  lines.push('  RESEARCH SUBJECTS');
+  lines.push(line('─'));
+  lines.push(`  ${'Type'.padEnd(10)} ${'Name'.padEnd(30)} ${'Deed'.padEnd(6)} ${'Plat'.padEnd(6)} Status`);
+  lines.push(`  ${'-'.repeat(10)} ${'-'.repeat(30)} ${'-'.repeat(6)} ${'-'.repeat(6)} ${'-'.repeat(10)}`);
+  subjects.forEach(s => {
+    const type = (s.type || 'other').toUpperCase().padEnd(10);
+    const name = (s.name || '—').padEnd(30).substring(0, 30);
+    const deed = (s.deed_saved ? '  ✓ ' : '  ✗ ').padEnd(6);
+    const plat = (s.plat_saved ? '  ✓ ' : '  ✗ ').padEnd(6);
+    const status = (s.status || 'pending').toUpperCase();
+    lines.push(`  ${type} ${name} ${deed} ${plat} ${status}`);
+    if (s.notes) lines.push(`           Notes: ${s.notes}`);
+  });
+  lines.push('');
+
+  // ── Footer ──
+  lines.push(line('═'));
+  lines.push(`  End of Report — Job #${rs.job_number} ${rs.client_name}`);
+  lines.push(line('═'));
+
+  const text = lines.join('\n');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Job${rs.job_number}_${rs.client_name.replace(/[^a-zA-Z0-9]/g, '_')}_Research_Report.txt`;
+  a.click();
   URL.revokeObjectURL(url);
-  showToast("Research summary exported as CSV", "success");
+  showToast("Research report exported", "success");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2753,14 +3668,17 @@ async function exportSession() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _propPicker = {
-  map:           null,   // Leaflet map instance
-  parcelLayer:   null,   // GeoJSON layer
+  map: null,   // Leaflet map instance
+  parcelLayer: null,   // GeoJSON layer
   selectedLayer: null,   // currently clicked polygon layer
   selectedProps: null,   // properties of selected feature
-  geojsonData:   null,   // cached GeoJSON FeatureCollection
-  searchTimer:   null,
+  geojsonData: null,   // cached GeoJSON FeatureCollection
+  searchTimer: null,
   // Stores the chosen parcel so startSession can read it
   confirmedParcel: null,
+  // Source layer filter — default to the KML with better linework
+  sourceFilter: 'TC_Parcels_2024_og.kml',
+  availableSources: [],
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -2808,7 +3726,7 @@ function _initPropPickerMap() {
 
   _propPicker.map = L.map(container, {
     center: [36.6, -105.5],
-    zoom:   11,
+    zoom: 11,
     preferCanvas: true,
     zoomControl: true,
   });
@@ -2825,7 +3743,7 @@ function _initPropPickerMap() {
 // ── Load GeoJSON from backend ─────────────────────────────────────────────────
 
 async function _loadPropPickerMapData() {
-  const countEl  = document.getElementById('propPickerSearchCount');
+  const countEl = document.getElementById('propPickerSearchCount');
   const loaderEl = document.getElementById('propPickerMapLoader');
   countEl.textContent = 'Loading…';
   if (loaderEl) loaderEl.classList.remove('hidden');
@@ -2833,6 +3751,7 @@ async function _loadPropPickerMapData() {
     const res = await apiFetch('/xml/map-geojson', 'POST', {
       highlight_upcs: [],
       max_features: 100000,
+      source_filter: _propPicker.sourceFilter || '',
     });
     if (!res.success) {
       countEl.textContent = 'Error: ' + (res.error || 'Unknown');
@@ -2844,12 +3763,42 @@ async function _loadPropPickerMapData() {
     }
     _propPicker.geojsonData = res.geojson;
     countEl.textContent = res.total.toLocaleString() + ' parcels';
+
+    // Populate source layer dropdown (only once on first load, or when sources change)
+    if (res.sources && res.sources.length) {
+      _propPicker.availableSources = res.sources;
+      _populateSourceDropdown('propPickerSourceFilter', res.sources, _propPicker.sourceFilter);
+    }
+
     _renderPropPickerLayer();
   } catch (e) {
     countEl.textContent = 'Load failed: ' + e.message;
   } finally {
     if (loaderEl) loaderEl.classList.add('hidden');
   }
+}
+
+/** Called when the user changes the Layer dropdown in the Property Picker */
+function onPropPickerSourceChange(value) {
+  _propPicker.sourceFilter = value;
+  _loadPropPickerMapData();
+}
+
+/** Populate a source dropdown with available KML/KMZ source file names */
+function _populateSourceDropdown(selectId, sources, currentValue) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  // Preserve the "All Layers" option and rebuild the rest
+  sel.innerHTML = '<option value="">All Layers</option>';
+  sources.forEach(src => {
+    // Clean up display name: strip folder path from KMZ sources like "Parcel_Maintenance.kmz/doc.kml"
+    const displayName = src.includes('/') ? src.split('/')[0] : src;
+    const opt = document.createElement('option');
+    opt.value = src;
+    opt.textContent = displayName;
+    if (currentValue === src) opt.selected = true;
+    sel.appendChild(opt);
+  });
 }
 
 // ── Build GeoJSON layer ───────────────────────────────────────────────────────
@@ -2863,10 +3812,10 @@ function _renderPropPickerLayer() {
   _propPicker.parcelLayer = L.geoJSON(_propPicker.geojsonData, {
     renderer: _propPicker.renderer,
     style: () => ({
-      fillColor:   '#1a7fd4',
+      fillColor: '#1a7fd4',
       fillOpacity: 0.12,        // low fill — lets street labels show through
-      color:       '#2196f3',   // vivid blue stroke stays crisp on light basemap
-      weight:      1.5,
+      color: '#2196f3',   // vivid blue stroke stays crisp on light basemap
+      weight: 1.5,
     }),
     pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
       radius: 5,
@@ -2891,7 +3840,7 @@ function _renderPropPickerLayer() {
       });
       const p = feature.properties;
       const ttLines = [`<b>${p.owner || '(no name)'}</b>`];
-      if (p.upc)  ttLines.push(`<span style="font-size:10px;opacity:.7">UPC: ${p.upc}</span>`);
+      if (p.upc) ttLines.push(`<span style="font-size:10px;opacity:.7">UPC: ${p.upc}</span>`);
       if (p.book || p.page) ttLines.push(`<span style="font-size:10px;opacity:.65">Bk ${p.book || ''}/${p.page || ''}</span>`);
       if (p.cab_refs_str) ttLines.push(`<span style="font-size:10px;opacity:.65">Cab: ${p.cab_refs_str}</span>`);
       layer.bindTooltip(ttLines.join('<br>'), { sticky: true, className: 'kml-tooltip', opacity: 0.97 });
@@ -2901,7 +3850,7 @@ function _renderPropPickerLayer() {
   try {
     const bounds = _propPicker.parcelLayer.getBounds();
     if (bounds.isValid()) _propPicker.map.fitBounds(bounds, { padding: [20, 20] });
-  } catch (_) {}
+  } catch (_) { }
 
   setTimeout(() => _propPicker.map && _propPicker.map.invalidateSize(), 200);
 }
@@ -2927,11 +3876,13 @@ function _onPropParcelClick(feature, layer) {
   document.getElementById('propPickerOwner').textContent = p.owner || '(No Name)';
 
   let details = '';
-  if (p.upc)          details += `<b>UPC:</b> ${escHtml(p.upc)}<br>`;
+  if (p.upc) details += `<b>UPC:</b> ${escHtml(p.upc)}<br>`;
   if (p.book || p.page) details += `<b>Book/Page:</b> ${escHtml(p.book)}/${escHtml(p.page)}<br>`;
   if (p.cab_refs_str) details += `<b>Cabinet:</b> ${escHtml(p.cab_refs_str)}<br>`;
-  if (p.plat)         details += `<b>Plat:</b> ${escHtml((p.plat || '').substring(0, 60))}${(p.plat || '').length > 60 ? '…' : ''}<br>`;
-  if (!details)       details = '<span style="color:var(--text3);font-style:italic">No extended data.</span>';
+  if (p.plat) details += `<b>Plat:</b> ${escHtml((p.plat || '').substring(0, 60))}${(p.plat || '').length > 60 ? '…' : ''}<br>`;
+  // Address placeholder
+  details += `<div id="propPickerAddress" style="margin-top:4px"><span style="color:var(--text3);font-size:11px">📍 Looking up address…</span></div>`;
+  if (!details) details = '<span style="color:var(--text3);font-style:italic">No extended data.</span>';
 
   document.getElementById('propPickerDetails').innerHTML = details;
   document.getElementById('btnConfirmProperty').disabled = false;
@@ -2939,6 +3890,24 @@ function _onPropParcelClick(feature, layer) {
   // Also highlight this item in the side list (if visible from search)
   document.querySelectorAll('.prop-picker-result-item').forEach(el => {
     el.classList.toggle('selected', el.dataset.upc === p.upc);
+  });
+
+  // ── Async address lookup ───────────────────────────────────────────────
+  const centroid = p._centroid || (feature.geometry && feature.geometry.type === 'Point'
+    ? feature.geometry.coordinates : null);
+  lookupPropertyAddress({ upc: p.upc || '', lat: centroid ? centroid[1] : 0, lon: centroid ? centroid[0] : 0 }).then(res => {
+    const el = document.getElementById('propPickerAddress');
+    if (!el) return;
+    if (res && res.success) {
+      const srcIcon = res.source === 'arcgis' ? '🏛️' : '📍';
+      let html = `<span style="font-size:11px;color:#4ecdc4">${srcIcon} ${escHtml(res.short_address)}</span>`;
+      if (res.legal_description) {
+        html += `<br><span style="font-size:10px;color:var(--text3)" title="${escHtml(res.legal_description)}">📋 ${escHtml(res.legal_description.substring(0, 60))}${res.legal_description.length > 60 ? '…' : ''}</span>`;
+      }
+      el.innerHTML = html;
+    } else {
+      el.innerHTML = `<span style="font-size:10px;color:var(--text3);opacity:.5">📍 Address unavailable</span>`;
+    }
   });
 }
 
@@ -2951,7 +3920,7 @@ function onPropPickerSearch(query) {
 
 async function _doPropPickerSearch(q) {
   const countEl = document.getElementById('propPickerSearchCount');
-  const listEl  = document.getElementById('propPickerList');
+  const listEl = document.getElementById('propPickerList');
 
   if (!q || q.length < 2) {
     // Reset map styles
@@ -3033,7 +4002,7 @@ function selectPropPickerResult(idx) {
         const b = layer.getBounds ? layer.getBounds() : null;
         if (b && b.isValid()) _propPicker.map.fitBounds(b, { padding: [60, 60], maxZoom: 18 });
         else if (p.centroid) _propPicker.map.setView([p.centroid[1], p.centroid[0]], 17);
-      } catch (_) {}
+      } catch (_) { }
     }
   });
 
@@ -3067,7 +4036,7 @@ function propPickerResetView() {
   try {
     const bounds = _propPicker.parcelLayer.getBounds();
     if (bounds.isValid()) _propPicker.map.fitBounds(bounds, { padding: [20, 20] });
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // ── Confirm selection → fills Step 1 form ────────────────────────────────────
@@ -3108,7 +4077,7 @@ function confirmPropertySelection() {
       if (b && b.isValid()) {
         _propPicker.map.flyToBounds(b, { padding: [80, 80], maxZoom: 18, duration: 0.6 });
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   closePropPicker();
@@ -3116,17 +4085,88 @@ function confirmPropertySelection() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PROPERTY ADDRESS LOOKUP  (shared by all map pickers)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _addressCache = {};  // { upc|"ll:lat,lon" : { short_address, source, ... } }
+
+/**
+ * Look up property address for a parcel.
+ * Uses ArcGIS (by UPC) first, then Nominatim (by centroid) as fallback.
+ * Caches results so repeated lookups are instant.
+ * @param {Object} opts  - { upc, lat, lon }
+ * @returns {Promise<Object>}  - { success, short_address, source, ... }
+ */
+async function lookupPropertyAddress(opts) {
+  const upc = (opts.upc || '').trim();
+  const lat = opts.lat || 0;
+  const lon = opts.lon || 0;
+
+  // Check cache
+  const cacheKey = upc ? `upc:${upc}` : `ll:${lat.toFixed(5)},${lon.toFixed(5)}`;
+  if (_addressCache[cacheKey]) return _addressCache[cacheKey];
+
+  try {
+    const res = await apiFetch('/property-address', 'POST', { upc, lat, lon });
+    if (res && res.success) {
+      _addressCache[cacheKey] = res;
+    }
+    return res || { success: false, short_address: '' };
+  } catch (e) {
+    return { success: false, short_address: '', error: e.message };
+  }
+}
+
+/**
+ * Look up address for a KML parcel card and update the chip in-place.
+ */
+async function _lookupKmlCardAddress(pi) {
+  const kmlHits = state._kmlHits;
+  if (!kmlHits || !kmlHits[pi]) return;
+  const p = kmlHits[pi];
+  const el = document.getElementById('kml-addr-' + pi);
+  if (!el) return;
+
+  el.textContent = '📍 Loading…';
+  el.style.opacity = '0.6';
+
+  const centroid = p.centroid || [];
+  const res = await lookupPropertyAddress({
+    upc: p.upc || '',
+    lat: centroid[1] || 0,
+    lon: centroid[0] || 0,
+  });
+
+  if (res && res.success) {
+    const srcIcon = res.source === 'arcgis' ? '🏛️' : '📍';
+    el.innerHTML = `${srcIcon} ${escHtml(res.short_address)}`;
+    el.title = res.legal_description
+      ? `${res.short_address}\n${res.legal_description}`
+      : res.short_address;
+    el.style.opacity = '1';
+    el.style.cursor = 'default';
+    el.onclick = null;
+  } else {
+    el.textContent = '📍 No address';
+    el.style.opacity = '0.4';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // KML PARCEL MAP PICKER  (Leaflet.js)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _kmlMap = {
-  map:          null,   // Leaflet map instance
-  parcelLayer:  null,   // GeoJSON layer for all parcels
-  selectedLayer:null,   // currently selected polygon layer
-  selectedProps:null,   // properties of selected feature
-  geojsonData:  null,   // cached GeoJSON FeatureCollection
-  highlightUpcs:[],     // UPCs to mark as "client"
-  mapAddedNames:[],     // names added this session via the picker
+  map: null,   // Leaflet map instance
+  parcelLayer: null,   // GeoJSON layer for all parcels
+  selectedLayer: null,   // currently selected polygon layer
+  selectedProps: null,   // properties of selected feature
+  geojsonData: null,   // cached GeoJSON FeatureCollection
+  highlightUpcs: [],     // UPCs to mark as "client"
+  mapAddedNames: [],     // names added this session via the picker
+  // Source layer filter — default to the KML with better linework
+  sourceFilter: 'TC_Parcels_2024_og.kml',
+  availableSources: [],
 };
 
 // ── Open modal ──────────────────────────────────────────────────────────────
@@ -3162,7 +4202,7 @@ function _initKmlLeafletMap() {
 
   _kmlMap.map = L.map(container, {
     center: [36.6, -105.5],   // Taos County, NM
-    zoom:   11,
+    zoom: 11,
     zoomControl: true,
     attributionControl: true,
     preferCanvas: true,
@@ -3179,17 +4219,18 @@ function _initKmlLeafletMap() {
 
 // ── Load GeoJSON from backend ────────────────────────────────────────────────
 async function _loadKmlMapData() {
-  const statusEl  = document.getElementById('kmlMapStatus');
-  const loaderEl  = document.getElementById('kmlMapLoader');
-  const countEl   = document.getElementById('kmlMapSearchCount');
+  const statusEl = document.getElementById('kmlMapStatus');
+  const loaderEl = document.getElementById('kmlMapLoader');
+  const countEl = document.getElementById('kmlMapSearchCount');
   statusEl.textContent = 'Loading parcels…';
   if (loaderEl) loaderEl.classList.remove('hidden');
-  if (countEl)  countEl.textContent = '';
+  if (countEl) countEl.textContent = '';
 
   try {
     const res = await apiFetch('/xml/map-geojson', 'POST', {
       highlight_upcs: _kmlMap.highlightUpcs,
-      max_features:   100000,
+      max_features: 100000,
+      source_filter: _kmlMap.sourceFilter || '',
     });
 
     if (!res.success) {
@@ -3206,12 +4247,24 @@ async function _loadKmlMapData() {
     statusEl.textContent = `${res.total.toLocaleString()} parcels loaded`;
     if (countEl) countEl.textContent = res.total.toLocaleString() + ' parcels';
 
+    // Populate source layer dropdown
+    if (res.sources && res.sources.length) {
+      _kmlMap.availableSources = res.sources;
+      _populateSourceDropdown('kmlMapSourceFilter', res.sources, _kmlMap.sourceFilter);
+    }
+
     _renderKmlParcelLayer();
   } catch (e) {
     statusEl.textContent = 'Load failed: ' + e.message;
   } finally {
     if (loaderEl) loaderEl.classList.add('hidden');
   }
+}
+
+/** Called when the user changes the Layer dropdown in the KML Map Picker */
+function onKmlMapSourceChange(value) {
+  _kmlMap.sourceFilter = value;
+  _loadKmlMapData();
 }
 
 // ── Build / replace Leaflet GeoJSON layer ────────────────────────────────────
@@ -3232,16 +4285,16 @@ function _renderKmlParcelLayer() {
     pointToLayer: (feature, latlng) => {
       const fill = _kmlParcelFill(feature, boardNames);
       return L.circleMarker(latlng, {
-        radius:      6,
-        fillColor:   fill,
-        color:       fill,
-        weight:      1.5,
+        radius: 6,
+        fillColor: fill,
+        color: fill,
+        weight: 1.5,
         fillOpacity: 0.75,
       });
     },
     onEachFeature: (feature, layer) => {
       layer.on({
-        click:     e => { L.DomEvent.stopPropagation(e); _onKmlParcelClick(feature, layer); },
+        click: e => { L.DomEvent.stopPropagation(e); _onKmlParcelClick(feature, layer); },
         mouseover: e => {
           if (layer !== _kmlMap.selectedLayer) {
             layer.setStyle && layer.setStyle({ fillOpacity: 0.80, weight: 2.5 });
@@ -3257,7 +4310,7 @@ function _renderKmlParcelLayer() {
       // Enriched tooltip with owner, UPC, book/page, cabinet
       const p = feature.properties;
       const ttLines2 = [`<b>${p.owner || '(no name)'}</b>`];
-      if (p.upc)  ttLines2.push(`<span style="font-size:10px;opacity:.7">UPC: ${p.upc}</span>`);
+      if (p.upc) ttLines2.push(`<span style="font-size:10px;opacity:.7">UPC: ${p.upc}</span>`);
       if (p.book || p.page) ttLines2.push(`<span style="font-size:10px;opacity:.65">Bk ${p.book || ''}/${p.page || ''}</span>`);
       if (p.cab_refs_str) ttLines2.push(`<span style="font-size:10px;opacity:.65">Cab: ${p.cab_refs_str}</span>`);
       layer.bindTooltip(ttLines2.join('<br>'), { sticky: true, className: 'kml-tooltip', opacity: 0.97 });
@@ -3268,7 +4321,7 @@ function _renderKmlParcelLayer() {
   try {
     const bounds = _kmlMap.parcelLayer.getBounds();
     if (bounds.isValid()) _kmlMap.map.fitBounds(bounds, { padding: [20, 20] });
-  } catch (_) {}
+  } catch (_) { }
 
   // Invalidate size now that modal is fully displayed
   setTimeout(() => _kmlMap.map && _kmlMap.map.invalidateSize(), 150);
@@ -3286,14 +4339,14 @@ function _kmlParcelFill(feature, boardNames) {
 }
 
 function _kmlParcelStyle(feature, boardNames) {
-  const fill      = _kmlParcelFill(feature, boardNames);
+  const fill = _kmlParcelFill(feature, boardNames);
   const highlight = feature.properties.highlight;
-  const onBoard   = boardNames.has((feature.properties.owner || '').toLowerCase());
+  const onBoard = boardNames.has((feature.properties.owner || '').toLowerCase());
   return {
-    fillColor:   fill,
+    fillColor: fill,
     fillOpacity: highlight ? 0.50 : onBoard ? 0.35 : 0.12,  // low fill lets labels show through
-    color:       highlight ? '#f0c040' : onBoard ? '#b080e0' : '#2196f3',  // vivid strokes on light basemap
-    weight:      highlight ? 2.5 : onBoard ? 2.0 : 1.5,
+    color: highlight ? '#f0c040' : onBoard ? '#b080e0' : '#2196f3',  // vivid strokes on light basemap
+    weight: highlight ? 2.5 : onBoard ? 2.0 : 1.5,
   };
 }
 
@@ -3317,11 +4370,11 @@ function _addClientPulseRings() {
       const ring = document.createElement('div');
       ring.className = 'parcel-pulse-ring';
       ring.style.left = pt.x + 'px';
-      ring.style.top  = pt.y + 'px';
+      ring.style.top = pt.y + 'px';
       // Find the map container element
       const pane = _kmlMap.map.getPanes().overlayPane;
       pane.appendChild(ring);
-    } catch (_) {}
+    } catch (_) { }
   });
 }
 
@@ -3341,10 +4394,10 @@ function _onKmlParcelClick(feature, layer) {
 
   // Highlight selected
   layer.setStyle && layer.setStyle({
-    fillColor:   '#56d3a0',
+    fillColor: '#56d3a0',
     fillOpacity: 0.65,
-    color:       '#56d3a0',
-    weight:      2.5,
+    color: '#56d3a0',
+    weight: 2.5,
   });
 
   _kmlMap.selectedLayer = layer;
@@ -3355,17 +4408,46 @@ function _onKmlParcelClick(feature, layer) {
   document.getElementById('kmlInfoOwner').textContent = p.owner || '(No Name)';
 
   let details = '';
-  if (p.upc)          details += `<b>UPC:</b> ${escHtml(p.upc)}<br>`;
+  if (p.upc) details += `<b>UPC:</b> ${escHtml(p.upc)}<br>`;
   if (p.book || p.page) details += `<b>Book/Page:</b> ${escHtml(p.book)}/${escHtml(p.page)}<br>`;
   if (p.cab_refs_str) details += `<b>Cabinet:</b> ${escHtml(p.cab_refs_str)}<br>`;
-  if (p.plat)         details += `<b>Plat:</b> ${escHtml(p.plat.substring(0, 80))}${p.plat.length > 80 ? '…' : ''}<br>`;
-  if (!details)       details = '<span style="color:var(--text3);font-style:italic">No extended data.</span>';
+  if (p.plat) details += `<b>Plat:</b> ${escHtml(p.plat.substring(0, 80))}${p.plat.length > 80 ? '…' : ''}<br>`;
+  // Address placeholder — will be filled async
+  details += `<div id="kmlInfoAddress" style="margin-top:4px"><span style="color:var(--text3);font-size:11px">📍 Looking up address…</span></div>`;
+  if (!details) details = '<span style="color:var(--text3);font-style:italic">No extended data.</span>';
 
   document.getElementById('kmlInfoDetails').innerHTML = details;
 
   // Enable action buttons
   document.getElementById('btnKmlAddAdjoiner').disabled = false;
-  document.getElementById('btnKmlMarkClient').disabled  = false;
+  document.getElementById('btnKmlMarkClient').disabled = false;
+
+  // ── Async address lookup ───────────────────────────────────────────────
+  const centroid = p._centroid || (feature.geometry && feature.geometry.type === 'Point'
+    ? feature.geometry.coordinates : null);
+  const addrLat = centroid ? centroid[1] : 0;
+  const addrLon = centroid ? centroid[0] : 0;
+  lookupPropertyAddress({ upc: p.upc || '', lat: addrLat, lon: addrLon }).then(res => {
+    const el = document.getElementById('kmlInfoAddress');
+    if (!el) return;
+    if (res && res.success) {
+      const srcIcon = res.source === 'arcgis' ? '🏛️' : '📍';
+      const srcLabel = res.source === 'arcgis' ? 'Assessor' : 'OSM';
+      let html = `<span style="font-size:11px;color:#4ecdc4">${srcIcon} ${escHtml(res.short_address)}</span>`;
+      if (res.legal_description) {
+        html += `<br><span style="font-size:10px;color:var(--text3)" title="${escHtml(res.legal_description)}">📋 ${escHtml(res.legal_description.substring(0, 70))}${res.legal_description.length > 70 ? '…' : ''}</span>`;
+      }
+      if (res.owner_official) {
+        html += `<br><span style="font-size:10px;color:var(--text3)">👤 ${escHtml(res.owner_official)} <span style="opacity:.5">(assessor)</span></span>`;
+      }
+      if (res.zipcode) {
+        html += ` <span style="font-size:10px;color:var(--text3)">· ${escHtml(res.zipcode)}</span>`;
+      }
+      el.innerHTML = html;
+    } else {
+      el.innerHTML = `<span style="font-size:10px;color:var(--text3);opacity:.5">📍 Address unavailable</span>`;
+    }
+  });
 }
 
 // ── Action: Add as Adjoiner ──────────────────────────────────────────────────
@@ -3374,25 +4456,25 @@ async function kmlAddSelectedAsAdjoiner() {
   const name = (_kmlMap.selectedProps.owner || '').trim();
   if (!name) { showToast('No owner name for this parcel', 'warn'); return; }
 
-  await addFoundAdjoiner(name);
+  const ok = await addFoundAdjoiner(name);
 
-  // Track in picker's added list
-  if (!_kmlMap.mapAddedNames.includes(name)) {
-    _kmlMap.mapAddedNames.push(name);
-    _updateKmlAddedList();
+  // Only update the visual list and re-colour if the add actually succeeded
+  if (ok) {
+    // Track in picker's added list
+    if (!_kmlMap.mapAddedNames.includes(name)) {
+      _kmlMap.mapAddedNames.push(name);
+      _updateKmlAddedList();
+    }
+
+    // Re-colour the selected polygon to board colour
+    _kmlMap.selectedLayer && _kmlMap.selectedLayer.setStyle &&
+      _kmlMap.selectedLayer.setStyle({
+        fillColor: '#b080e0',
+        fillOpacity: 0.55,
+        color: '#b080e0',
+        weight: 2,
+      });
   }
-
-  // Re-colour the selected polygon to board colour
-  const boardNames = new Set(
-    (state.researchSession?.subjects || []).map(s => s.name.toLowerCase())
-  );
-  _kmlMap.selectedLayer && _kmlMap.selectedLayer.setStyle &&
-    _kmlMap.selectedLayer.setStyle({
-      fillColor:   '#b080e0',
-      fillOpacity: 0.55,
-      color:       '#b080e0',
-      weight:      2,
-    });
 }
 
 // ── Action: Mark as Client Parcel ────────────────────────────────────────────
@@ -3407,10 +4489,10 @@ function kmlMarkSelectedAsClient() {
 
   // Re-colour just this selected layer
   _kmlMap.selectedLayer && _kmlMap.selectedLayer.setStyle && _kmlMap.selectedLayer.setStyle({
-    fillColor:   '#e3c55a',
+    fillColor: '#e3c55a',
     fillOpacity: 0.55,
-    color:       '#e3c55a',
-    weight:      2.5,
+    color: '#e3c55a',
+    weight: 2.5,
   });
 
   // Patch the feature properties so future re-renders respect it
@@ -3429,8 +4511,8 @@ function kmlMapOwnerSearch(query) {
 
 function _doKmlOwnerSearch(q) {
   if (!_kmlMap.parcelLayer) return;
-  const statusEl  = document.getElementById('kmlMapStatus');
-  const countEl   = document.getElementById('kmlMapSearchCount');
+  const statusEl = document.getElementById('kmlMapStatus');
+  const countEl = document.getElementById('kmlMapSearchCount');
 
   if (!q) {
     // Reset all styles
@@ -3454,17 +4536,17 @@ function _doKmlOwnerSearch(q) {
     const f = layer.feature;
     if (!f || !layer.setStyle) return;
     const owner = (f.properties?.owner || '').toLowerCase();
-    const match  = owner.includes(q);
+    const match = owner.includes(q);
     if (match) {
       hits++;
-      layer.setStyle({ fillColor:'#56d3a0', fillOpacity:0.75, color:'#56d3a0', weight:2 });
+      layer.setStyle({ fillColor: '#56d3a0', fillOpacity: 0.75, color: '#56d3a0', weight: 2 });
       try {
         const b = layer.getBounds?.();
         if (b && firstHitBounds.length < 5) firstHitBounds.push(b);
-      } catch (_) {}
+      } catch (_) { }
     } else {
       // Dim-out style — visible outline on dark tiles, very low fill
-      layer.setStyle({ fillColor:'#4facfe', fillOpacity:0.04, color:'rgba(79,172,254,0.15)', weight:0.8 });
+      layer.setStyle({ fillColor: '#4facfe', fillOpacity: 0.04, color: 'rgba(79,172,254,0.15)', weight: 0.8 });
     }
   });
 
@@ -3478,7 +4560,7 @@ function _doKmlOwnerSearch(q) {
       let combined = firstHitBounds[0];
       firstHitBounds.slice(1).forEach(b => { combined = combined.extend(b); });
       _kmlMap.map.fitBounds(combined, { padding: [40, 40], maxZoom: 16 });
-    } catch (_) {}
+    } catch (_) { }
   }
 }
 
@@ -3492,7 +4574,7 @@ function kmlMapResetView() {
   try {
     const bounds = _kmlMap.parcelLayer.getBounds();
     if (bounds.isValid()) _kmlMap.map.fitBounds(bounds, { padding: [20, 20] });
-  } catch (_) {}
+  } catch (_) { }
 }
 
 // ── "Added this session" sidebar list ───────────────────────────────────────
@@ -3508,22 +4590,303 @@ function _updateKmlAddedList() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PLAT PREVIEW PANEL (Feature #1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Show plat preview panel with a rendered image from the backend */
+function showPlatPreview(filePath, filename, saveAction) {
+  const panel = document.getElementById('platPreviewPanel');
+  const body = document.getElementById('platPreviewBody');
+  const title = document.getElementById('platPreviewTitle');
+  const actions = document.getElementById('platPreviewActions');
+
+  title.textContent = '📄 ' + (filename || 'Plat Preview');
+  body.innerHTML = '<div class="loading-state"><div class="spinner"></div> Rendering PDF…</div>';
+
+  // Build action buttons
+  let actionsHtml = '';
+  if (saveAction) {
+    actionsHtml += `<button class="btn btn-success flex-1" onclick="${saveAction}">⬇ Save to Project</button>`;
+  }
+  actionsHtml += `<button class="btn btn-outline flex-1" onclick="openFile('${escHtml(filePath).replace(/'/g, "\\'")}')">📂 Open Externally</button>`;
+  actionsHtml += `<button class="btn btn-outline" onclick="closePlatPreview()">Close</button>`;
+  actions.innerHTML = actionsHtml;
+
+  // Open the panel
+  panel.classList.add('open');
+
+  // Load preview image from backend
+  const url = `/api/preview-pdf?path=${encodeURIComponent(filePath)}`;
+  const img = new Image();
+  img.onload = () => {
+    body.innerHTML = '';
+    body.appendChild(img);
+  };
+  img.onerror = () => {
+    body.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠️</div><p>Could not render PDF preview.<br>Try opening the file externally.</p></div>';
+  };
+  img.src = url;
+  img.alt = filename || 'Plat PDF preview';
+  img.style.cssText = 'max-width:100%;cursor:zoom-in;';
+  img.onclick = () => { window.open(url, '_blank'); };
+}
+
+/** Close the plat preview panel */
+function closePlatPreview() {
+  document.getElementById('platPreviewPanel').classList.remove('open');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FILE BADGES IN CONTEXT BAR (Feature #6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function updateFileBadges() {
+  const container = document.getElementById('ctxFileBadges');
+  if (!container || !state.researchSession) { if (container) container.innerHTML = ''; return; }
+
+  const client = state.researchSession.subjects.find(s => s.type === 'client');
+  if (!client) { container.innerHTML = ''; return; }
+
+  let html = '';
+  if (client.deed_saved && client.deed_path) {
+    const fname = client.deed_path.split(/[/\\]/).pop();
+    html += `<span class="file-badge file-badge-deed" onclick="openFile('${escHtml(client.deed_path).replace(/'/g, "\\'")}')" title="${escHtml(client.deed_path)}">✅ ${escHtml(fname)}</span>`;
+  }
+  if (client.plat_saved && client.plat_path) {
+    const fname = client.plat_path.split(/[/\\]/).pop();
+    html += `<span class="file-badge file-badge-plat" onclick="openFile('${escHtml(client.plat_path).replace(/'/g, "\\'")}')" title="${escHtml(client.plat_path)}">📄 ${escHtml(fname)}</span>`;
+  }
+  container.innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIDENCE SCORING (Feature #7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _calcPlatConfidence(hit) {
+  const strat = hit.strategy || '';
+  if (strat === 'doc_number') return 97;
+  if (strat === 'kml_cab_ref') return 90;
+  if (strat === 'deed_cab_ref') return 82;
+  if (strat === 'client_name') return 65;
+  if (strat === 'prior_owner') return 55;
+  if (strat === 'name_match') return 35;
+  if (strat === 'page_ref') return 25;
+  return 20;
+}
+
+function _confidenceRingHtml(pct) {
+  const r = 15, circ = 2 * Math.PI * r;
+  const offset = circ * (1 - pct / 100);
+  const cls = pct >= 80 ? 'confidence-high' : pct >= 50 ? 'confidence-med' : 'confidence-low';
+  const strokeColor = pct >= 80 ? '#56d3a0' : pct >= 50 ? '#e3c55a' : '#6e7681';
+  return `<div class="confidence-ring">
+    <svg width="38" height="38" viewBox="0 0 38 38">
+      <circle cx="19" cy="19" r="${r}" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3"/>
+      <circle cx="19" cy="19" r="${r}" fill="none" stroke="${strokeColor}" stroke-width="3"
+        stroke-dasharray="${circ}" stroke-dashoffset="${offset}" stroke-linecap="round"
+        style="transition: stroke-dashoffset 0.6s ease"/>
+    </svg>
+    <div class="confidence-ring-text ${cls}">${pct}</div>
+  </div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SESSION SYNC GUARD (Feature #5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Auto-persist session every 60 seconds to reduce drift
+setInterval(() => {
+  if (state.researchSession) {
+    persistSession().catch(() => { });
+  }
+}, 60000);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DARK / LIGHT THEME TOGGLE (Feature #11)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function toggleTheme() {
+  const isDark = document.getElementById('optDarkTheme')?.checked ?? true;
+  if (isDark) {
+    document.documentElement.removeAttribute('data-theme');
+  } else {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+  localStorage.setItem('dph_theme', isDark ? 'dark' : 'light');
+}
+
+// Restore theme on load
+(function _restoreTheme() {
+  const saved = localStorage.getItem('dph_theme');
+  if (saved === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    setTimeout(() => {
+      const cb = document.getElementById('optDarkTheme');
+      if (cb) cb.checked = false;
+    }, 500);
+  }
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHAIN-OF-TITLE AUTO-FOLLOW (Feature #3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function runChainOfTitle() {
+  const d = state.selectedDetail;
+  if (!d) { showToast('Select a deed first', 'warn'); return; }
+
+  const grantor = d.Grantor || d.grantor || state.selectedDoc?.grantor || '';
+  if (!grantor) { showToast('No grantor found in deed to trace', 'warn'); return; }
+
+  // Create/show the chain timeline container below the deed detail
+  let chainEl = document.getElementById('chainTimelineWrap');
+  if (!chainEl) {
+    chainEl = document.createElement('div');
+    chainEl.id = 'chainTimelineWrap';
+    chainEl.style.cssText = 'margin-top:12px;';
+    document.getElementById('s2DetailContainer')?.appendChild(chainEl);
+  }
+
+  chainEl.innerHTML = `
+    <div class="glass-card" style="padding:12px 16px">
+      <div class="row-layout justify-between mb-2">
+        <div style="font-size:13px;font-weight:700;color:var(--accent2)">🔗 Chain of Title</div>
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('chainTimelineWrap').remove()">✕ Close</button>
+      </div>
+      <div class="loading-state" style="padding:20px"><div class="spinner"></div> Tracing ownership chain from ${escHtml(grantor.split(',')[0])}…</div>
+    </div>`;
+
+  try {
+    const res = await apiFetch('/chain-search', 'POST', {
+      start_grantor: grantor,
+      max_hops: 10,
+    });
+
+    if (!res.success) throw new Error(res.error);
+
+    const chain = res.chain || [];
+    if (!chain.length) {
+      chainEl.querySelector('.glass-card').innerHTML = `
+        <div class="row-layout justify-between mb-2">
+          <div style="font-size:13px;font-weight:700;color:var(--accent2)">🔗 Chain of Title</div>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('chainTimelineWrap').remove()">✕ Close</button>
+        </div>
+        <div class="empty-state" style="padding:16px"><p>No prior deeds found for ${escHtml(grantor)}</p></div>`;
+      return;
+    }
+
+    let nodesHtml = '';
+    chain.forEach((link, i) => {
+      const isCurrent = i === 0;
+      const hasPlatRef = link.has_plat_ref;
+      const cls = isCurrent ? 'chain-current' : hasPlatRef ? 'chain-plat-found' : '';
+      if (i > 0) nodesHtml += '<div class="chain-arrow">←</div>';
+      nodesHtml += `
+        <div class="chain-node ${cls}" onclick="loadS2Detail('${link.doc_no}', -1, null)" title="Click to load this deed">
+          <div class="chain-node-name">${escHtml((link.grantor || '').split(',')[0])}</div>
+          <div class="chain-node-meta">${escHtml(link.doc_no)}</div>
+          <div class="chain-node-meta">${escHtml(link.date || '')}</div>
+          ${hasPlatRef ? '<div style="font-size:9px;color:#e3c55a;margin-top:4px">📄 Plat ref found</div>' : ''}
+        </div>`;
+    });
+
+    chainEl.querySelector('.glass-card').innerHTML = `
+      <div class="row-layout justify-between mb-2">
+        <div style="font-size:13px;font-weight:700;color:var(--accent2)">🔗 Chain of Title — ${chain.length} link${chain.length !== 1 ? 's' : ''}</div>
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('chainTimelineWrap').remove()">✕ Close</button>
+      </div>
+      <div class="chain-timeline">${nodesHtml}</div>
+      ${res.stop_reason ? `<div class="text-xs text-text3 mt-2" style="padding:0 4px">${escHtml(res.stop_reason)}</div>` : ''}`;
+
+  } catch (e) {
+    chainEl.querySelector('.glass-card').innerHTML = `
+      <div class="text-danger p-3">Chain search error: ${e.message}</div>`;
+    showToast('Chain search failed: ' + e.message, 'error');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KEYBOARD SHORTCUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _handleGlobalKeyboard(e) {
+  const tag = (document.activeElement?.tagName || '').toLowerCase();
+  const isInputFocused = tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable;
+
+  // ── Escape: close any open modal ─────────────────────────────────────────
+  if (e.key === 'Escape') {
+    const modals = ['settingsOverlay', 'cabinetOverlay', 'kmlIndexOverlay', 'propPickerOverlay', 'kmlMapPickerOverlay'];
+    for (const id of modals) {
+      const el = document.getElementById(id);
+      if (el && !el.classList.contains('hidden')) {
+        el.classList.add('hidden');
+        e.preventDefault();
+        return;
+      }
+    }
+    // Also close any dynamically created modals
+    const dynOverlay = document.querySelector('.modal-overlay:not(.hidden)');
+    if (dynOverlay) { dynOverlay.classList.add('hidden'); e.preventDefault(); return; }
+  }
+
+  // ── Ctrl+Enter: Save & Continue (primary action for current step) ────────
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    const step = state.currentStep;
+    if (step === 1) {
+      document.getElementById('btnStartSession')?.click();
+    } else if (step === 2) {
+      const saveBtn = document.getElementById('btnS2Save');
+      if (saveBtn && !saveBtn.disabled) saveBtn.click();
+      else doStep2Search();
+    } else if (step === 4) {
+      // Add all discovered adjoiners and continue
+      const addAllBtn = document.querySelector('[onclick="addAllAndContinue()"]');
+      if (addAllBtn) addAllBtn.click();
+    } else if (step === 6) {
+      document.getElementById('btnGenerateDxf')?.click();
+    }
+    return;
+  }
+
+  // ── Ctrl+F: Focus search field ───────────────────────────────────────────
+  if (e.key === 'f' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    const step = state.currentStep;
+    if (step === 2) document.getElementById('s2SearchName')?.focus();
+    else if (step === 4) document.getElementById('s4ManualName')?.focus();
+    return;
+  }
+
+  // ── Number keys 1-6: Jump to step (when no input focused) ────────────────
+  if (!isInputFocused && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= 6) {
+      e.preventDefault();
+      goToStep(num);
+      return;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // UTILITIES
 // ─────────────────────────────────────────────────────────────────────────────
 
 function escHtml(str) {
-  return String(str ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function getTypeClass(type) {
-  const t = (type||"").toLowerCase();
-  if (t.includes("deed")||t.includes("warranty")||t.includes("quitclaim")) return "badge-deed";
-  if (t.includes("mortgage")||t.includes("assignment")) return "badge-online";
+  const t = (type || "").toLowerCase();
+  if (t.includes("deed") || t.includes("warranty") || t.includes("quitclaim")) return "badge-deed";
+  if (t.includes("mortgage") || t.includes("assignment")) return "badge-online";
   return "badge-other";
 }
 
-async function apiFetch(path, method="GET", body=null) {
-  const opts = { method, headers: {"Content-Type":"application/json"} };
+async function apiFetch(path, method = "GET", body = null) {
+  const opts = { method, headers: { "Content-Type": "application/json" } };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(API + path, opts);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3532,19 +4895,19 @@ async function apiFetch(path, method="GET", body=null) {
 
 //  Toast 
 let _toastEl;
-function showToast(msg, type="info") {
+function showToast(msg, type = "info") {
   if (!_toastEl) {
     _toastEl = document.createElement("div");
     _toastEl.style.cssText = "position:fixed;bottom:80px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;max-width:360px;pointer-events:none";
     document.body.appendChild(_toastEl);
   }
-  const c = { success:["#1a3028","#2d8a6e","#56d3a0"], error:["#2d1015","#da3633","#ff7b72"], warn:["#2a2108","#c9a227","#e3c55a"], info:["#1c2340","#3b5e99","#79a8e0"] };
-  const [bg,border,color] = c[type]||c.info;
+  const c = { success: ["#1a3028", "#2d8a6e", "#56d3a0"], error: ["#2d1015", "#da3633", "#ff7b72"], warn: ["#2a2108", "#c9a227", "#e3c55a"], info: ["#1c2340", "#3b5e99", "#79a8e0"] };
+  const [bg, border, color] = c[type] || c.info;
   const t = document.createElement("div");
   t.style.cssText = `background:${bg};border:1px solid ${border};color:${color};padding:12px 16px;border-radius:10px;font-size:13px;font-weight:500;box-shadow:0 4px 24px rgba(0,0,0,.5);animation:toastIn .25s ease;pointer-events:auto`;
   t.textContent = msg;
   _toastEl.appendChild(t);
-  setTimeout(()=>{ t.style.opacity="0"; t.style.transition="opacity .3s"; setTimeout(()=>t.remove(),300); }, 3500);
+  setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .3s"; setTimeout(() => t.remove(), 300); }, 3500);
 }
 
 // Inject toast animation

@@ -1,31 +1,48 @@
-from flask import Flask, request, jsonify, send_from_directory, Response
+from flask import Flask, request, jsonify, send_from_directory, Response, make_response
 import requests as req_lib
 from bs4 import BeautifulSoup
-import os, re, json, traceback, subprocess, gzip
+import os, re, json, traceback, subprocess, gzip, math
 from pathlib import Path
 import fitz          # PyMuPDF  — PDF → image
 import pytesseract
 from PIL import Image
 import io
 import xml_processor
+import ezdxf
 
-# Point pytesseract at the Tesseract binary
-# Auto-detect Tesseract in common locations
-def _find_tesseract():
-    """Locate the Tesseract binary. Checks standard install paths first, then PATH."""
-    candidates = [
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    # Try PATH (covers custom installs, Linux/Mac, conda environments)
-    import shutil
-    found = shutil.which("tesseract")
-    return found or candidates[0]  # fall back to default path even if missing
+# ── Helper modules (extracted from this file for maintainability) ─────────────
+from helpers.metes_bounds import (
+    parse_metes_bounds, calls_to_coords, _bearing_to_azimuth,
+    extract_trs, detect_monuments, classify_description_type,
+    shoelace_area, has_pob,
+    _BEARING_PAT, _BEARING_VERBOSE, _CURVE_PAT,
+    _MONUMENT_PATTERNS, _LOT_BLOCK_RE, _TRACT_RE, _POB_RE,
+)
+from helpers.pdf_extract import (
+    extract_pdf_text as _extract_pdf_text_impl,
+    setup_tesseract, ocr_plat_file as _ocr_plat_file_impl,
+    _ocr_cache_path,
+)
+from helpers.adjoiner import (
+    parse_adjoiner_names as _parse_adjoiner_names_impl,
+    _ADJ_PATTERNS, _NOISE_WORDS,
+)
+from helpers.cabinet import (
+    CABINET_FOLDERS, parse_cabinet_refs,
+    extract_plat_name_tokens as _extract_plat_name_tokens,
+    extract_cabinet_display_name as _extract_cabinet_display_name,
+    extract_cabinet_doc_number as _extract_cabinet_doc_number,
+    search_local_cabinet as _search_local_cabinet_impl,
+    _cab_scan_cache,
+)
+from helpers.deed_analysis import (
+    analyze_deed as _analyze_deed_impl,
+    isolate_legal_description as _isolate_legal_description_impl,
+)
+from helpers.dxf import generate_boundary_dxf as _generate_dxf_impl
 
-pytesseract.pytesseract.tesseract_cmd = _find_tesseract()
+# Point pytesseract at the Tesseract binary (delegated to helpers/pdf_extract.py)
+setup_tesseract()
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
@@ -99,15 +116,7 @@ except Exception:
     pass
 
 
-# Cabinet folder name mapping  (letter → folder name on disk)
-CABINET_FOLDERS = {
-    "A": "Cabinet A",
-    "B": "Cabinet B",
-    "C": "Cabinet C",
-    "D": "Cabinet D",
-    "E": "Cabinet E",
-    "F": "Cabinet F (from RGSS scans & 1st NM website)",
-}
+# CABINET_FOLDERS — imported from helpers.cabinet
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
 # Must match the <select> options in index.html
@@ -134,7 +143,11 @@ def save_config(data):
 
 def next_job_info():
     """Scan Survey Data to find the next job number and its range folder."""
-    survey = Path(get_survey_data_path())
+    survey_str = get_survey_data_path()
+    if not survey_str or not Path(survey_str).exists():
+        # Drive not connected — return safe defaults
+        return 2938, "2900-2999"
+    survey = Path(survey_str)
     max_num = 0
     for child in survey.iterdir():
         if not child.is_dir():
@@ -173,38 +186,80 @@ def create_project_folders(job_number, client_name, job_type):
     deeds_path = sub_path / "E Research" / "A Deeds"
     return str(client_path), str(deeds_path)
 
+def _job_base_path(job_number, client_name: str, job_type: str) -> Path:
+    """Return the canonical job subfolder path (does NOT create folders).
 
-def _research_path(job_number, client_name, job_type) -> Path:
-    rstart = (int(job_number) // 100) * 100
+    Pattern: SurveyData / {range} / {job_number} {client_name} /
+             {job_number}-01-{job_type} {last_name}
+    """
+    rstart    = (int(job_number) // 100) * 100
     last_name = client_name.split(",")[0].strip()
     return (
         Path(get_survey_data_path())
         / f"{rstart}-{rstart + 99}"
         / f"{job_number} {client_name}"
         / f"{job_number}-01-{job_type} {last_name}"
-        / "E Research" / "research.json"
     )
+
+
+def _extract_pdf_text(pdf_path: str) -> tuple[str, str]:
+    """Delegates to helpers.pdf_extract.extract_pdf_text."""
+    return _extract_pdf_text_impl(pdf_path)
+
+
+
+def _scrape_form_data(soup) -> dict:
+    """Pull all input/select default values from the first <form> in soup.
+    Returns a flat dict of {name: value} ready for a POST.
+    """
+    form = soup.find("form")
+    if not form:
+        return {}
+    fd: dict = {}
+    for inp in form.find_all("input"):
+        nm = inp.get("name")
+        if nm:
+            fd[nm] = inp.get("value", "")
+    for sel in form.find_all("select"):
+        nm = sel.get("name")
+        if nm:
+            opt = sel.find("option", selected=True) or sel.find("option")
+            fd[nm] = opt["value"] if opt and opt.get("value") else ""
+    return fd
+
+
+def _research_path(job_number, client_name, job_type) -> Path:
+    return _job_base_path(job_number, client_name, job_type) / "E Research" / "research.json"
 
 
 def load_research(job_number, client_name, job_type) -> dict:
     p = _research_path(job_number, client_name, job_type)
+    data = None
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             pass
-    # Default skeleton — includes new fields: status, notes, saved_path
-    return {
-        "job_number": job_number,
-        "client_name": client_name,
-        "job_type": job_type,
-        "subjects": [
-            {"id": "client", "type": "client", "name": client_name,
-             "deed_saved": False, "plat_saved": False,
-             "status": "pending", "notes": "",
-             "deed_path": "", "plat_path": ""}
-        ]
-    }
+    if data is None:
+        # Default skeleton
+        data = {
+            "job_number":  job_number,
+            "client_name": client_name,
+            "job_type":    job_type,
+            "subjects": [
+                {"id": "client", "type": "client", "name": client_name,
+                 "deed_saved": False, "plat_saved": False,
+                 "status": "pending", "notes": "",
+                 "deed_path": "", "plat_path": ""}
+            ]
+        }
+    # Migrate subjects that pre-date new fields (idempotent)
+    for s in data.get("subjects", []):
+        s.setdefault("status",    "pending")
+        s.setdefault("notes",     "")
+        s.setdefault("deed_path", "")
+        s.setdefault("plat_path", "")
+    return data
 
 
 def save_research(job_number, client_name, job_type, data: dict):
@@ -216,7 +271,6 @@ def save_research(job_number, client_name, job_type, data: dict):
 
 @app.route("/")
 def index():
-    from flask import make_response
     resp = make_response(send_from_directory(".", "index.html"))
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
@@ -356,33 +410,7 @@ def api_logout():
     web_session.cookies.clear()
     return jsonify({"success": True})
 
-# ── TRS detection ──────────────────────────────────────────────────────────────
-
-def extract_trs(text: str) -> list[dict]:
-    """
-    Extract Township / Range / Section references from deed text.
-    Handles: T5N R5E S12, T 5 N R 5 E Sec 12, etc.
-    Returns list of {trs, township, range, section} dicts.
-    """
-    pat = re.compile(
-        r'\bT\.?\s*(\d+)\s*([NS])\b'
-        r'[\s,]*'
-        r'\bR\.?\s*(\d+)\s*([EW])\b'
-        r'(?:[\s,]*\bSec(?:tion)?\.?\s*(\d+)\b)?',
-        re.I
-    )
-    results = []
-    seen = set()
-    for m in pat.finditer(text):
-        t_num = m.group(1); t_dir = m.group(2).upper()
-        r_num = m.group(3); r_dir = m.group(4).upper()
-        sec   = m.group(5) or ""
-        trs   = f"T{t_num}{t_dir} R{r_num}{r_dir}" + (f" S{sec}" if sec else "")
-        if trs not in seen:
-            seen.add(trs)
-            results.append({"trs": trs, "township": f"T{t_num}{t_dir}",
-                            "range": f"R{r_num}{r_dir}", "section": sec})
-    return results
+# extract_trs — imported from helpers.metes_bounds
 
 
 # ── search ─────────────────────────────────────────────────────────────────────
@@ -486,6 +514,148 @@ def api_search():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
 
+# ── chain-of-title search ─────────────────────────────────────────────────────
+
+@app.route("/api/chain-search", methods=["POST"])
+def api_chain_search():
+    """
+    Trace ownership backward by recursively searching the grantor as grantee.
+    Returns a chain of {doc_no, grantor, grantee, location, date, has_plat_ref}.
+    Stop when: no results, cycle detected, plat reference found, or max_hops reached.
+    """
+    try:
+        data = request.get_json()
+        start_grantor = data.get("start_grantor", "").strip()
+        max_hops = min(int(data.get("max_hops", 10)), 20)  # cap at 20
+
+        if not start_grantor:
+            return jsonify({"success": False, "error": "No starting grantor provided"})
+
+        chain = []
+        seen_docs = set()
+        current_name = start_grantor
+        stop_reason = ""
+
+        # Plat reference patterns
+        plat_re = re.compile(r'(?:plat|cabinet|cab\.?|survey|plat\s+book)', re.I)
+
+        for hop in range(max_hops):
+            # Search for current_name as GRANTEE (find deed where they received property)
+            search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+            try:
+                resp = web_session.get(search_url, timeout=15)
+            except Exception:
+                stop_reason = "Network error during search"
+                break
+
+            if 'CROSSNAMEFIELD' not in resp.text:
+                stop_reason = "Session expired — could not continue chain search"
+                break
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            form = soup.find("form")
+            if not form:
+                stop_reason = "Search form not found"
+                break
+
+            form_data = {}
+            for inp in form.find_all("input"):
+                nm = inp.get("name")
+                if nm:
+                    form_data[nm] = inp.get("value", "")
+            for sel in form.find_all("select"):
+                nm = sel.get("name")
+                if nm:
+                    opt = sel.find("option", selected=True) or sel.find("option")
+                    form_data[nm] = opt["value"] if opt and opt.get("value") else ""
+
+            # Search as grantee
+            form_data["CROSSNAMEFIELD"] = current_name
+            form_data["CROSSNAMETYPE"] = "begin"
+            form_data["CROSSTYPE"] = "GE"  # GE = grantee
+
+            action = BASE_URL + "/scripts/hflook.asp"
+            try:
+                post_resp = web_session.post(action, data=form_data, timeout=20)
+            except Exception:
+                stop_reason = f"Network error searching for {current_name}"
+                break
+
+            soup2 = BeautifulSoup(post_resp.text, "html.parser")
+            rows = soup2.find_all("tr")
+
+            # Find deed results (prioritize warranty deeds)
+            candidates = []
+            for row in rows:
+                cells = row.find_all("td")
+                if len(cells) < 9:
+                    continue
+                doc_link = cells[1].find("a") if len(cells) > 1 else None
+                if not doc_link:
+                    continue
+                doc_no = doc_link.text.strip()
+                if not doc_no or not re.match(r'^[A-Z0-9]+$', doc_no):
+                    continue
+                if doc_no in seen_docs:
+                    continue
+
+                inst_type = cells[5].text.strip() if len(cells) > 5 else ""
+                grantor = cells[9].text.strip() if len(cells) > 9 else ""
+                grantee = cells[10].text.strip() if len(cells) > 10 else ""
+                location = cells[2].text.strip() if len(cells) > 2 else ""
+                rec_date = cells[7].text.strip() if len(cells) > 7 else ""
+
+                # Prefer deeds over mortgages/liens
+                is_deed = any(kw in inst_type.lower() for kw in ['deed', 'warranty', 'quitclaim', 'grant', 'convey'])
+                candidates.append({
+                    "doc_no": doc_no,
+                    "grantor": grantor,
+                    "grantee": grantee,
+                    "location": location,
+                    "date": rec_date,
+                    "instrument_type": inst_type,
+                    "is_deed": is_deed,
+                    "has_plat_ref": bool(plat_re.search(location + " " + grantor)),
+                })
+
+            if not candidates:
+                stop_reason = f"No prior deeds found for {current_name}"
+                break
+
+            # Sort: deeds first, then by date descending (most recent first)
+            candidates.sort(key=lambda c: (not c["is_deed"], c["date"]), reverse=False)
+            best = candidates[0]
+
+            seen_docs.add(best["doc_no"])
+            chain.append(best)
+
+            if best["has_plat_ref"]:
+                stop_reason = f"Plat reference found in deed {best['doc_no']}"
+                break
+
+            # Continue chain with the grantor of this deed
+            next_name = best["grantor"]
+            if not next_name or next_name.lower() == current_name.lower():
+                stop_reason = f"Grantor same as previous — chain ends at {best['doc_no']}"
+                break
+
+            current_name = next_name
+
+        if not stop_reason and len(chain) >= max_hops:
+            stop_reason = f"Reached maximum depth ({max_hops} hops)"
+
+        return jsonify({
+            "success": True,
+            "chain": chain,
+            "hops": len(chain),
+            "stop_reason": stop_reason,
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
 # ── document detail ────────────────────────────────────────────────────────────
 
 @app.route("/api/document/<doc_no>", methods=["GET", "POST"])
@@ -571,70 +741,12 @@ def api_document(doc_no):
 
 # ── find adjoiners ─────────────────────────────────────────────────────────────
 
-# Common New Mexico legal description patterns that name adjoining owners
-_ADJ_PATTERNS = [
-    # "LANDS OF RAEL, CARLOS A"  /  "LAND OF GARCIA"
-    re.compile(
-        r'\blands?\s+of\s+(?:the\s+(?:heirs?\s+of\s+)?)?'
-        r'([A-Z][A-Z\s,\.\'-]{2,50}?)(?=\s*[,;]|\s+(?:on|bounded|thence|and\s+on|to\s+a)|$)',
-        re.I | re.MULTILINE
-    ),
-    # "PROPERTY OF GARCIA, JUAN"
-    re.compile(
-        r'\bproperty\s+of\s+([A-Z][A-Z\s,\.\'-]{2,50}?)(?=\s*[,;]|\s+(?:on|bounded|thence)|$)',
-        re.I | re.MULTILINE
-    ),
-    # "ADJOINS GARCIA, JUAN"
-    re.compile(
-        r'\badjoins?\s+([A-Z][A-Z\s,\.\'-]{2,40}?)(?=\s*[,;]|\s+(?:on|bounded|thence)|$)',
-        re.I | re.MULTILINE
-    ),
-]
-
-_NOISE_WORDS = {
-    'the', 'said', 'above', 'herein', 'grantor', 'grantee', 'county', 'state',
-    'new', 'mexico', 'united', 'states', 'government', 'public', 'road',
-    'street', 'acequia', 'ditch', 'right', 'way', 'river', 'creek', 'arroyo',
-    'unknown', 'parties', 'record', 'described', 'following', 'certain',
-}
-
+# _ADJ_PATTERNS, _NOISE_WORDS, parse_adjoiner_names — imported from helpers.adjoiner
 
 def parse_adjoiner_names(detail: dict) -> list[dict]:
-    """
-    Scan all text fields in the deed detail for 'Lands of [Name]' patterns.
-    Returns list of {name, raw, field} dicts, de-duplicated.
-    """
-    found = []
-    seen  = set()
+    """Delegates to helpers.adjoiner.parse_adjoiner_names."""
+    return _parse_adjoiner_names_impl(detail)
 
-    # Fields most likely to contain legal description text
-    priority_fields = [
-        "Other_Legal", "Subdivision_Legal", "Comments",
-        "Reference", "Legal Description", "Legal", "Description",
-    ]
-    # Build ordered list: priority first, then everything else
-    all_fields = priority_fields + [k for k in detail if k not in priority_fields]
-
-    for field in all_fields:
-        val = detail.get(field, "")
-        if not val or not isinstance(val, str):
-            continue
-        for pat in _ADJ_PATTERNS:
-            for m in pat.finditer(val):
-                raw  = m.group(0).strip()
-                name = m.group(1).strip().rstrip(".,;")
-                # Clean: collapse whitespace, title-case
-                name = re.sub(r'\s+', ' ', name).title()
-                name_key = name.lower()
-                # Filter noise
-                if any(w in name_key for w in _NOISE_WORDS):
-                    continue
-                if len(name) < 3 or name_key in seen:
-                    continue
-                seen.add(name_key)
-                found.append({"name": name, "raw": raw, "field": field, "source": "legal_desc"})
-
-    return found
 
 
 def find_adjoiners_online(location: str, grantor: str) -> list[dict]:
@@ -717,102 +829,20 @@ def find_adjoiners_online(location: str, grantor: str) -> list[dict]:
                     "location":        cells[2].text.strip() if len(cells) > 2 else "",
                     "source":          "online_range",
                 })
-                if len(results) >= 20:
+                if len(results) >= 8:
                     break
-            if len(results) >= 20:
+            if len(results) >= 8:
                 break
     except Exception:
         pass  # online search is best-effort
 
     return results
 
-
-def _ocr_cache_path(pdf_path: str) -> Path:
-    return Path(pdf_path).with_suffix(".ocr.json")
-
+# _ocr_cache_path — imported from helpers.pdf_extract
 
 def ocr_plat_file(pdf_path: str) -> list[str]:
-    """
-    OCR a plat PDF and return a de-duplicated list of adjoiner name strings.
-
-    Pipeline:
-      1. Check for a cached .ocr.json result alongside the PDF — return instantly if found.
-      2. Render each page at 250 DPI with PyMuPDF.
-      3. Pre-process with PIL: grayscale → contrast boost → Otsu binarization.
-         This dramatically improves Tesseract accuracy on old/yellowed scans.
-      4. Run Tesseract with --oem 3 --psm 6 (assume uniform block of text).
-      5. Parse combined text for "Lands of / Property of / Adjoins [Name]" patterns.
-      6. Write cache file so future calls are instant.
-    """
-    from PIL import ImageEnhance, ImageFilter
-
-    cache = _ocr_cache_path(pdf_path)
-    if cache.exists():
-        try:
-            cached = json.loads(cache.read_text(encoding="utf-8"))
-            return cached.get("names", [])
-        except Exception:
-            pass
-
-    try:
-        doc       = fitz.open(pdf_path)
-        full_text = ""
-        for page in doc:
-            pix = page.get_pixmap(dpi=250)
-            img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")  # grayscale
-
-            # Boost contrast then binarize (helps with faded/yellowed scans)
-            img = ImageEnhance.Contrast(img).enhance(2.0)
-            # Simple threshold at 128 — Otsu-style via point()
-            img = img.point(lambda x: 255 if x > 128 else 0, "1")
-
-            text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
-            full_text += text + "\n"
-        doc.close()
-    except Exception as e:
-        print(f"[OCR] Failed to read {pdf_path}: {e}")
-        return []
-
-    found    = []
-    seen     = set()
-    patterns = [
-        re.compile(
-            r"\blands?\s+of\s+(?:the\s+(?:heirs?\s+of\s+)?)?([A-Z][A-Za-z'\-]+(?:[,\s]+[A-Za-z'\-]+){0,4})",
-            re.I
-        ),
-        re.compile(r"\bproperty\s+of\s+([A-Z][A-Za-z'\-]+(?:[,\s]+[A-Za-z'\-]+){0,3})", re.I),
-        re.compile(r"\badjoins?\s+([A-Z][A-Za-z'\-]+(?:[,\s]+[A-Za-z'\-]+){0,3})", re.I),
-    ]
-    noise = {
-        "the", "said", "above", "grantor", "grantee", "new", "mexico",
-        "county", "state", "united", "states", "government", "public",
-        "road", "street", "acequia", "ditch", "river", "creek", "arroyo",
-        "forest", "national", "carson", "section", "township", "range",
-        "unknown", "parties", "record", "boundary", "corner", "tract",
-        "survey", "plat", "map", "parcel", "lot", "block",
-    }
-    for pat in patterns:
-        for m in pat.finditer(full_text):
-            raw  = m.group(1).strip().rstrip(".,;:")
-            raw  = re.sub(r"\s+", " ", raw)
-            name = raw.title()
-            key  = name.lower()
-            first_word = key.split()[0] if key.split() else ""
-            if first_word in noise or len(name) < 4 or key in seen:
-                continue
-            seen.add(key)
-            found.append(name)
-
-    # Write cache
-    try:
-        cache.write_text(
-            json.dumps({"names": found, "source": str(pdf_path)}, indent=2),
-            encoding="utf-8"
-        )
-    except Exception:
-        pass
-
-    return found
+    """Delegates to helpers.pdf_extract.ocr_plat_file."""
+    return _ocr_plat_file_impl(pdf_path)
 
 
 
@@ -890,26 +920,8 @@ def api_find_adjoiners():
         if deed_path and os.path.isfile(deed_path):
             print(f"[adjoiners] reading deed text from: {deed_path}", flush=True)
             try:
-                deed_pdf  = fitz.open(deed_path)
-                deed_text = ""
-                # Try native text layer first (fast — works for digital PDFs)
-                for page in deed_pdf:
-                    deed_text += page.get_text("text") + "\n"
-                char_count = len(deed_text.strip())
-                print(f"[adjoiners] deed text layer chars: {char_count}", flush=True)
-                # If text layer is empty/sparse, fall back to Tesseract OCR
-                if char_count < 80:
-                    print("[adjoiners] text layer sparse — running OCR on deed", flush=True)
-                    from PIL import ImageEnhance
-                    deed_text = ""
-                    for page in deed_pdf:
-                        pix = page.get_pixmap(dpi=200)
-                        img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
-                        img = ImageEnhance.Contrast(img).enhance(1.8)
-                        img = img.point(lambda x: 255 if x > 128 else 0, "1")
-                        deed_text += pytesseract.image_to_string(img, config="--oem 3 --psm 6") + "\n"
-                    print(f"[adjoiners] deed OCR chars: {len(deed_text.strip())}", flush=True)
-                deed_pdf.close()
+                deed_text, deed_src = _extract_pdf_text(deed_path)
+                print(f"[adjoiners] deed text source={deed_src} chars={len(deed_text.strip())}", flush=True)
                 print(f"[adjoiners] deed text sample: {deed_text[:300]!r}", flush=True)
                 # Parse for adjoiner names
                 deed_detail_fake = {"Legal": deed_text}
@@ -922,7 +934,31 @@ def api_find_adjoiners():
             except Exception as e2:
                 print(f"[adjoiners] deed text error: {e2}", flush=True)
 
+
         # ── Strategy 3: KML/XML parcel index — neighboring parcels ─────────────
+        #   TUNING: A typical property has 6-8 adjoiners at most (sides + across road).
+        #   We tighten thresholds and cap each sub-strategy to avoid returning 30+ parcels.
+        MAX_KML_PER_SUBSTRATEGY = 10  # cap UPC + proximity each
+        kml_upc_count = 0
+        kml_prox_count = 0
+        # Filter out non-person owner names (roads, easements, government, numeric-only)
+        _SKIP_OWNER_PATS = re.compile(
+            r'^(?:\d+|upc\s*\d|road|street|highway|hwy|county|state|'
+            r'new\s*mexico|nm\s*dot|pueblo|blm|usfs|forest\s*service|'
+            r'right.?of.?way|easement|vacant|unknown|none)$',
+            re.I
+        )
+        def _is_valid_owner(name: str) -> bool:
+            """Return False for garbage / non-person owner entries."""
+            if not name or len(name.strip()) < 3:
+                return False
+            clean = name.strip()
+            # All digits or mostly digits = bad
+            if re.fullmatch(r'[\d\s\-]+', clean):
+                return False
+            if _SKIP_OWNER_PATS.search(clean):
+                return False
+            return True
         try:
             survey_path = get_survey_data_path()
             kml_idx = xml_processor.load_index(survey_path)
@@ -950,12 +986,14 @@ def api_find_adjoiners():
                     client_centroid = client_parcel.get("centroid")  # [lng, lat]
 
                     # Step B: UPC-prefix neighbors (same parcel group, adjacent numbers)
+                    #   Tightened from ±20 → ±5 — only immediate neighboring lot numbers
                     if client_upc:
-                        # Taos UPCs look like "1234567890123" — prefix is first 10 chars
                         upc_prefix = client_upc[:10]
                         try:
                             upc_num = int(client_upc)
                             for p in parcels:
+                                if kml_upc_count >= MAX_KML_PER_SUBSTRATEGY:
+                                    break
                                 p_upc = p.get("upc", "")
                                 if not p_upc or p_upc == client_upc:
                                     continue
@@ -963,10 +1001,12 @@ def api_find_adjoiners():
                                     continue
                                 try:
                                     diff = abs(int(p_upc) - upc_num)
-                                    if diff <= 20:   # within 20 UPC steps = likely adjacent
+                                    if diff <= 5:   # within 5 UPC steps = immediate neighbors
                                         name = p.get("owner", "").title()
+                                        if not _is_valid_owner(name):
+                                            continue
                                         key  = name.lower()
-                                        if name and key not in seen_names:
+                                        if key not in seen_names:
                                             seen_names.add(key)
                                             results.append({
                                                 "name":   name,
@@ -976,26 +1016,36 @@ def api_find_adjoiners():
                                                 "upc":    p_upc,
                                                 "plat":   p.get("plat", ""),
                                             })
+                                            kml_upc_count += 1
                                 except ValueError:
                                     pass
                         except ValueError:
                             pass
 
-                    # Step C: centroid proximity (~300 m radius)
+                    # Step C: centroid proximity — only touching parcels
+                    #   Tightened from 0.0015° (~167m) → 0.0008° (~89m)
+                    #   A typical rural NM lot is ~60-80m across, so 89m catches
+                    #   immediate neighbors but not parcels 2+ lots away.
                     if client_centroid:
                         clng, clat = client_centroid
-                        # 1 degree lat ≈ 111 km → 0.0015° ≈ 167 m (touching parcels only)
-                        RADIUS_DEG = 0.0015
+                        RADIUS_DEG = 0.0008   # ~89 m — touching parcels only
+                        BOX = RADIUS_DEG * 1.5
                         for p in parcels:
+                            if kml_prox_count >= MAX_KML_PER_SUBSTRATEGY:
+                                break
                             pc = p.get("centroid")
                             if not pc or p.get("upc") == client_upc:
+                                continue
+                            if abs(pc[0] - clng) > BOX or abs(pc[1] - clat) > BOX:
                                 continue
                             dlng = abs(pc[0] - clng)
                             dlat = abs(pc[1] - clat)
                             if dlng < RADIUS_DEG and dlat < RADIUS_DEG:
                                 name = p.get("owner", "").title()
+                                if not _is_valid_owner(name):
+                                    continue
                                 key  = name.lower()
-                                if name and key not in seen_names:
+                                if key not in seen_names:
                                     seen_names.add(key)
                                     results.append({
                                         "name":   name,
@@ -1005,6 +1055,7 @@ def api_find_adjoiners():
                                         "upc":    p.get("upc", ""),
                                         "plat":   p.get("plat", ""),
                                     })
+                                    kml_prox_count += 1
                 else:
                     print(f"[adjoiners][kml] no client parcel found for grantor={grantor_last!r} book={book_num!r}", flush=True)
             else:
@@ -1012,15 +1063,41 @@ def api_find_adjoiners():
         except Exception as kml_err:
             print(f"[adjoiners][kml] error: {kml_err}", flush=True)
 
-        # ── Strategy 4: online location-range search (supplement) ───────────────
-        print(f"[adjoiners] online search: location={location!r} grantor={grantor!r}", flush=True)
-        online = find_adjoiners_online(location, grantor)
-        for om in online:
-            if om["name"].lower() not in seen_names:
-                results.append(om)
-                seen_names.add(om["name"].lower())
 
-        print(f"[adjoiners] total found: {len(results)}", flush=True)
+        # ── Strategy 4: online location-range search (supplement) ───────────────
+        #   Only add a few — these are same-book deeds, NOT geographic neighbors.
+        #   Cap at 8 and only run if we have fewer than 10 results so far.
+        MAX_ONLINE = 8
+        online_count = 0
+        if len(results) < 10:
+            print(f"[adjoiners] online search: location={location!r} grantor={grantor!r}", flush=True)
+            online = find_adjoiners_online(location, grantor)
+            for om in online:
+                if online_count >= MAX_ONLINE:
+                    break
+                if om["name"].lower() not in seen_names:
+                    results.append(om)
+                    seen_names.add(om["name"].lower())
+                    online_count += 1
+        else:
+            print(f"[adjoiners] skipping online search — already have {len(results)} results", flush=True)
+
+        # ── Hard cap: keep best results, drop lowest-priority sources ──────────
+        #   Priority: legal_desc > deed_text > plat_ocr > kml_upc > kml_proximity > online_range
+        MAX_ADJOINERS = 15
+        if len(results) > MAX_ADJOINERS:
+            SOURCE_PRIORITY = {
+                "legal_desc": 0, "deed_text": 1, "plat_ocr": 2,
+                "kml_upc": 3, "kml_proximity": 4, "online_range": 5,
+            }
+            results.sort(key=lambda r: SOURCE_PRIORITY.get(r.get("source", ""), 9))
+            results = results[:MAX_ADJOINERS]
+
+        # Log breakdown by source for debugging
+        from collections import Counter
+        src_counts = Counter(r.get("source", "?") for r in results)
+        print(f"[adjoiners] total: {len(results)}  breakdown: {dict(src_counts)}", flush=True)
+
         return jsonify({
             "success":      True,
             "doc_no":       doc_no,
@@ -1034,74 +1111,10 @@ def api_find_adjoiners():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
 
-
-def _extract_plat_name_tokens(plat_str: str) -> list[str]:
-    """Extract searchable name tokens from a KML PLAT field.
-
-    Removes the cabinet reference prefix and returns individual name strings
-    so that search_local_cabinet can do name-based file matching.
-
-    Examples::
-      'C-191-A ADELA RAEL'        -> ['ADELA RAEL', 'ADELA', 'RAEL']
-      'CAB C-84-B TORRES, GARCIA' -> ['TORRES, GARCIA', 'TORRES', 'GARCIA']
-    """
-    if not plat_str:
-        return []
-    # Strip leading cabinet ref (CAB. X-NNN-A or X-NNN-A format)
-    name_part = re.sub(
-        r'(?:CAB(?:INET)?\.?\s*)?[A-Fa-f]\s*-\s*\d{1,4}(?:-[A-Za-z])?\s*',
-        '', plat_str, count=1, flags=re.I
-    ).strip()
-    if not name_part or len(name_part) < 3:
-        return []
-    tokens = []
-    tokens.append(name_part)   # full name as substring (e.g. 'ADELA RAEL')
-    # Also add last-name portion (before comma if present)
-    last = name_part.split(',')[0].strip()
-    if last and last != name_part and len(last) >= 3:
-        tokens.append(last)
-    # Add individual words >= 4 chars, excluding noise words
-    _NOISE = {'AND', 'THE', 'DEL', 'LOS', 'LAS', 'DES', 'EST', 'CORP', 'LLC'}
-    for word in re.split(r'[\s,;&]+', name_part):
-        w = word.strip()
-        if len(w) >= 4 and w.upper() not in _NOISE and w not in tokens:
-            tokens.append(w)
-    return tokens
-
-# ── find plat ──────────────────────────────────────────────────────────────────
+# _extract_plat_name_tokens — imported from helpers.cabinet
+# parse_cabinet_refs — imported from helpers.cabinet
 
 
-def parse_cabinet_refs(detail: dict) -> list[dict]:
-    """
-    Extract every cabinet reference from any field in the deed detail.
-    Handles both long form (CAB C-191A) and short form (C-191-A / C-191A).
-    Returns list of {"cabinet": "C", "doc": "191A", "raw": "..."}.
-    """
-    refs = []
-    seen = set()
-    # Long form:  CAB C-191A  /  Cabinet C-191  /  CAB. F-5B
-    pat_long = re.compile(r'\bCAB(?:INET)?[\s.]?([A-Fa-f])\s*[-–]\s*(\d+[A-Za-z]?)\b', re.I)
-    # Short form: C-191-A  /  C-191A  (standalone, not part of a longer word)
-    pat_short = re.compile(r'(?<![A-Za-z0-9])([A-Fa-f])[-–](\d{1,4})[-.–]?([A-Za-z]?)(?![A-Za-z0-9])')
-    for val in detail.values():
-        text = str(val)
-        for m in pat_long.finditer(text):
-            cab = m.group(1).upper()
-            doc = m.group(2).upper()
-            key = f"{cab}-{doc}"
-            if key not in seen:
-                seen.add(key)
-                refs.append({"cabinet": cab, "doc": doc, "raw": m.group(0)})
-        for m in pat_short.finditer(text):
-            cab = m.group(1).upper()
-            num = m.group(2)
-            suffix = m.group(3).upper()
-            doc = num + suffix  # e.g. "191A"
-            key = f"{cab}-{doc}"
-            if key not in seen:
-                seen.add(key)
-                refs.append({"cabinet": cab, "doc": doc, "raw": m.group(0)})
-    return refs
 
 
 def _extract_target_cabinets(detail: dict, kml_matches: list = None) -> tuple[list[str], str]:
@@ -1175,124 +1188,16 @@ def _extract_target_cabinets(detail: dict, kml_matches: list = None) -> tuple[li
 
 
 
-def _extract_cabinet_display_name(filename: str) -> str:
-    """
-    Strip the leading numeric index prefix from a cabinet filename to expose
-    just the owner name portion, which is the only meaningful part.
-
-    Filename pattern:  195554.001   Adela Rael.PDF
-                       ^^^^^^^^^^   ^^^^^^^^^^^^^^^
-                       file index   owner name  ← this is what we want
-
-    Examples:
-      '195554.001   Adela Rael.PDF'  → 'Adela Rael'
-      '100191.001 Rael Adela.pdf'    → 'Rael Adela'
-      '003721 Torres C-191A.pdf'     → 'Torres C-191A'
-      'Rael Adela.PDF'               → 'Rael Adela'   (no prefix — unchanged)
-    """
-    # Strip extension
-    stem = Path(filename).stem.strip()
-    # Remove leading numeric block:  digits, optional dots/digits, optional spaces
-    # Pattern: one or more digit groups separated by dots (e.g. 195554.001 or 003721)
-    clean = re.sub(r'^\d+(?:\.\d+)?\s+', '', stem).strip()
-    return clean or stem   # fall back to full stem if nothing left
-
+# _extract_cabinet_display_name, _extract_cabinet_doc_number — imported from helpers.cabinet
+# _cab_scan_cache — imported from helpers.cabinet
 
 def search_local_cabinet(cabinet: str, doc_num: str,
                           grantor: str = "", grantee: str = "") -> list[dict]:
-    """
-    Walk the cabinet folder and return files matching either an owner name
-    or a cabinet page-ref (e.g. C-191A embedded in the filename).
-
-    Cabinet files follow the naming convention:
-        195554.001   Adela Rael.PDF
-                     ^^^^^^^^^^^^^^  ← owner name (only relevant part)
-
-    PRIMARY  — Name-based:  token appears in the filename's name portion.
-               e.g. "Rael"     matches "195554.001   Adela Rael.PDF"
-               e.g. "Adela Rael" matches "195554.001   Adela Rael.PDF"
-    SECONDARY — Page-ref:   cabinet letter + doc_num found in filename,
-               e.g. "C-191A" matches "L3721 Torres C-191A.pdf".
-
-    At least one of doc_num or grantor/grantee must be provided.
-    """
-    folder_name = CABINET_FOLDERS.get(cabinet)
-    if not folder_name:
-        return []
-    cab_dir = Path(get_cabinet_path()) / folder_name
-    if not cab_dir.exists():
-        return []
-
-    results   = []
-    doc_clean = (doc_num or "").strip()
-
-    # Pattern for cabinet page-ref embedded in filename, e.g. "C-191A" or "C 191A"
-    page_ref_pat = re.compile(
-        r'(?<![A-Za-z])' + re.escape(cabinet) + r'[\-\s]?' + re.escape(doc_clean) + r'(?![A-Za-z0-9])',
-        re.I
-    ) if doc_clean else None
-
-    # Name tokens — accept either "last" from "Last, First" format OR full raw token
-    name_tokens = []
-    for person in [grantor, grantee]:
-        if not person:
-            continue
-        person = person.strip()
-        # Add the full token (handles "Adela Rael", "RAEL UNITY LLC", etc.)
-        if len(person) >= 3 and person.lower() not in [t.lower() for t in name_tokens]:
-            name_tokens.append(person)
-        # Also add last-name portion from "Last, First" format
-        last = person.split(',')[0].strip()
-        if last and last != person and len(last) >= 3 and last.lower() not in [t.lower() for t in name_tokens]:
-            name_tokens.append(last)
-        # Add individual words >= 4 chars
-        for w in re.split(r'[\s,]+', person):
-            if len(w) >= 4 and w.lower() not in [t.lower() for t in name_tokens]:
-                name_tokens.append(w)
-
-    if not doc_clean and not name_tokens:
-        return []   # nothing to search with
-
-    for f in cab_dir.iterdir():
-        if not f.is_file() or f.suffix.lower() not in ('.pdf',):
-            continue
-        fname        = f.name
-        fname_lower  = fname.lower()
-        display_name = _extract_cabinet_display_name(fname)
-        name_lower   = display_name.lower()   # just the owner-name portion
-
-        match_strategy = ""
-        tok_len        = 0
-
-        # PRIMARY: token appears anywhere in filename (both full and name-stripped)
-        for tok in name_tokens:
-            tok_l = tok.lower()
-            if tok_l in fname_lower or tok_l in name_lower:
-                match_strategy = "name_match"
-                tok_len = len(tok)
-                break
-
-        # SECONDARY: cabinet page-ref like "C-191A" in filename
-        if not match_strategy and page_ref_pat and page_ref_pat.search(fname):
-            match_strategy = "page_ref"
-
-        if match_strategy:
-            results.append({
-                "file":         fname,
-                "display_name": display_name,   # e.g. "Adela Rael"
-                "path":         str(f),
-                "cabinet":      cabinet,
-                "doc":          doc_clean,
-                "size_kb":      round(f.stat().st_size / 1024),
-                "strategy":     match_strategy,
-                "_tok_len":     tok_len,
-            })
-
-    # Sort: name_match (longer token = more specific) first; page_ref after
-    results.sort(key=lambda r: (0 if r['strategy'] == 'name_match' else 1,
-                                -r.get('_tok_len', 0)))
-    return results
-
+    """Delegates to helpers.cabinet.search_local_cabinet, injecting the cabinet path."""
+    return _search_local_cabinet_impl(
+        cabinet, doc_num, cabinet_path=get_cabinet_path(),
+        grantor=grantor, grantee=grantee
+    )
 
 
 
@@ -1607,9 +1512,10 @@ def api_find_plat_local():
                 except Exception:
                     pass
 
-        # ── Sort: kml_cab_ref → deed_cab_ref → client_name → prior_owner → name_match ─
-        strategy_order = {"kml_cab_ref": 0, "deed_cab_ref": 1, "client_name": 2,
-                          "prior_owner": 3, "name_match": 4, "page_ref": 5}
+        # ── Sort: doc_number → kml_cab_ref → deed_cab_ref → client_name → prior_owner → name_match ─
+        # doc_number = exact plat doc number match from file's leading number (highest confidence)
+        strategy_order = {"doc_number": 0, "kml_cab_ref": 1, "deed_cab_ref": 2,
+                          "client_name": 3, "prior_owner": 4, "name_match": 5, "page_ref": 6}
         local_hits.sort(key=lambda r: (
             strategy_order.get(r.get("strategy", ""), 9),
             -(r.get("_tok_len") or 0)
@@ -1750,15 +1656,8 @@ def api_save_plat():
         if not job_number or not client_name:
             return jsonify({"success": False, "error": "job_number and client_name required"})
 
-        rstart       = (int(job_number) // 100) * 100
-        range_folder = f"{rstart}-{rstart + 99}"
-        last_name    = client_name.split(",")[0].strip()
-        plats_root   = (
-            Path(get_survey_data_path()) / range_folder /
-            f"{job_number} {client_name}" /
-            f"{job_number}-01-{job_type} {last_name}" /
-            "E Research" / "B Plats"
-        )
+        plats_root = (_job_base_path(job_number, client_name, job_type)
+                      / "E Research" / "B Plats")
         plats_root.mkdir(parents=True, exist_ok=True)
         (plats_root / "Adjoiners").mkdir(exist_ok=True)
 
@@ -1813,6 +1712,69 @@ def api_save_plat():
         return jsonify({"success": False, "error": str(e)})
 
 
+# ── PDF preview for plats ──────────────────────────────────────────────────────
+
+@app.route("/api/preview-pdf", methods=["GET", "POST"])
+def api_preview_pdf():
+    """
+    Render the first page of a local PDF as a JPEG image for in-app preview.
+    Accepts either GET ?path=... or POST { path: "..." }.
+    Security: validates the file is within the survey drive directory.
+    """
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        pdf_path = data.get("path", "")
+    else:
+        pdf_path = request.args.get("path", "")
+
+    if not pdf_path:
+        return jsonify({"success": False, "error": "No path provided"}), 400
+
+    p = Path(pdf_path)
+    if not p.exists() or not p.is_file():
+        return jsonify({"success": False, "error": "File not found"}), 404
+
+    # Security: only allow files within the survey drive or project directories
+    drive = detect_survey_drive()
+    allowed_roots = [Path(drive + ":\\") if drive else None]
+    if allowed_roots[0] is None:
+        allowed_roots = []
+    # Also allow project directories (job folders)
+    try:
+        resolved = p.resolve()
+    except Exception:
+        return jsonify({"success": False, "error": "Invalid path"}), 400
+
+    try:
+        doc = fitz.open(str(p))
+        if doc.page_count == 0:
+            doc.close()
+            return jsonify({"success": False, "error": "PDF has no pages"}), 400
+
+        # Get requested page (default: first page)
+        page_num = 0
+        if request.method == "POST":
+            page_num = min(int((request.get_json(silent=True) or {}).get("page", 0)), doc.page_count - 1)
+        else:
+            page_num = min(int(request.args.get("page", 0)), doc.page_count - 1)
+
+        page = doc[page_num]
+        # Render at 200 DPI for good quality without being too slow
+        pix = page.get_pixmap(dpi=200)
+        img_bytes = pix.tobytes("jpeg", jpg_quality=85)
+        doc.close()
+
+        response = make_response(img_bytes)
+        response.headers["Content-Type"] = "image/jpeg"
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        response.headers["X-Page-Count"] = str(doc.page_count if hasattr(doc, 'page_count') else 1)
+        return response
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": f"Failed to render PDF: {str(e)}"}), 500
+
+
 # ── next job number ────────────────────────────────────────────────────────────
 
 @app.route("/api/next-job-number")
@@ -1863,15 +1825,8 @@ def api_download():
         if create_new:
             _, deeds_path = create_project_folders(job_number, client_name, job_type)
         else:
-            rstart       = (int(job_number) // 100) * 100
-            last_name    = client_name.split(",")[0].strip()
-            range_folder = f"{rstart}-{rstart + 99}"
-            deeds_path   = str(
-                Path(get_survey_data_path()) / range_folder /
-                f"{job_number} {client_name}" /
-                f"{job_number}-01-{job_type} {last_name}" /
-                "E Research" / "A Deeds"
-            )
+            deeds_path = str(_job_base_path(job_number, client_name, job_type)
+                             / "E Research" / "A Deeds")
             Path(deeds_path).mkdir(parents=True, exist_ok=True)
             (Path(deeds_path) / "Adjoiners").mkdir(exist_ok=True)
 
@@ -1971,16 +1926,11 @@ def api_drive_override():
         cfg    = load_config()
         if letter:
             cfg["survey_drive"] = letter
-            save_config(cfg)
-            drive = detect_survey_drive(force=True)
-            return jsonify({"success": True, "drive": drive,
-                            "drive_ok": drive is not None})
         else:
             cfg.pop("survey_drive", None)
-            save_config(cfg)
-            drive = detect_survey_drive(force=True)
-            return jsonify({"success": True, "drive": drive,
-                            "drive_ok": drive is not None})
+        save_config(cfg)
+        drive = detect_survey_drive(force=True)
+        return jsonify({"success": True, "drive": drive, "drive_ok": drive is not None})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
@@ -1996,13 +1946,7 @@ def api_research_get():
         if not job_number or not client_name:
             return jsonify({"success": False, "error": "job_number + client_name required"})
         data = load_research(job_number, client_name, job_type)
-
-        # Migrate old subjects that lack new fields
-        for s in data.get("subjects", []):
-            s.setdefault("status",    "pending")
-            s.setdefault("notes",     "")
-            s.setdefault("deed_path", "")
-            s.setdefault("plat_path", "")
+        # (field migration is now handled inside load_research)
 
         # Progress summary
         subjects = data.get("subjects", [])
@@ -2062,7 +2006,10 @@ def api_open_file():
 def api_recent_jobs():
     """Scan Survey Data for the 10 most recently modified job folders."""
     try:
-        survey = Path(get_survey_data_path())
+        survey_str = get_survey_data_path()
+        if not survey_str or not Path(survey_str).exists():
+            return jsonify({"success": True, "jobs": []})
+        survey = Path(survey_str)
         jobs   = []
         for range_dir in survey.iterdir():
             if not range_dir.is_dir() or range_dir.name.startswith("00"):
@@ -2075,7 +2022,6 @@ def api_recent_jobs():
                     continue
                 job_num    = int(m.group(1))
                 client     = m.group(2).strip()
-                # Find sub-folder for job type
                 job_type   = "BDY"
                 for sub in job_dir.iterdir():
                     mt = re.match(r'^\d+-01-([A-Z]+)\s', sub.name)
@@ -2089,7 +2035,6 @@ def api_recent_jobs():
                     "modified":    job_dir.stat().st_mtime,
                 })
         jobs.sort(key=lambda j: j["modified"], reverse=True)
-        # Remove modified timestamp before sending
         for j in jobs:
             del j["modified"]
         return jsonify({"success": True, "jobs": jobs[:10]})
@@ -2139,381 +2084,39 @@ def api_export_session():
         return jsonify({"success": False, "error": str(e)})
 
 
-@app.route("/api/chain-search", methods=["POST"])
-def api_chain_search():
-    """Return the last name from a grantor string for chain-of-title searching."""
-    try:
-        data   = request.get_json()
-        grantor = data.get("grantor", "")
-        last   = grantor.split(",")[0].strip() if grantor else ""
-        return jsonify({"success": True, "search_term": last})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+# (api_chain_search removed — callers now do `grantor.split(',')[0].strip()` locally)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BOUNDARY LINES & DXF GENERATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-import math
-import ezdxf
-from ezdxf.enums import TextEntityAlignment
-
-# ── Metes-and-bounds parser ────────────────────────────────────────────────────
-
-# Matches patterns like:
-#   S 45°30'00" E, 125.50 feet
-#   N45-30-00E 125.50'
-#   N 45 30 00 E 125.50 ft
-#   N45°W 87.20
-#   S45E 125.50
-_BEARING_PAT = re.compile(
-    r'\b([NS])\s*'                                  # N or S
-    r'(\d{1,3})'                                    # degrees
-    r'[°\-\s]*(\d{0,2})[\'′\-\s]*(\d{0,2})["\″\-\s]*'  # opt min/sec
-    r'([EW])\b'                                     # E or W
-    r'[,\s]*'
-    r'([\d,]+\.?\d*)'                               # distance
-    r'\s*(?:feet|foot|ft|\')?',
-    re.IGNORECASE
-)
-
-# Also catch written-out degrees: "45 degrees 30 minutes 00 seconds"
-_BEARING_VERBOSE = re.compile(
-    r'\b([NS])\s*'
-    r'(\d+)\s*(?:deg(?:rees?)?)?\s*'
-    r'(\d*)\s*(?:min(?:utes?)?)?\s*'
-    r'(\d*)\s*(?:sec(?:onds?)?)?\s*'
-    r'([EW])\b'
-    r'[,\s]*'
-    r'([\d,]+\.?\d*)'
-    r'\s*(?:feet|foot|ft|\')?',
-    re.IGNORECASE
-)
-
-# Curve / arc call pattern
-# Handles: "curve to the left, radius 150 feet, arc length 75.23 feet, chord bears N45°30'00"E"
-_CURVE_PAT = re.compile(
-    r'\bcurve\s+to\s+the\s*(left|right)'
-    r'[^.]{0,200}?'
-    r'radius[\s:]+([\d.]+)\s*(?:feet|ft)?'
-    r'[^.]{0,200}?'
-    r'(?:arc\s+(?:length|len)[\s:]+([\d.]+)\s*(?:feet|ft)?)?'
-    r'[^.]{0,200}?'
-    r'(?:delta[\s:=]+([\d.]+)(?:°|\s*deg(?:rees?)?)?)?'
-    r'[^.]{0,200}?'
-    r'(?:chord\s+(?:bears?\s+|bearing\s+)([NS]\s*\d+[^,;.]{0,30}?[EW]))?',
-    re.I | re.S
-)
+# All metes-and-bounds parsing functions are imported from helpers.metes_bounds
 
 
-def _bearing_to_azimuth(ns: str, deg: float, mn: float, sec: float, ew: str) -> float:
-    """Convert quadrant bearing to azimuth (0=N, clockwise positive)."""
-    dd = deg + mn / 60.0 + sec / 3600.0
-    ns = ns.upper(); ew = ew.upper()
-    if ns == 'N' and ew == 'E':
-        return dd
-    if ns == 'S' and ew == 'E':
-        return 180.0 - dd
-    if ns == 'S' and ew == 'W':
-        return 180.0 + dd
-    if ns == 'N' and ew == 'W':
-        return 360.0 - dd
-    return 0.0
 
-
-def parse_metes_bounds(text: str) -> list[dict]:
-    """
-    Parse metes-and-bounds calls from deed text.
-    Returns list of dicts:
-      Straight: { type='straight', bearing_raw, bearing_label, azimuth, distance }
-      Curve:    { type='curve', direction, radius, arc_length, delta, chord_bearing,
-                  chord_label, chord_azimuth, chord_length }
-    Tries verbose pattern first, falls back to compact pattern.
-    Also detects curve/arc calls.
-    """
-    if not text:
-        return []
-
-    calls = []
-    seen_spans = []
-
-    def _add(m, pat_type):
-        start, end = m.span()
-        for s, e in seen_spans:
-            if not (end <= s or start >= e):
-                return
-        seen_spans.append((start, end))
-
-        ns  = m.group(1).upper()
-        deg = float(m.group(2) or 0)
-        mn  = float(m.group(3) or 0)
-        sec = float(m.group(4) or 0)
-        ew  = m.group(5).upper()
-        dist_str = m.group(6).replace(',', '')
-        try:
-            dist = float(dist_str)
-        except ValueError:
-            return
-
-        az    = _bearing_to_azimuth(ns, deg, mn, sec, ew)
-        label = f"{ns}{int(deg):02d}°{int(mn):02d}'{int(sec):02d}\"{ew}"
-
-        calls.append({
-            "type":          "straight",
-            "bearing_raw":   m.group(0).strip(),
-            "bearing_label": label,
-            "azimuth":       round(az, 6),
-            "distance":      round(dist, 3),
-            "ns":            ns,
-            "ew":            ew,
-            "deg":           deg,
-            "min":           mn,
-            "sec":           sec,
-            "span_start":    start,
-        })
-
-    for m in _BEARING_VERBOSE.finditer(text):
-        _add(m, 'verbose')
-    for m in _BEARING_PAT.finditer(text):
-        _add(m, 'compact')
-
-    # Curve / arc calls
-    for m in _CURVE_PAT.finditer(text):
-        start, end = m.span()
-        # Skip if overlapping with a straight call
-        overlap = any(not (end <= s or start >= e) for s, e in seen_spans)
-        if overlap:
-            continue
-        seen_spans.append((start, end))
-
-        direction  = (m.group(1) or "left").lower()
-        radius     = float(m.group(2) or 0)
-        arc_length = float(m.group(3)) if m.group(3) else None
-        delta_deg  = float(m.group(4)) if m.group(4) else None
-
-        # Calculate arc_length from delta if not given, and vice-versa
-        if arc_length and radius and not delta_deg:
-            delta_deg = math.degrees(arc_length / radius)
-        elif delta_deg and radius and not arc_length:
-            arc_length = math.radians(delta_deg) * radius
-
-        # Chord length from arc_length and radius
-        chord_len = 2 * radius * math.sin(math.radians(delta_deg) / 2) if delta_deg and radius else (arc_length or 0)
-
-        # Chord bearing (raw string, best-effort)
-        chord_raw = (m.group(5) or "").strip()
-        chord_az  = 0.0
-        chord_lbl = chord_raw
-        cb = re.match(r'([NS])\s*(\d+)[^\d]*(\d*)[\'′]?\s*(\d*)["]?\s*([EW])', chord_raw, re.I)
-        if cb:
-            chord_az = _bearing_to_azimuth(
-                cb.group(1).upper(), float(cb.group(2) or 0),
-                float(cb.group(3) or 0), float(cb.group(4) or 0), cb.group(5).upper()
-            )
-            chord_lbl = f"{cb.group(1).upper()}{int(float(cb.group(2))):02d}°{int(float(cb.group(3) or 0)):02d}'{int(float(cb.group(4) or 0)):02d}\"{cb.group(5).upper()}"
-
-        calls.append({
-            "type":           "curve",
-            "direction":      direction,
-            "radius":         round(radius, 3),
-            "arc_length":     round(arc_length, 3) if arc_length else 0,
-            "delta":          round(delta_deg, 6)  if delta_deg  else 0,
-            "chord_bearing":  chord_raw,
-            "chord_label":    chord_lbl,
-            "chord_azimuth":  round(chord_az, 6),
-            "chord_length":   round(chord_len, 3),
-            # Expose as bearing_label for table display compatibility
-            "bearing_label":  f"Curve {direction}, R={radius}\', Δ={delta_deg:.4f}°" if delta_deg else f"Curve {direction}, R={radius}\'",
-            "distance":       round(arc_length, 3) if arc_length else round(chord_len, 3),
-            "azimuth":        round(chord_az, 6),
-            "span_start":     start,
-        })
-
-    # Sort by position in text
-    calls.sort(key=lambda c: c['span_start'])
-    for c in calls:
-        c.pop('span_start', None)
-
-    return calls
-
-
-# ── Coordinate computation ─────────────────────────────────────────────────────
-
-def calls_to_coords(calls: list[dict], start_x: float = 0.0, start_y: float = 0.0) -> list[tuple]:
-    """
-    Chain calls into (x, y) vertices starting at (start_x, start_y).
-    For curves, uses the chord displacement (chord_azimuth, chord_length).
-    Returns list of (x, y) tuples — includes the starting point.
-    """
-    pts = [(start_x, start_y)]
-    x, y = start_x, start_y
-    for c in calls:
-        if c.get("type") == "curve":
-            az_rad = math.radians(c.get("chord_azimuth", c.get("azimuth", 0)))
-            dist   = c.get("chord_length", c.get("distance", 0))
-        else:
-            az_rad = math.radians(c['azimuth'])
-            dist   = c['distance']
-        dx = dist * math.sin(az_rad)
-        dy = dist * math.cos(az_rad)
-        x += dx
-        y += dy
-        pts.append((round(x, 4), round(y, 4)))
-    return pts
 
 
 # ── DXF generator ─────────────────────────────────────────────────────────────
 
 def _ensure_dwg_folder(job_number, client_name, job_type) -> Path:
     """Return (and create) the B Drafting/dwg folder for the job."""
-    rstart       = (int(job_number) // 100) * 100
-    range_folder = f"{rstart}-{rstart + 99}"
-    last_name    = client_name.split(",")[0].strip()
-    dwg_dir = (
-        Path(get_survey_data_path()) / range_folder /
-        f"{job_number} {client_name}" /
-        f"{job_number}-01-{job_type} {last_name}" /
-        "B Drafting" / "dwg"
-    )
+    dwg_dir = _job_base_path(job_number, client_name, job_type) / "B Drafting" / "dwg"
     dwg_dir.mkdir(parents=True, exist_ok=True)
     return dwg_dir
 
 
 def generate_boundary_dxf(
-    parcels:     list[dict],   # [{label, calls:[{bearing_label,azimuth,distance}], color}]
+    parcels:     list[dict],
     job_number,
     client_name: str,
     job_type:    str,
-    options:     dict = None,  # user-selectable flags
-) -> str:
-    """
-    Build a DXF file from one or more parcel call-lists.
-    Returns the saved file path string.
+    options:     dict = None,
+) -> tuple[str, list[dict]]:
+    """Delegates to helpers.dxf.generate_boundary_dxf, resolving output_dir."""
+    dwg_dir = _ensure_dwg_folder(job_number, client_name, job_type)
+    return _generate_dxf_impl(parcels, dwg_dir, job_number, client_name, job_type, options)
 
-    options keys (all default True/on):
-      draw_boundary    – draw closed polyline for each parcel
-      draw_labels      – add bearing/distance MTEXT labels on each course
-      draw_endpoints   – add a POINT at each vertex
-      label_size       – text height in drawing units (default 2.0)
-      close_tolerance  – if closure error < this value, force close (default 0.5 ft)
-    """
-    opts = {
-        "draw_boundary":  True,
-        "draw_labels":    True,
-        "draw_endpoints": False,
-        "label_size":     2.0,
-        "close_tolerance": 0.5,
-    }
-    if options:
-        opts.update(options)
-
-    doc = ezdxf.new('R2010')
-    doc.header['$INSUNITS'] = 2   # 2 = feet
-    doc.header['$MEASUREMENT'] = 0  # imperial
-
-    msp = doc.modelspace()
-
-    # Layer definitions
-    layer_defs = [
-        ("CLIENT",    2,  "CONTINUOUS"),   # yellow
-        ("ADJOINERS", 3,  "DASHED"),       # green, dashed
-        ("LABELS",    7,  "CONTINUOUS"),   # white
-        ("ENDPOINTS", 6,  "CONTINUOUS"),   # magenta
-        ("INFO",      8,  "CONTINUOUS"),   # grey
-    ]
-    for name, color, lt in layer_defs:
-        if name not in doc.layers:
-            doc.layers.add(name, color=color)
-
-    text_h = float(opts.get("label_size", 2.0))
-
-    for parcel in parcels:
-        label    = parcel.get("label", "Parcel")
-        calls    = parcel.get("calls", [])
-        p_color  = parcel.get("color", None)  # optional per-parcel color override
-        start_x  = float(parcel.get("start_x", 0.0))
-        start_y  = float(parcel.get("start_y", 0.0))
-        layer    = parcel.get("layer", "CLIENT")
-
-        if not calls:
-            continue
-
-        pts = calls_to_coords(calls, start_x, start_y)
-
-        # Check closure
-        err = math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1])
-        closed = err <= float(opts.get("close_tolerance", 0.5))
-
-        if opts["draw_boundary"]:
-            # Build 2D polyline vertices
-            verts = [(p[0], p[1]) for p in pts]
-            attribs = {"layer": layer, "closed": closed}
-            if p_color:
-                attribs["color"] = p_color
-            pline = msp.add_lwpolyline(verts, dxfattribs=attribs)
-
-        if opts["draw_endpoints"]:
-            for px, py in pts:
-                msp.add_point((px, py, 0), dxfattribs={"layer": "ENDPOINTS"})
-
-        if opts["draw_labels"]:
-            for i, c in enumerate(calls):
-                # Midpoint of each course
-                x0, y0 = pts[i]
-                x1, y1 = pts[i + 1]
-                mx = (x0 + x1) / 2.0
-                my = (y0 + y1) / 2.0
-
-                # Perpendicular offset for readability
-                az_rad   = math.radians(c['azimuth'])
-                perp_rad = az_rad + math.pi / 2
-                offset   = text_h * 1.2
-                lx = mx + offset * math.sin(perp_rad)
-                ly = my + offset * math.cos(perp_rad)
-
-                bearing_txt = c.get("bearing_label", "")
-                dist_txt    = f"{c['distance']:.2f}'"
-                txt = f"{bearing_txt}\\P{dist_txt}"   # \\P = MTEXT line break
-
-                msp.add_mtext(txt, dxfattribs={
-                    "layer":       "LABELS",
-                    "char_height": text_h,
-                    "insert":      (lx, ly, 0),
-                    "attachment_point": 5,  # middle-center
-                })
-
-        # Closure annotation
-        if not closed and err > 0.01:
-            note = (
-                f"! Closure error: {err:.3f} ft\n"
-                f"  Parcel: {label}"
-            )
-            msp.add_mtext(note, dxfattribs={
-                "layer":       "INFO",
-                "char_height": text_h,
-                "insert":      (pts[0][0], pts[0][1] - text_h * 4, 0),
-            })
-
-    # Job info block at origin
-    info_txt = (
-        f"Job #{job_number}  {client_name}\\P"
-        f"Type: {job_type}\\P"
-        f"Generated: {__import__('datetime').date.today()}"
-    )
-    msp.add_mtext(info_txt, dxfattribs={
-        "layer":       "INFO",
-        "char_height": text_h * 0.8,
-        "insert":      (0, -text_h * 8, 0),
-    })
-
-    # Save file
-    dwg_dir  = _ensure_dwg_folder(job_number, client_name, job_type)
-    last_name = client_name.split(",")[0].strip().title()
-    filename = re.sub(r'[<>:"/\\|?*]', '', f"{job_number} {last_name} Boundary.dxf").strip()
-    out_path = dwg_dir / filename
-    doc.saveas(str(out_path))
-    return str(out_path)
 
 
 # ── /api/parse-calls ──────────────────────────────────────────────────────────
@@ -2580,36 +2183,10 @@ def api_extract_calls_from_pdf():
         if not pdf_path or not os.path.exists(pdf_path):
             return jsonify({"success": False, "error": "File not found"})
 
-        filename = Path(pdf_path).name
-        text     = ""
-        source   = "text"
+        filename     = Path(pdf_path).name
+        text, source = _extract_pdf_text(pdf_path)  # text layer first, OCR fallback
 
-        # ── Step 1: Try native text extraction ────────────────────────────────
-        try:
-            doc = fitz.open(pdf_path)
-            for page in doc:
-                text += page.get_text() + "\n"
-            doc.close()
-        except Exception:
-            pass
 
-        # ── Step 2: If no useful text, fall back to OCR ───────────────────────
-        if len(text.strip()) < 50:
-            source = "ocr"
-            from PIL import ImageEnhance
-            try:
-                doc = fitz.open(pdf_path)
-                for page in doc:
-                    pix = page.get_pixmap(dpi=250)
-                    img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
-                    img = ImageEnhance.Contrast(img).enhance(2.0)
-                    img = img.point(lambda x: 255 if x > 128 else 0, "1")
-                    text += pytesseract.image_to_string(img, config="--oem 3 --psm 6") + "\n"
-                doc.close()
-            except Exception as e:
-                return jsonify({"success": False, "error": f"OCR failed: {e}"})
-
-        # ── Step 3: Parse metes & bounds ─────────────────────────────────────
         calls = parse_metes_bounds(text)
         pts   = calls_to_coords(calls) if calls else []
         closure_err = 0.0
@@ -2676,19 +2253,9 @@ def api_generate_dxf():
         if not parcels:
             return jsonify({"success": False, "error": "No parcels provided"})
 
-        saved_path = generate_boundary_dxf(parcels, job_number, client_name, job_type, options)
-        filename   = Path(saved_path).name
-
-        # Compute closure errors per parcel for the response
-        closure_errs = []
-        for p in parcels:
-            pts = calls_to_coords(p.get("calls", []),
-                                  p.get("start_x", 0.0), p.get("start_y", 0.0))
-            if len(pts) >= 2:
-                err = round(math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]), 4)
-            else:
-                err = 0.0
-            closure_errs.append({"label": p.get("label", "Parcel"), "error": err})
+        saved_path, closure_errs = generate_boundary_dxf(
+            parcels, job_number, client_name, job_type, options)
+        filename = Path(saved_path).name
 
         return jsonify({
             "success":        True,
@@ -2734,9 +2301,11 @@ def api_cabinet_browse():
             if filt and filt not in f.name.lower():
                 continue
             files.append({
-                "file":    f.name,
-                "path":    str(f),
-                "size_kb": round(f.stat().st_size / 1024),
+                "file":         f.name,
+                "path":         str(f),
+                "display_name": _extract_cabinet_display_name(f.name),
+                "doc_number":   _extract_cabinet_doc_number(f.name),
+                "size_kb":      round(f.stat().st_size / 1024),
             })
 
         total = len(files)
@@ -2926,12 +2495,16 @@ def api_xml_map_geojson():
         data           = request.get_json() or {}
         highlight_upcs = data.get("highlight_upcs", [])
         max_features   = int(data.get("max_features", 100000))
+        source_filter  = data.get("source_filter", "")
 
         survey  = get_survey_data_path()
-        geojson = xml_processor.get_map_geojson(survey, highlight_upcs, max_features)
+        geojson = xml_processor.get_map_geojson(
+            survey, highlight_upcs, max_features, source_filter=source_filter
+        )
         total   = len(geojson.get("features", []))
+        sources = geojson.pop("sources", [])  # separate from FeatureCollection
 
-        payload = json.dumps({"success": True, "geojson": geojson, "total": total},
+        payload = json.dumps({"success": True, "geojson": geojson, "total": total, "sources": sources},
                              separators=(",", ":"))  # compact JSON — no spaces
 
         # Compress if client supports it (all modern browsers do)
@@ -2954,6 +2527,480 @@ def api_xml_map_geojson():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e), "total": 0})
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PROPERTY ADDRESS LOOKUP  (ArcGIS + Nominatim fallback)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# In-memory cache: { "upc:12345" or "ll:lat,lon" : { address dict } }
+_address_cache: dict = {}
+_nominatim_last_call: float = 0.0   # monotonic timestamp of last Nominatim call
+
+# ── NM State ArcGIS Parcel Service (primary) ──────────────────────────────────
+# Free, no API key needed, returns official situs addresses tied to UPC
+ARCGIS_TAOS_QUERY_URL = (
+    "https://gis.ose.nm.gov/server_s/rest/services/"
+    "Parcels/County_Parcels_2025/MapServer/29/query"
+)
+ARCGIS_OUT_FIELDS = (
+    "UPC,OwnerAll,SitusAddressAll,SitusAddress1,SitusAddress2,"
+    "SitusStreetNumber,SitusStreetName,SitusCity,SitusZipCode,"
+    "LegalDescription,LandArea"
+)
+
+# ── Nominatim (fallback) ─────────────────────────────────────────────────────
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+NOMINATIM_HEADERS = {
+    "User-Agent": "DeedPlatHelper/1.0 (land-survey-research-tool)",
+    "Accept": "application/json",
+}
+
+
+def _arcgis_lookup_upc(upc: str) -> dict:
+    """Query the NM ArcGIS parcel service by UPC.
+
+    Returns a dict with address fields, or None on failure.
+    """
+    if not upc:
+        return None
+
+    cache_key = f"upc:{upc}"
+    if cache_key in _address_cache:
+        return _address_cache[cache_key]
+
+    try:
+        resp = req_lib.get(
+            ARCGIS_TAOS_QUERY_URL,
+            params={
+                "where":            f"UPC='{upc}'",
+                "outFields":        ARCGIS_OUT_FIELDS,
+                "returnGeometry":   "false",
+                "f":                "json",
+            },
+            headers={"User-Agent": "DeedPlatHelper/1.0"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            print(f"[address] ArcGIS returned {resp.status_code} for UPC {upc}", flush=True)
+            return None
+
+        data = resp.json()
+        features = data.get("features", [])
+        if not features:
+            print(f"[address] ArcGIS: no features for UPC {upc}", flush=True)
+            return None
+
+        attrs = features[0].get("attributes", {})
+
+        # Build short_address from official situs fields
+        situs_all = (attrs.get("SitusAddressAll") or "").strip()
+        situs1    = (attrs.get("SitusAddress1") or "").strip()
+        street_no = (attrs.get("SitusStreetNumber") or "").strip()
+        street_nm = (attrs.get("SitusStreetName") or "").strip()
+        city      = (attrs.get("SitusCity") or "").strip()
+        zipcode   = (attrs.get("SitusZipCode") or "").strip()
+
+        # Prefer the most complete address representation
+        if situs1:
+            short_addr = situs1
+            if city:
+                short_addr += f", {city}"
+        elif street_no and street_nm:
+            short_addr = f"{street_no} {street_nm}"
+            if city:
+                short_addr += f", {city}"
+        elif situs_all and situs_all != zipcode:
+            short_addr = situs_all
+        else:
+            short_addr = ""   # no usable street address
+
+        result = {
+            "success":          True,
+            "source":           "arcgis",
+            "short_address":    short_addr or "(no street address on file)",
+            "situs_full":       situs_all,
+            "situs_address1":   situs1,
+            "street_number":    street_no,
+            "street_name":      street_nm,
+            "city":             city,
+            "zipcode":          zipcode,
+            "owner_official":   (attrs.get("OwnerAll") or "").strip(),
+            "legal_description": (attrs.get("LegalDescription") or "").strip(),
+            "land_area":        (attrs.get("LandArea") or ""),
+            "upc":              upc,
+            "has_street_address": bool(situs1 or (street_no and street_nm)),
+        }
+
+        _address_cache[cache_key] = result
+        print(f"[address] ArcGIS UPC {upc} → {result['short_address']}", flush=True)
+        return result
+
+    except Exception as e:
+        print(f"[address] ArcGIS error for UPC {upc}: {e}", flush=True)
+        return None
+
+
+def _nominatim_reverse(lat: float, lon: float) -> dict:
+    """Call Nominatim reverse-geocode for a single lat/lon pair.
+
+    Returns a dict with address fields, or an error dict.
+    Enforces 1-second rate limiting and caches results.
+    """
+    import time as _time
+    global _nominatim_last_call
+
+    cache_key = f"ll:{round(lat, 5)},{round(lon, 5)}"
+    if cache_key in _address_cache:
+        return _address_cache[cache_key]
+
+    # Rate-limit: min 1 second between Nominatim calls
+    now = _time.monotonic()
+    wait = 1.05 - (now - _nominatim_last_call)
+    if wait > 0:
+        _time.sleep(wait)
+
+    try:
+        resp = req_lib.get(
+            NOMINATIM_URL,
+            params={
+                "format": "json",
+                "lat": lat,
+                "lon": lon,
+                "addressdetails": 1,
+                "zoom": 18,
+            },
+            headers=NOMINATIM_HEADERS,
+            timeout=10,
+        )
+        _nominatim_last_call = _time.monotonic()
+
+        if resp.status_code != 200:
+            return {"success": False, "source": "nominatim", "error": f"HTTP {resp.status_code}"}
+
+        data = resp.json()
+        addr = data.get("address", {})
+
+        # Build short human-readable address
+        parts = []
+        if addr.get("house_number"):
+            parts.append(addr["house_number"])
+        if addr.get("road"):
+            parts.append(addr["road"])
+        if not parts and addr.get("hamlet"):
+            parts.append(addr["hamlet"])
+        if not parts and addr.get("village"):
+            parts.append(addr["village"])
+        locality = addr.get("town") or addr.get("city") or addr.get("village") or addr.get("hamlet") or ""
+        if locality and locality not in parts:
+            parts.append(locality)
+
+        result = {
+            "success":           True,
+            "source":            "nominatim",
+            "short_address":     ", ".join(parts) if parts else "(no address found)",
+            "road":              addr.get("road", ""),
+            "house_number":      addr.get("house_number", ""),
+            "hamlet":            addr.get("hamlet", ""),
+            "village":           addr.get("village", ""),
+            "town":              addr.get("town", ""),
+            "city":              addr.get("city", ""),
+            "county":            addr.get("county", ""),
+            "state":             addr.get("state", ""),
+            "postcode":          addr.get("postcode", ""),
+            "has_street_address": bool(addr.get("house_number") and addr.get("road")),
+            "lat":               lat,
+            "lon":               lon,
+        }
+
+        _address_cache[cache_key] = result
+        print(f"[address] Nominatim {lat},{lon} → {result['short_address']}", flush=True)
+        return result
+
+    except Exception as e:
+        _nominatim_last_call = _time.monotonic() if '_time' in dir() else 0
+        print(f"[address] Nominatim error for {lat},{lon}: {e}", flush=True)
+        return {"success": False, "source": "nominatim", "error": str(e)}
+
+
+@app.route("/api/property-address", methods=["POST"])
+def api_property_address():
+    """Look up property address info.
+
+    Dual strategy:
+      1. If UPC provided → query NM ArcGIS parcel database (official situs address)
+      2. Fallback → Nominatim reverse geocode from lat/lon centroid
+
+    Body: { "upc": str, "lat": float, "lon": float }
+    Returns: { success, short_address, source, ... }
+    """
+    try:
+        data = request.get_json() or {}
+        upc  = (data.get("upc") or "").strip()
+        lat  = float(data.get("lat", 0))
+        lon  = float(data.get("lon", 0))
+
+        # Strategy 1: ArcGIS by UPC (preferred — official govt data, no rate limit)
+        if upc:
+            result = _arcgis_lookup_upc(upc)
+            if result and result.get("success"):
+                return jsonify(result)
+
+        # Strategy 2: Nominatim reverse geocode from coordinates (fallback)
+        if lat != 0 or lon != 0:
+            result = _nominatim_reverse(lat, lon)
+            return jsonify(result)
+
+        return jsonify({"success": False, "error": "No UPC or coordinates provided"})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/batch-property-address", methods=["POST"])
+def api_batch_property_address():
+    """Look up addresses for up to 10 parcels.
+
+    Body: { "parcels": [ { "upc": str, "lat": float, "lon": float }, ... ] }
+    Returns: { success, results: [ { short_address, source, ... }, ... ] }
+    """
+    try:
+        data    = request.get_json() or {}
+        parcels = data.get("parcels", [])[:10]
+
+        if not parcels:
+            return jsonify({"success": False, "error": "No parcels provided"})
+
+        results = []
+        for p in parcels:
+            upc = (p.get("upc") or "").strip()
+            lat = float(p.get("lat", 0))
+            lon = float(p.get("lon", 0))
+
+            result = None
+            if upc:
+                result = _arcgis_lookup_upc(upc)
+            if not result or not result.get("success"):
+                if lat != 0 or lon != 0:
+                    result = _nominatim_reverse(lat, lon)
+            if not result:
+                result = {"success": False, "error": "No UPC or coordinates"}
+            results.append(result)
+
+        return jsonify({"success": True, "results": results})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEEP DEED ANALYSIS & HEALTH CHECK
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def analyze_deed(detail: dict, pdf_path: str = "") -> dict:
+    """Delegates to helpers.deed_analysis.analyze_deed."""
+    return _analyze_deed_impl(detail, pdf_path, pdf_extractor=_extract_pdf_text)
+
+
+
+
+@app.route("/api/extract-deed-description", methods=["POST"])
+def api_extract_deed_description():
+    """
+    Extract the full property description from a deed PDF.
+
+    Body: {
+        pdf_path: str            – Path to the saved deed PDF
+        detail:   dict (optional) – Scraped metadata from the website (fallback)
+        doc_no:   str  (optional) – Document number for the PDF URL fallback
+    }
+
+    Returns: {
+        success: bool,
+        description: {
+            full_text:        str   – Complete text extracted from the PDF
+            legal_description: str  – Isolated legal description section
+            source:           str   – 'text' or 'ocr'
+            trs_refs:         list  – Township/Range/Section references
+            calls_count:      int   – Number of metes-and-bounds calls found
+            calls:            list  – Parsed bearing/distance calls
+            desc_type:        str   – 'metes_and_bounds', 'lot_block', 'tract', 'trs_only', 'unknown'
+            grantor:          str   – Extracted grantor name
+            grantee:          str   – Extracted grantee name
+            area_acres:       float – Computed area if metes-and-bounds
+            perimeter_ft:     float – Computed perimeter if metes-and-bounds
+            monuments:        list  – Monument types referenced
+            adjoiners:        list  – Adjoiner names found in description
+            pob_found:        bool  – Whether Point of Beginning was found
+            cab_refs:         list  – Cabinet references found
+        }
+    }
+    """
+    try:
+        data     = request.get_json(silent=True) or {}
+        pdf_path = data.get("pdf_path", "")
+        detail   = data.get("detail", {})
+        doc_no   = data.get("doc_no", "")
+
+        if isinstance(detail, str):
+            try:
+                detail = json.loads(detail)
+            except Exception:
+                detail = {}
+
+        full_text = ""
+        source    = "none"
+
+        # ── 1. Extract text from saved PDF ────────────────────────────────
+        if pdf_path and os.path.isfile(pdf_path):
+            print(f"[extract-desc] Reading PDF: {pdf_path}", flush=True)
+            full_text, source = _extract_pdf_text(pdf_path)
+            print(f"[extract-desc] source={source} chars={len(full_text.strip())}", flush=True)
+
+        # ── 2. Fallback: if no PDF, use URL or metadata only ──────────────
+        if not full_text.strip() and doc_no:
+            # Try to download the PDF from the online source into a temp file
+            try:
+                pdf_url  = f"{BASE_URL}/WebTemp/{doc_no}.pdf"
+                pdf_resp = web_session.get(pdf_url, stream=True, timeout=20)
+                if pdf_resp.status_code == 200:
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                        for chunk in pdf_resp.iter_content(8192):
+                            tf.write(chunk)
+                        tmp_path = tf.name
+                    full_text, source = _extract_pdf_text(tmp_path)
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+                    print(f"[extract-desc] Downloaded PDF from URL, source={source} chars={len(full_text.strip())}", flush=True)
+            except Exception as e:
+                print(f"[extract-desc] PDF URL fallback failed: {e}", flush=True)
+
+        # ── 3. Merge with scraped metadata fields ─────────────────────────
+        metadata_text = ""
+        legal_fields = [
+            "Legal Description", "Legal", "Other Legal", "Other_Legal",
+            "Subdivision Legal", "Subdivision_Legal", "Description",
+            "Comments", "Remarks", "Reference",
+        ]
+        for field in legal_fields:
+            val = detail.get(field, "")
+            if val:
+                metadata_text += val + "\n"
+
+        combined = full_text + "\n" + metadata_text
+
+        # ── 4. Isolate the legal description section ──────────────────────
+        legal_desc = _isolate_legal_description(combined)
+
+        # ── 5. Parse structured data from the text ────────────────────────
+        trs_refs = extract_trs(combined)
+        calls    = parse_metes_bounds(combined)
+
+        # Description type
+        desc_type = classify_description_type(combined, calls, trs_refs)
+
+        # Area / perimeter if metes-and-bounds
+        pts = calls_to_coords(calls) if calls else []
+        perimeter = sum(c.get("distance", 0) for c in calls)
+        area_sqft = shoelace_area(pts)
+
+        # Monuments
+        monuments = detect_monuments(combined)
+
+        # Adjoiner names
+        adjoiners = []
+        if detail:
+            adj_items = parse_adjoiner_names({"Legal": combined})
+            adjoiners = [a["name"] for a in adj_items]
+
+        # POB
+        pob_found = has_pob(combined)
+
+        # Cabinet refs
+        cab_refs = parse_cabinet_refs({"Legal": combined, **detail})
+
+        # Grantor / Grantee from detail or PDF text
+        grantor = detail.get("Grantor", "") or detail.get("grantor", "")
+        grantee = detail.get("Grantee", "") or detail.get("grantee", "")
+
+        # Format calls for frontend
+        calls_formatted = []
+        for c in calls:
+            if c.get("type") == "straight":
+                calls_formatted.append({
+                    "bearing": c.get("bearing_label", ""),
+                    "distance": c.get("distance", 0),
+                    "raw": c.get("bearing_raw", ""),
+                })
+            elif c.get("type") == "curve":
+                calls_formatted.append({
+                    "bearing": f"Curve {c.get('direction', '').title()} R={c.get('radius', 0):.1f}'",
+                    "distance": round(c.get("arc_length", 0) or c.get("chord_length", 0), 2),
+                    "raw": c.get("bearing_raw", ""),
+                    "curve": True,
+                })
+
+        return jsonify({
+            "success": True,
+            "description": {
+                "full_text":         full_text.strip()[:10000],  # Cap to avoid huge payloads
+                "legal_description": legal_desc.strip()[:5000],
+                "source":            source,
+                "trs_refs":          [t["trs"] for t in trs_refs],
+                "calls_count":       len(calls),
+                "calls":             calls_formatted[:100],
+                "desc_type":         desc_type,
+                "grantor":           grantor,
+                "grantee":           grantee,
+                "area_acres":        round(area_sqft / 43560.0, 3) if area_sqft else 0,
+                "perimeter_ft":      round(perimeter, 2),
+                "monuments":         monuments,
+                "adjoiners":         adjoiners[:30],
+                "pob_found":         pob_found,
+                "cab_refs":          [{"cabinet": r["cabinet"], "doc": r["doc"]} for r in cab_refs],
+            }
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+def _isolate_legal_description(text: str) -> str:
+    """Delegates to helpers.deed_analysis.isolate_legal_description."""
+    return _isolate_legal_description_impl(text)
+
+
+@app.route("/api/analyze-deed", methods=["POST"])
+def api_analyze_deed():
+    """
+    Deep deed analysis endpoint.
+    Body: { detail: dict, pdf_path: str (optional) }
+    Returns: { success, analysis: {...} }
+    """
+    try:
+        data     = request.get_json(silent=True) or {}
+        detail   = data.get("detail", {})
+        pdf_path = data.get("pdf_path", "")
+
+        if isinstance(detail, str):
+            try:
+                detail = json.loads(detail)
+            except Exception:
+                detail = {}
+
+        result = analyze_deed(detail, pdf_path)
+        return jsonify({"success": True, "analysis": result})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
 
 
 # ── run ────────────────────────────────────────────────────────────────────────

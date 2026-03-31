@@ -8,7 +8,7 @@
   <title>Deed & Plat Helper</title>
   <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=1774920000">
+  <link rel="stylesheet" href="style.css">
   <!-- Leaflet map for KML parcel picker -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
@@ -28,6 +28,7 @@
       <div class="job-badge">Job #<span id="ctxJobNum">----</span></div>
       <div class="job-client" id="ctxClient">No Session</div>
       <div class="job-type" id="ctxType">---</div>
+      <div class="row-layout gap-1" id="ctxFileBadges"></div>
     </div>
 
     <div class="topbar-right">
@@ -501,6 +502,12 @@
           placeholder="Type last name or UPC..."
           oninput="onPropPickerSearch(this.value)">
         <div id="propPickerSearchCount" style="font-size:11px;color:var(--text3);white-space:nowrap">—</div>
+        <div style="border-left:1px solid var(--border);padding-left:10px;display:flex;align-items:center;gap:6px">
+          <label for="propPickerSourceFilter" style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);white-space:nowrap">Layer:</label>
+          <select id="propPickerSourceFilter" class="inp" style="padding:4px 8px;font-size:11px;font-family:'JetBrains Mono',monospace;font-weight:600;width:auto;min-width:140px;height:28px;border-radius:6px;cursor:pointer" onchange="onPropPickerSourceChange(this.value)">
+            <option value="">All Layers</option>
+          </select>
+        </div>
       </div>
 
       <!-- Body: map + side panel -->
@@ -604,7 +611,13 @@
         <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px">
           <span style="width:14px;height:14px;background:#56d3a0;border-radius:3px;display:inline-block;opacity:.9"></span> Selected
         </span>
-        <div id="kmlMapStatus" style="margin-left:auto;font-size:11px;color:var(--text3)">Loading map data...</div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+          <label for="kmlMapSourceFilter" style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);white-space:nowrap">Layer:</label>
+          <select id="kmlMapSourceFilter" class="inp" style="padding:4px 8px;font-size:11px;font-family:'JetBrains Mono',monospace;font-weight:600;width:auto;min-width:140px;height:28px;border-radius:6px;cursor:pointer" onchange="onKmlMapSourceChange(this.value)">
+            <option value="">All Layers</option>
+          </select>
+          <div id="kmlMapStatus" style="font-size:11px;color:var(--text3);white-space:nowrap">Loading map data...</div>
+        </div>
       </div>
 
       <!-- Search bar strip (below toolbar) -->
@@ -707,6 +720,10 @@
            <input type="checkbox" id="optAutoOpen" checked>
            <label>Auto-open PDFs after saving</label>
         </div>
+        <div class="form-check mt-2">
+           <input type="checkbox" id="optDarkTheme" checked onchange="toggleTheme()">
+           <label>Dark Mode</label>
+        </div>
       </div>
 
       <div class="modal-footer">
@@ -718,48 +735,61 @@
   </div>
 
   <script>
-    // ── On-screen error display (shows JS errors without needing DevTools) ──
-    window._errors = [];
-    window.onerror = function(msg, src, line, col, err) {
-      window._errors.push({msg, src, line, col});
+    // ── Shared error display helper (shows JS errors without DevTools) ───────
+    function _showErrBox(msg) {
       var box = document.getElementById('_errBox');
       if (!box) {
         box = document.createElement('div');
         box.id = '_errBox';
         box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a0505;border-bottom:2px solid #ff3333;color:#ff7b72;font-family:monospace;font-size:12px;padding:12px 16px;max-height:40vh;overflow:auto;white-space:pre-wrap';
-        box.innerHTML = '<b style="color:#ff3333;font-size:14px">⚠ JavaScript Error(s):</b><br>';
+        box.innerHTML = '<b style="color:#ff3333;font-size:14px">&#9888; JavaScript Error(s):</b><br>';
         document.body.prepend(box);
       }
-      box.innerHTML += '\n❌ ' + msg + '\n   at ' + (src||'?') + ':' + line + ':' + col + '\n';
+      box.innerHTML += '\n' + msg + '\n';
+    }
+
+    window._errors = [];
+    window.onerror = function(msg, src, line, col, err) {
+      window._errors.push({msg, src, line, col});
+      _showErrBox('\u274c ' + msg + '\n   at ' + (src||'?') + ':' + line + ':' + col);
       return false;
     };
 
     document.addEventListener('DOMContentLoaded', function() {
-      // Check if app.js loaded successfully (runs 2s after DOM ready)
       setTimeout(function() {
         if (typeof showSettingsModal !== 'function') {
-          var box = document.getElementById('_errBox');
-          if (!box) {
-            box = document.createElement('div');
-            box.id = '_errBox';
-            box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a0505;border-bottom:2px solid #ff3333;color:#ff7b72;font-family:monospace;font-size:12px;padding:12px 16px;max-height:40vh;overflow:auto;white-space:pre-wrap';
-            document.body.prepend(box);
-          }
-          box.innerHTML = '<b style="color:#ff3333;font-size:14px">⚠ app.js failed to load or parse</b><br>';
-          box.innerHTML += 'showSettingsModal is ' + typeof showSettingsModal + '<br>';
-          box.innerHTML += 'apiFetch is ' + typeof apiFetch + '<br>';
-          box.innerHTML += 'startSession is ' + typeof startSession + '<br>';
-          box.innerHTML += 'Errors: ' + JSON.stringify(window._errors) + '<br>';
-          box.innerHTML += '<br><b>Try: Ctrl+Shift+R to hard refresh</b>';
+          _showErrBox(
+            '<b style="color:#ff3333;font-size:14px">&#9888; app.js failed to load or parse</b>\n' +
+            'showSettingsModal is ' + typeof showSettingsModal + '\n' +
+            'apiFetch is ' + typeof apiFetch + '\n' +
+            'startSession is ' + typeof startSession + '\n' +
+            'Errors: ' + JSON.stringify(window._errors) + '\n' +
+            '\n<b>Try: Ctrl+Shift+R to hard refresh</b>'
+          );
         }
       }, 2000);
     });
   </script>
-  <script src="app.js?v=1774924800" onerror="
-    var box = document.createElement('div');
-    box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a0505;border-bottom:2px solid #ff3333;color:#ff7b72;font-family:monospace;font-size:14px;padding:16px;text-align:center';
-    box.textContent = '❌ Failed to load app.js - server may be down';
-    document.body.prepend(box);
+
+  <!-- PLAT PREVIEW SLIDE-OUT PANEL -->
+  <div class="plat-preview-panel" id="platPreviewPanel">
+    <div class="plat-preview-header">
+      <h3 id="platPreviewTitle">📄 Plat Preview</h3>
+      <button class="close-btn" onclick="closePlatPreview()">✕</button>
+    </div>
+    <div class="plat-preview-body" id="platPreviewBody">
+      <div class="empty-state">
+        <div class="empty-icon">📄</div>
+        <p>Click a plat to preview it here.</p>
+      </div>
+    </div>
+    <div class="plat-preview-actions" id="platPreviewActions">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+
+  <script src="app.js" onerror="
+    _showErrBox('\u274c Failed to load app.js — server may be down');
   "></script>
 </body>
 </html>

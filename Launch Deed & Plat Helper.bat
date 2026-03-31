@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 title Deed ^& Plat Helper - Launcher
-cd /d "E:\AI DATA CENTER\AI Agents\Deed & Plat Helper"
+cd /d "%~dp0"
 
 echo.
 echo  ==========================================
@@ -9,20 +9,71 @@ echo    Deed ^& Plat Helper
 echo  ==========================================
 echo.
 
-:: Full path to Python launcher (works even if py is not on PATH)
-set PY="C:\Users\User\AppData\Local\Programs\Python\Python311\python.exe"
+:: ── Find Python ──────────────────────────────────────────────────────────
+:: Try the venv first, then well-known install paths, then PATH
+set PY=
+if exist ".venv\Scripts\python.exe" (
+    set PY=".venv\Scripts\python.exe"
+    goto :py_ok
+)
+:: Common install locations (User, Tina, generic)
+for %%U in (User Tina %USERNAME%) do (
+    for %%V in (Python313 Python312 Python311 Python310) do (
+        if exist "C:\Users\%%U\AppData\Local\Programs\Python\%%V\python.exe" (
+            set PY="C:\Users\%%U\AppData\Local\Programs\Python\%%V\python.exe"
+            goto :py_ok
+        )
+    )
+)
+:: Fallback: check PATH
+where python >nul 2>&1
+if %errorlevel%==0 (
+    set PY=python
+    goto :py_ok
+)
+where py >nul 2>&1
+if %errorlevel%==0 (
+    set PY=py
+    goto :py_ok
+)
+echo  [ERROR] Python not found!
+echo          Checked: .venv, common install paths, and PATH
+echo          Please install Python 3.10+ from python.org
+pause
+exit /b 1
 
-:: Verify Python exists
-if not exist %PY% (
-    echo  [ERROR] Python launcher not found at:
-    echo          %PY%
-    echo.
-    echo  Please update the PY= line in this batch file.
-    pause
-    exit /b 1
+:py_ok
+echo  [OK] Using Python: %PY%
+
+:: ── Ensure virtual environment exists ─────────────────────────────────────
+if not exist ".venv\Scripts\python.exe" (
+    echo  Creating virtual environment...
+    %PY% -m venv .venv
+    if errorlevel 1 (
+        echo  [ERROR] Failed to create virtual environment
+        pause
+        exit /b 1
+    )
+    echo  [OK] Virtual environment created
 )
 
-:: Check if server is already running on port 5000
+:: Activate the venv for this session
+set PY=".venv\Scripts\python.exe"
+
+:: ── Install dependencies if needed ────────────────────────────────────────
+%PY% -c "import flask" >nul 2>&1
+if errorlevel 1 (
+    echo  Installing dependencies from requirements.txt...
+    .venv\Scripts\pip.exe install -r requirements.txt
+    if errorlevel 1 (
+        echo  [ERROR] Dependency installation failed
+        pause
+        exit /b 1
+    )
+    echo  [OK] Dependencies installed
+)
+
+:: ── Check if server is already running on port 5000 ───────────────────────
 netstat -ano 2>nul | findstr /C:":5000" >nul
 if %errorlevel%==0 (
     echo  [OK] Server already running - opening browser...
@@ -31,9 +82,9 @@ if %errorlevel%==0 (
     goto :done
 )
 
-:: Start Flask server in its OWN window (persists after this window closes)
+:: ── Start Flask server in its OWN window ──────────────────────────────────
 echo  Starting Flask server...
-start "Deed & Plat Helper - Server" /d "E:\AI DATA CENTER\AI Agents\Deed & Plat Helper" %PY% app.py
+start "Deed & Plat Helper - Server" /d "%~dp0" %PY% app.py
 
 :: Poll until port 5000 is open (up to 20 seconds)
 echo  Waiting for server to be ready...

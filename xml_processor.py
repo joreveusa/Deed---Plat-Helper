@@ -766,26 +766,47 @@ def get_map_geojson(
     survey_data_path: str,
     highlight_upcs: list[str] | None = None,
     max_features: int = 100000,
+    source_filter: str = "",
 ) -> dict:
     """
     Return a GeoJSON FeatureCollection of all parcels in the index.
 
     Each Feature has geometry (Polygon) and properties:
-      - owner, upc, book, page, plat, cab_refs_str
+      - owner, upc, book, page, plat, cab_refs_str, source
       - highlight: True if the parcel UPC is in highlight_upcs
 
     Parcels without polygon data are emitted as Point (centroid).
     Coordinates are simplified to 4 decimal places and polygons are
     capped at 50 vertices to keep the response size manageable.
+
+    If source_filter is non-empty, only parcels from that source file
+    are included (e.g. "TC_Parcels_2024_og.kml").
     """
     idx = load_index(survey_data_path)
     if not idx:
-        return {"type": "FeatureCollection", "features": []}
+        return {"type": "FeatureCollection", "features": [], "sources": []}
 
     highlight_set = set(highlight_upcs or [])
     features = []
 
+    # Collect all unique source file names for the layer selector
+    all_sources: list[str] = []
+    seen_sources: set[str] = set()
+    for p in idx.get("parcels", []):
+        src = p.get("source", "")
+        if src and src not in seen_sources:
+            seen_sources.add(src)
+            all_sources.append(src)
+
+    source_filter_lower = source_filter.strip().lower() if source_filter else ""
+
     for p in idx.get("parcels", [])[:max_features]:
+        # Apply source filter if specified
+        if source_filter_lower:
+            p_source = (p.get("source", "") or "").lower()
+            if source_filter_lower not in p_source:
+                continue
+
         upc      = p.get("upc", "")
         owner    = p.get("owner", "")
         polygon  = p.get("polygon")
@@ -802,6 +823,10 @@ def get_map_geojson(
             props["cab_refs_str"] = cab_refs_str
         if upc and upc in highlight_set:
             props["highlight"] = True
+        # Include source so the frontend knows which file this parcel came from
+        p_source = p.get("source", "")
+        if p_source:
+            props["source"] = p_source
 
         if polygon and len(polygon) >= 3:
             ring = polygon if polygon[0] == polygon[-1] else polygon + [polygon[0]]
@@ -822,5 +847,6 @@ def get_map_geojson(
     return {
         "type":     "FeatureCollection",
         "features": features,
+        "sources":  all_sources,
     }
 
