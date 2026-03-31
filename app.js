@@ -1,5 +1,4 @@
 // @ts-nocheck
-console.log("[app.js] EXECUTING - top of file");
 const API = "/api";  // Use relative URL to avoid CORS issues
 
 
@@ -150,7 +149,35 @@ async function startSession() {
     const res = await apiFetch(`/research-session?job_number=${num}&client_name=${encodeURIComponent(client)}&job_type=${type}`);
     if (res.success) {
       state.researchSession = res.session;
-      
+
+      // Clear any stale deed/plat state from a previous session so Step 3
+      // doesn't use the prior client's deed detail when searching for this client.
+      state.selectedDoc    = null;
+      state.selectedDetail = null;
+      state._kmlHits       = null;
+      state._cabinetHits   = null;
+
+      // If the user selected a property from the KML map in Step 1, pre-seed
+      // the client_upc in the session. Steps 3 & 4 will use it for parcel matching.
+      if (_propPicker.confirmedParcel) {
+        state.researchSession.client_upc      = _propPicker.confirmedParcel.upc || '';
+        state.researchSession.client_parcel   = _propPicker.confirmedParcel;
+        // Pre-seed _kmlHits so Step 3 KML search already has the client's parcel
+        state._kmlHits = [{
+          owner:        _propPicker.confirmedParcel.owner || client,
+          upc:          _propPicker.confirmedParcel.upc   || '',
+          plat:         _propPicker.confirmedParcel.plat  || '',
+          book:         _propPicker.confirmedParcel.book  || '',
+          page:         _propPicker.confirmedParcel.page  || '',
+          cab_refs:     _propPicker.confirmedParcel.cab_refs || [],
+          cab_refs_str: (_propPicker.confirmedParcel.cab_refs || []).join(', '),
+          centroid:     _propPicker.confirmedParcel.centroid,
+          match_reason: 'Selected from KML Map Picker',
+          source:       'kml',
+          local_files:  [],
+        }];
+      }
+
       // Ensure client is in the subjects list
       let cSubj = state.researchSession.subjects.find(s => s.type === "client");
       if (!cSubj) {
@@ -228,7 +255,11 @@ async function doStep2Search() {
   const name = document.getElementById("s2SearchName").value.trim();
   const op = document.getElementById("s2SearchOp").value;
 
-  if (!state.loggedIn) { showToast("Not connected to records. Connecting...", "warn"); await checkLogin(); return; }
+  if (!state.loggedIn) {
+    showToast("Not connected to 1stNMTitle — click Settings to log in", "warn");
+    await checkLogin();
+    return;
+  }
   if (!name || name.length < 2) { showToast("Enter a longer name", "warn"); return; }
 
   const btn = document.getElementById("btnS2Search");
@@ -623,35 +654,52 @@ async function doStep3Search() {
   const kmlCards = document.getElementById('s3KmlPlats');
   const onlCards = document.getElementById('s3OnlinePlats');
 
-  if (!state.selectedDetail) {
-    const msg = '<div class="empty-state text-text3">No deed selected in Step 2. Go back and select a deed first.</div>';
-    locCards.innerHTML = msg;
-    if (kmlCards) kmlCards.innerHTML = msg;
-    onlCards.innerHTML = msg;
-    return;
-  }
+  const clientName = state.researchSession && state.researchSession.client_name
+    ? state.researchSession.client_name : '';
+
+  // If no deed was selected, still run a name-only search using client_name.
+  // Show a soft warning banner, but don't block the search.
+  const noDeed = !state.selectedDetail;
+  const noDeedBanner = noDeed
+    ? '<div class="text-xs p-2" style="background:rgba(227,197,90,.08);border-bottom:1px solid rgba(227,197,90,.2);color:var(--accent2)">' +
+      '⚠ No deed selected — searching by client name only. Select a deed in Step 2 for more targeted results.</div>'
+    : '';
+
+  // Use an empty detail object when no deed is available so we can still call
+  // the backend endpoints (they all handle an empty detail gracefully).
+  const detail = state.selectedDetail || {};
 
   // Set all columns to loading state
-  locCards.innerHTML = '<div class="loading-state">Identifying target cabinet...</div>';
+  locCards.innerHTML = noDeedBanner + '<div class="loading-state">Identifying target cabinet...</div>';
   if (kmlCards) kmlCards.innerHTML = '<div class="loading-state">Querying KML parcel index...</div>';
   onlCards.innerHTML = '<div class="loading-state">Searching 1stnmtitle.com...</div>';
 
   // ── A: Instant deed parse (returns cabinet refs, zero I/O) ────────────────
   let cabRefs = [];
-  try {
-    const fastRes = await apiFetch('/find-plat', 'POST', { detail: state.selectedDetail });
-    cabRefs = (fastRes && fastRes.cabinet_refs) || [];
-  } catch(e) { /* ignore */ }
+  if (!noDeed) {
+    try {
+      const fastRes = await apiFetch('/find-plat', 'POST', { detail });
+      cabRefs = (fastRes && fastRes.cabinet_refs) || [];
+    } catch(e) { /* ignore */ }
+  }
 
-  // ── B: KML index search — fires first; then chains into local scan ────────
-  const clientName = state.researchSession && state.researchSession.client_name ? state.researchSession.client_name : '';
+  // Pull grantor/grantee from the deed detail (prefer detail, fall back to selectedDoc search row)
+  const grantor = detail?.Grantor || detail?.grantor
+    || state.selectedDoc?.grantor || '';
+  const grantee = detail?.Grantee || detail?.grantee
+    || state.selectedDoc?.grantee || '';
 
-  // Fire online search in parallel (doesn't depend on KML)
-  apiFetch('/find-plat-online', 'POST', { detail: state.selectedDetail })
+  // ── Online search — runs in parallel, uses client_name as primary ──────────
+  apiFetch('/find-plat-online', 'POST', {
+    detail,
+    client_name: clientName,
+    grantee,
+    grantor,
+  })
     .then(res => {
       const surveyHits = (res && res.online) || [];
       if (!surveyHits.length) {
-        onlCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">No online survey records found for this grantor name.</div>';
+        onlCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">No online survey records found for this client/grantor name.</div>';
       } else {
         onlCards.innerHTML = surveyHits.map(r =>
           '<div class="plat-item">' +
@@ -674,14 +722,18 @@ async function doStep3Search() {
     });
 
   // ── KML → then chain Local (so kml_matches with cab_refs are passed) ──────
-  apiFetch('/find-plat-kml', 'POST', { detail: state.selectedDetail })
+  // Always query KML index: with deed → full cross-reference; without → name-only search
+  const kmlPromise = apiFetch('/find-plat-kml', 'POST', { detail, client_name: clientName })
     .then(res => {
       const kmlHits = (res && res.kml_matches) || [];
       if (!kmlCards) return kmlHits;
       if (!kmlHits.length) {
+        const noIdxHint = '<span class="text-xs opacity-60">Use the \u{1F5FA}\uFE0F KML Index button to build the index from county data.</span>';
+        const noMatchMsg = noDeed
+          ? 'No KML parcels found for <strong>' + escHtml(clientName) + '</strong>.<br><br>' + noIdxHint
+          : 'No parcel records found in KML index.<br><br>' + noIdxHint;
         kmlCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">' +
-          '<div class="text-3xl mb-2">\u{1F5FA}\uFE0F</div>No parcel records found in KML index.<br><br>' +
-          '<span class="text-xs opacity-60">Use the \u{1F5FA}\uFE0F KML Index button to build the index from county data.</span></div>';
+          '<div class="text-3xl mb-2">\u{1F5FA}\uFE0F</div>' + noMatchMsg + '</div>';
       } else {
         state._kmlHits = kmlHits;
         _renderKmlHits(kmlCards, kmlHits);
@@ -691,70 +743,77 @@ async function doStep3Search() {
     .catch(() => {
       if (kmlCards) kmlCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">KML index unavailable.</div>';
       return [];
-    })
-    .then(kmlHits => {
-      // ── C: Local cabinet scan — fires AFTER KML resolves so we can pass real kml_matches
-      const cabinetOverride = getS3CabinetOverride();
-      const reason = cabinetOverride
-        ? `Scanning Cabinet ${cabinetOverride} (manual selection)...`
-        : (kmlHits.length
-          ? 'Targeting cabinet from KML...'
-          : (cabRefs.length ? 'Targeting cabinet from deed text...' : 'Scanning all cabinets...'));
-      locCards.innerHTML = `<div class="loading-state">${reason}</div>`;
-
-      const payload = {
-        detail:       state.selectedDetail,
-        cabinet_refs: cabinetOverride ? [] : cabRefs,
-        kml_matches:  cabinetOverride ? [] : kmlHits,
-        client_name:  clientName
-      };
-      if (cabinetOverride) payload.forced_cabinets = [cabinetOverride];
-
-      return apiFetch('/find-plat-local', 'POST', payload);
-    })
-    .then(res => {
-      const localHits = (res && res.local) || [];
-      const targetCabs = (res && res.target_cabinets) || [];
-      const targetingReason = (res && res.targeting_reason) || '';
-      const cabLabel = targetCabs.length && targetCabs.length < 6
-        ? `Cabinet${targetCabs.length > 1 ? 's' : ''} ${targetCabs.join(', ')}`
-        : 'all cabinets';
-
-      if (!localHits.length) {
-        locCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">' +
-          '<div class="text-3xl mb-2">\u{1F5C4}\uFE0F</div>' +
-          `No cabinet plats matched in ${cabLabel}.<br>` +
-          (targetingReason ? `<span class="text-xs opacity-50">${escHtml(targetingReason)}</span><br><br>` : '<br>') +
-          '<button class="btn btn-outline btn-sm" onclick="openGlobalCabinetBrowser()">Browse Cabinets Manually</button></div>';
-      } else {
-        state._cabinetHits = localHits;
-        locCards.innerHTML = localHits.map((f, fi) => {
-          const stratLabel = f.strategy === 'kml_cab_ref'  ? '\u2605 KML Ref Match'
-            : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
-            : f.strategy === 'client_name'  ? '\u2B50 Client Match'
-            : f.strategy === 'name_match'   ? 'Name Match'
-            : f.strategy === 'page_ref'     ? 'Page Ref'
-            : (f.strategy || 'match');
-          const isTop = f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name';
-          return '<div class="plat-item' + (isTop ? ' plat-item-client' : '') + '">' +
-            '<div class="plat-info">' +
-              '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
-              '<span class="plat-meta">Cabinet ' + (f.cabinet||'') + ' \u00A0\u00B7\u00A0 ' + stratLabel + '</span>' +
-            '</div>' +
-            '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
-          '</div>';
-        }).join('');
-
-        // Show targeting info as a subtle header
-        if (targetingReason) {
-          locCards.insertAdjacentHTML('afterbegin',
-            `<div class="text-xs text-text3 p-2 pb-0 opacity-60">\u{1F3AF} ${escHtml(targetingReason)}</div>`);
-        }
-      }
-    })
-    .catch(() => {
-      locCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">Cabinet scan unavailable.</div>';
     });
+
+  kmlPromise.then(kmlHits => {
+    // ── Local cabinet scan — fires AFTER KML resolves
+    const cabinetOverride = getS3CabinetOverride();
+    const reason = cabinetOverride
+      ? `Scanning Cabinet ${cabinetOverride} (manual selection)...`
+      : (kmlHits.length
+        ? 'Targeting cabinet from KML...'
+        : (cabRefs.length ? 'Targeting cabinet from deed text...'
+          : (clientName ? `Scanning all cabinets for "${clientName}"...` : 'Scanning all cabinets...')));
+    locCards.innerHTML = noDeedBanner + `<div class="loading-state">${reason}</div>`;
+
+    const payload = {
+      detail,
+      cabinet_refs: cabinetOverride ? [] : cabRefs,
+      kml_matches:  cabinetOverride ? [] : kmlHits,
+      client_name:  clientName,
+      grantor,
+      grantee,
+    };
+    if (cabinetOverride) payload.forced_cabinets = [cabinetOverride];
+
+    return apiFetch('/find-plat-local', 'POST', payload);
+  })
+  .then(res => {
+    const localHits = (res && res.local) || [];
+    const targetCabs = (res && res.target_cabinets) || [];
+    const targetingReason = (res && res.targeting_reason) || '';
+    const cabLabel = targetCabs.length && targetCabs.length < 6
+      ? `Cabinet${targetCabs.length > 1 ? 's' : ''} ${targetCabs.join(', ')}`
+      : 'all cabinets';
+
+    if (!localHits.length) {
+      locCards.innerHTML = noDeedBanner +
+        '<div class="empty-state text-text3 text-sm p-4">' +
+        '<div class="text-3xl mb-2">\u{1F5C4}\uFE0F</div>' +
+        `No cabinet plats matched in ${cabLabel}.<br>` +
+        (targetingReason ? `<span class="text-xs opacity-50">${escHtml(targetingReason)}</span><br><br>` : '<br>') +
+        '<button class="btn btn-outline btn-sm" onclick="openGlobalCabinetBrowser()">Browse Cabinets Manually</button></div>';
+    } else {
+      state._cabinetHits = localHits;
+      const hitRows = localHits.map((f, fi) => {
+        const stratLabel = f.strategy === 'kml_cab_ref'  ? '\u2605 KML Ref Match'
+          : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
+          : f.strategy === 'client_name'  ? '\u2B50 Client Match'
+          : f.strategy === 'name_match'   ? 'Name Match'
+          : f.strategy === 'page_ref'     ? 'Page Ref'
+          : (f.strategy || 'match');
+        const isTop = f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name';
+        return '<div class="plat-item' + (isTop ? ' plat-item-client' : '') + '">' +
+          '<div class="plat-info">' +
+            '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
+            '<span class="plat-meta">Cabinet ' + (f.cabinet||'') + ' \u00A0\u00B7\u00A0 ' + stratLabel + '</span>' +
+          '</div>' +
+          '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
+        '</div>';
+      }).join('');
+
+      locCards.innerHTML = noDeedBanner + hitRows;
+
+      if (targetingReason) {
+        locCards.insertAdjacentHTML('afterbegin',
+          `<div class="text-xs text-text3 p-2 pb-0 opacity-60">\u{1F3AF} ${escHtml(targetingReason)}</div>`);
+      }
+    }
+  })
+  .catch(() => {
+    locCards.innerHTML = noDeedBanner +
+      '<div class="empty-state text-text3 text-sm p-4">Cabinet scan unavailable.</div>';
+  });
 }
 
 
@@ -1254,9 +1313,9 @@ async function manualAddAdjoiner() {
 }
 
 // Expose Cabinet browser globally
-function openGlobalCabinetBrowser() {
+function openGlobalCabinetBrowser(defaultCab) {
   document.getElementById('cabinetOverlay').classList.remove('hidden');
-  browseCabinet('A'); // default
+  browseCabinet(defaultCab || 'A');
 }
 function closeCabinetBrowser() {
   document.getElementById('cabinetOverlay').classList.add('hidden');
@@ -1283,11 +1342,16 @@ async function browseCabinet(cab, page=1) {
     
     let html = `<table class="data-table"><tbody>`;
     res.files.forEach(f => {
+      const escapedPath = f.path.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const escapedFile = (f.file || '').replace(/'/g, "\\'");
       html += `
         <tr>
           <td class="text-xs" title="${escHtml(f.file)}">${escHtml(f.display_name || f.file)}</td>
           <td class="text-text3 text-xs w-16">${f.size_kb} KB</td>
-          <td class="w-20"><button class="btn btn-outline btn-sm" onclick="apiFetch('/open-file','POST',{path:'${f.path.replace(/\\/g,"\\\\")}'})">Open</button></td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-outline btn-sm" style="margin-right:4px" onclick="apiFetch('/open-file','POST',{path:'${escapedPath}'})">&#128065; Open</button>
+            <button class="btn btn-success btn-sm" onclick="saveFromCabinetBrowser('${escapedPath}','${escapedFile}')">&#11015; Save as Plat</button>
+          </td>
         </tr>`;
     });
     html += `</tbody></table>`;
@@ -1299,6 +1363,42 @@ async function browseCabinet(cab, page=1) {
 function filterCabinet() {
   _cabState.filter = document.getElementById('cabinetFilter').value.trim();
   browseCabinet(_cabState.cab, 1);
+}
+
+/**
+ * Save a file chosen directly from the Cabinet Browser as the client plat.
+ * Closes the browser modal on success.
+ */
+async function saveFromCabinetBrowser(filePath, filename) {
+  const rs = state.researchSession;
+  if (!rs) { showToast('No active research session', 'error'); return; }
+  const clientSubj = rs.subjects.find(s => s.type === 'client');
+
+  try {
+    const res = await apiFetch('/save-plat', 'POST', {
+      source:      'local',
+      file_path:   filePath,
+      filename:    filename,
+      job_number:  rs.job_number,
+      client_name: rs.client_name,
+      job_type:    rs.job_type,
+      subject_id:  clientSubj ? clientSubj.id : 'client'
+    });
+    if (res.success) {
+      showToast(res.skipped ? 'Plat already exists in project (skipped)' : '\u2B07 Plat saved: ' + res.filename, 'success');
+      if (clientSubj && !res.skipped) {
+        clientSubj.plat_saved = true;
+        if (res.saved_to) clientSubj.plat_path = res.saved_to;
+        await persistSession();
+      }
+      closeCabinetBrowser();
+      setTimeout(() => goToStep(4), 600);
+    } else {
+      showToast('Save failed: ' + res.error, 'error');
+    }
+  } catch(e) {
+    showToast('Error: ' + e.message, 'error');
+  }
 }
 // 
 // STEP 5: ADJOINER RESEARCH BOARD
@@ -2273,6 +2373,10 @@ function updateGlobalProgress() {
   const done   = deeds + plats;
   const pct    = total > 0 ? Math.round((done / total) * 100) : 0;
 
+  // Reveal the footer stats bar (hidden on first load until a session exists)
+  const statsBar = document.getElementById("footerStats");
+  if (statsBar) statsBar.classList.remove("hidden");
+
   document.getElementById("statDeeds").textContent = `${deeds}/${all.length}`;
   document.getElementById("statPlats").textContent = `${plats}/${all.length}`;
   document.getElementById("globalProgressFill").style.width = pct + "%";
@@ -2296,7 +2400,374 @@ async function exportSession() {
   const a    = document.createElement("a");
   a.href=url; a.download=`Job${rs.job_number}_Research.csv`; a.click();
   URL.revokeObjectURL(url);
-  showToast("CSV exported", "success");
+  showToast("Research summary exported as CSV", "success");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP 1: PROPERTY PICKER  (Leaflet.js — separate from Step 4 adjoiner picker)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _propPicker = {
+  map:           null,   // Leaflet map instance
+  parcelLayer:   null,   // GeoJSON layer
+  selectedLayer: null,   // currently clicked polygon layer
+  selectedProps: null,   // properties of selected feature
+  geojsonData:   null,   // cached GeoJSON FeatureCollection
+  searchTimer:   null,
+  // Stores the chosen parcel so startSession can read it
+  confirmedParcel: null,
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Called when the user types in the manual client name field */
+function onClientNameTyped() {
+  // Clear any map-confirmed selection so the typed name takes precedence
+  const typed = document.getElementById('setupClient').value.trim();
+  if (typed) {
+    _propPicker.confirmedParcel = null;
+    document.getElementById('selectedParcelCard').classList.add('hidden');
+  }
+}
+
+/** Clear the KML-confirmed parcel selection */
+function clearPropertySelection() {
+  _propPicker.confirmedParcel = null;
+  document.getElementById('selectedParcelCard').classList.add('hidden');
+  document.getElementById('setupClient').value = '';
+}
+
+// ── Open / close modal ────────────────────────────────────────────────────────
+
+async function showPropertyPicker() {
+  document.getElementById('propPickerOverlay').classList.remove('hidden');
+
+  if (!_propPicker.map) {
+    _initPropPickerMap();
+  } else {
+    setTimeout(() => _propPicker.map && _propPicker.map.invalidateSize(), 150);
+  }
+
+  await _loadPropPickerMapData();
+}
+
+function closePropPicker() {
+  document.getElementById('propPickerOverlay').classList.add('hidden');
+}
+
+// ── Initialise Leaflet ────────────────────────────────────────────────────────
+
+function _initPropPickerMap() {
+  const container = document.getElementById('propPickerLeafletMap');
+  const canvasRenderer = L.canvas({ padding: 0.5 });
+
+  _propPicker.map = L.map(container, {
+    center: [36.6, -105.5],
+    zoom:   11,
+    preferCanvas: true,
+    zoomControl: true,
+  });
+  _propPicker.renderer = canvasRenderer;
+
+  // Voyager — clear road labels, neutral basemap, no API key needed
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_labels_under/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 20,
+  }).addTo(_propPicker.map);
+}
+
+// ── Load GeoJSON from backend ─────────────────────────────────────────────────
+
+async function _loadPropPickerMapData() {
+  const countEl  = document.getElementById('propPickerSearchCount');
+  const loaderEl = document.getElementById('propPickerMapLoader');
+  countEl.textContent = 'Loading…';
+  if (loaderEl) loaderEl.classList.remove('hidden');
+  try {
+    const res = await apiFetch('/xml/map-geojson', 'POST', {
+      highlight_upcs: [],
+      max_features: 100000,
+    });
+    if (!res.success) {
+      countEl.textContent = 'Error: ' + (res.error || 'Unknown');
+      return;
+    }
+    if (!res.total) {
+      countEl.textContent = 'No parcels in index. Build KML index first.';
+      return;
+    }
+    _propPicker.geojsonData = res.geojson;
+    countEl.textContent = res.total.toLocaleString() + ' parcels';
+    _renderPropPickerLayer();
+  } catch (e) {
+    countEl.textContent = 'Load failed: ' + e.message;
+  } finally {
+    if (loaderEl) loaderEl.classList.add('hidden');
+  }
+}
+
+// ── Build GeoJSON layer ───────────────────────────────────────────────────────
+
+function _renderPropPickerLayer() {
+  if (_propPicker.parcelLayer) {
+    _propPicker.map.removeLayer(_propPicker.parcelLayer);
+    _propPicker.parcelLayer = null;
+  }
+
+  _propPicker.parcelLayer = L.geoJSON(_propPicker.geojsonData, {
+    renderer: _propPicker.renderer,
+    style: () => ({
+      fillColor:   '#1a7fd4',
+      fillOpacity: 0.12,        // low fill — lets street labels show through
+      color:       '#2196f3',   // vivid blue stroke stays crisp on light basemap
+      weight:      1.5,
+    }),
+    pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+      radius: 5,
+      fillColor: 'rgba(79,172,254,0.55)',
+      color: '#4facfe',
+      weight: 1.5,
+      fillOpacity: 0.75,
+    }),
+    onEachFeature: (feature, layer) => {
+      layer.on({
+        click: e => { L.DomEvent.stopPropagation(e); _onPropParcelClick(feature, layer); },
+        mouseover: () => {
+          if (layer !== _propPicker.selectedLayer) {
+            layer.setStyle && layer.setStyle({ fillOpacity: 0.30, weight: 2.5, color: '#79c8f8' });
+          }
+        },
+        mouseout: () => {
+          if (layer !== _propPicker.selectedLayer) {
+            layer.setStyle && layer.setStyle({ fillColor: '#1a7fd4', fillOpacity: 0.12, color: '#2196f3', weight: 1.5 });
+          }
+        },
+      });
+      const p = feature.properties;
+      const ttLines = [`<b>${p.owner || '(no name)'}</b>`];
+      if (p.upc)  ttLines.push(`<span style="font-size:10px;opacity:.7">UPC: ${p.upc}</span>`);
+      if (p.book || p.page) ttLines.push(`<span style="font-size:10px;opacity:.65">Bk ${p.book || ''}/${p.page || ''}</span>`);
+      if (p.cab_refs_str) ttLines.push(`<span style="font-size:10px;opacity:.65">Cab: ${p.cab_refs_str}</span>`);
+      layer.bindTooltip(ttLines.join('<br>'), { sticky: true, className: 'kml-tooltip', opacity: 0.97 });
+    },
+  }).addTo(_propPicker.map);
+
+  try {
+    const bounds = _propPicker.parcelLayer.getBounds();
+    if (bounds.isValid()) _propPicker.map.fitBounds(bounds, { padding: [20, 20] });
+  } catch (_) {}
+
+  setTimeout(() => _propPicker.map && _propPicker.map.invalidateSize(), 200);
+}
+
+// ── Parcel click handler ──────────────────────────────────────────────────────
+
+function _onPropParcelClick(feature, layer) {
+  // Deselect previous
+  if (_propPicker.selectedLayer && _propPicker.selectedLayer !== layer) {
+    _propPicker.selectedLayer.setStyle && _propPicker.selectedLayer.setStyle({
+      fillColor: '#1a7fd4', fillOpacity: 0.12, color: '#2196f3', weight: 1.5,
+    });
+  }
+
+  layer.setStyle && layer.setStyle({
+    fillColor: '#56d3a0', fillOpacity: 0.65, color: '#56d3a0', weight: 2.5,
+  });
+
+  _propPicker.selectedLayer = layer;
+  _propPicker.selectedProps = feature.properties;
+
+  const p = feature.properties;
+  document.getElementById('propPickerOwner').textContent = p.owner || '(No Name)';
+
+  let details = '';
+  if (p.upc)          details += `<b>UPC:</b> ${escHtml(p.upc)}<br>`;
+  if (p.book || p.page) details += `<b>Book/Page:</b> ${escHtml(p.book)}/${escHtml(p.page)}<br>`;
+  if (p.cab_refs_str) details += `<b>Cabinet:</b> ${escHtml(p.cab_refs_str)}<br>`;
+  if (p.plat)         details += `<b>Plat:</b> ${escHtml((p.plat || '').substring(0, 60))}${(p.plat || '').length > 60 ? '…' : ''}<br>`;
+  if (!details)       details = '<span style="color:var(--text3);font-style:italic">No extended data.</span>';
+
+  document.getElementById('propPickerDetails').innerHTML = details;
+  document.getElementById('btnConfirmProperty').disabled = false;
+
+  // Also highlight this item in the side list (if visible from search)
+  document.querySelectorAll('.prop-picker-result-item').forEach(el => {
+    el.classList.toggle('selected', el.dataset.upc === p.upc);
+  });
+}
+
+// ── Owner name search ─────────────────────────────────────────────────────────
+
+function onPropPickerSearch(query) {
+  clearTimeout(_propPicker.searchTimer);
+  _propPicker.searchTimer = setTimeout(() => _doPropPickerSearch(query.trim()), 300);
+}
+
+async function _doPropPickerSearch(q) {
+  const countEl = document.getElementById('propPickerSearchCount');
+  const listEl  = document.getElementById('propPickerList');
+
+  if (!q || q.length < 2) {
+    // Reset map styles
+    _propPicker.parcelLayer && _propPicker.parcelLayer.eachLayer(layer => {
+      if (layer.setStyle) layer.setStyle({ fillColor: '#1a7fd4', fillOpacity: 0.12, color: '#2196f3', weight: 1.5 });
+    });
+    countEl.textContent = _propPicker.geojsonData ? _propPicker.geojsonData.features.length.toLocaleString() + ' parcels' : '—';
+    listEl.innerHTML = '<div style="padding:12px 14px;font-size:11px;color:var(--text3);font-style:italic">Search or click a parcel on the map.</div>';
+    return;
+  }
+
+  countEl.textContent = 'Searching…';
+  listEl.innerHTML = '<div style="padding:16px;font-size:11px;color:var(--text3)">Searching…</div>';
+
+  try {
+    const res = await apiFetch('/parcel-search', 'POST', { query: q, operator: 'contains', limit: 40 });
+
+    if (!res.success) {
+      countEl.textContent = 'Error';
+      listEl.innerHTML = `<div style="padding:12px;color:#ff7b72;font-size:12px">${escHtml(res.error || 'Search failed')}</div>`;
+      return;
+    }
+
+    countEl.textContent = res.count + ' match' + (res.count !== 1 ? 'es' : '');
+
+    // Highlight matching parcels on map
+    const matchUpcs = new Set(res.results.map(r => r.upc).filter(Boolean));
+    _propPicker.parcelLayer && _propPicker.parcelLayer.eachLayer(layer => {
+      if (!layer.setStyle) return;
+      const f = layer.feature;
+      const upc = f && f.properties && f.properties.upc;
+      if (matchUpcs.has(upc)) {
+        layer.setStyle({ fillColor: '#56d3a0', fillOpacity: 0.45, color: '#56d3a0', weight: 2.0 });
+      } else {
+        layer.setStyle({ fillColor: '#aac4e0', fillOpacity: 0.04, color: '#aac4e0', weight: 0.4 });
+      }
+    });
+
+    // Pan to first match centroid
+    if (res.results.length && res.results[0].centroid) {
+      const [lng, lat] = res.results[0].centroid;
+      _propPicker.map.setView([lat, lng], 15, { animate: true });
+    }
+
+    // Populate side list
+    if (!res.results.length) {
+      listEl.innerHTML = `<div style="padding:16px;font-size:12px;color:var(--text3)">No parcels found for "<strong>${escHtml(q)}</strong>".<br><span style="font-size:10px;opacity:.6">Check that the KML index is built.</span></div>`;
+    } else {
+      listEl.innerHTML = res.results.map((p, pi) => `
+        <div class="prop-picker-result-item" data-upc="${escHtml(p.upc || '')}" data-idx="${pi}" onclick="selectPropPickerResult(${pi})">
+          <div class="prop-picker-result-name">${escHtml(p.owner)}</div>
+          <div class="prop-picker-result-meta">${p.upc ? 'UPC: ' + escHtml(p.upc) : ''}${p.book ? ' · Bk ' + escHtml(p.book) : ''}${p.page ? '/' + escHtml(p.page) : ''}</div>
+        </div>
+      `).join('');
+
+      // Store search results for click handler
+      _propPicker._searchResults = res.results;
+    }
+  } catch (e) {
+    countEl.textContent = 'Error';
+    listEl.innerHTML = `<div style="padding:12px;color:#ff7b72;font-size:12px">Search error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function selectPropPickerResult(idx) {
+  const p = _propPicker._searchResults && _propPicker._searchResults[idx];
+  if (!p) return;
+
+  // Select corresponding parcel on map
+  let found = false;
+  _propPicker.parcelLayer && _propPicker.parcelLayer.eachLayer(layer => {
+    if (found) return;
+    const f = layer.feature;
+    if (f && f.properties && f.properties.upc === p.upc) {
+      _onPropParcelClick(f, layer);
+      found = true;
+      // Zoom to parcel
+      try {
+        const b = layer.getBounds ? layer.getBounds() : null;
+        if (b && b.isValid()) _propPicker.map.fitBounds(b, { padding: [60, 60], maxZoom: 18 });
+        else if (p.centroid) _propPicker.map.setView([p.centroid[1], p.centroid[0]], 17);
+      } catch (_) {}
+    }
+  });
+
+  // If parcel not on map but still want to select it
+  if (!found && p.upc) {
+    _propPicker.selectedProps = { owner: p.owner, upc: p.upc, book: p.book, page: p.page, plat: p.plat, cab_refs_str: (p.cab_refs || []).join(', ') };
+    document.getElementById('propPickerOwner').textContent = p.owner || '—';
+    document.getElementById('propPickerDetails').innerHTML = `<b>UPC:</b> ${escHtml(p.upc || '')}`;
+    document.getElementById('btnConfirmProperty').disabled = false;
+    if (p.centroid) _propPicker.map.setView([p.centroid[1], p.centroid[0]], 16);
+  }
+
+  // Update list highlighting
+  document.querySelectorAll('.prop-picker-result-item').forEach((el, i) => {
+    el.classList.toggle('selected', i === idx);
+  });
+}
+
+// ── Reset map view ────────────────────────────────────────────────────────────
+
+function propPickerResetView() {
+  if (!_propPicker.parcelLayer || !_propPicker.map) return;
+  document.getElementById('propPickerSearch').value = '';
+  // Restore all polygon styles to default before calling search reset
+  _propPicker.parcelLayer.eachLayer(layer => {
+    if (layer !== _propPicker.selectedLayer && layer.setStyle) {
+      layer.setStyle({ fillColor: '#1a7fd4', fillOpacity: 0.12, color: '#2196f3', weight: 1.5 });
+    }
+  });
+  onPropPickerSearch('');
+  try {
+    const bounds = _propPicker.parcelLayer.getBounds();
+    if (bounds.isValid()) _propPicker.map.fitBounds(bounds, { padding: [20, 20] });
+  } catch (_) {}
+}
+
+// ── Confirm selection → fills Step 1 form ────────────────────────────────────
+
+function confirmPropertySelection() {
+  const p = _propPicker.selectedProps;
+  if (!p || !p.owner) { showToast('No parcel selected', 'warn'); return; }
+
+  // Convert "GARZA VERONICA" → "Garza, Veronica" style (Last, First) if possible
+  const ownerRaw = p.owner.trim();
+  let clientName = ownerRaw;
+  if (!ownerRaw.includes(',') && ownerRaw.includes(' ')) {
+    const parts = ownerRaw.split(/\s+/);
+    if (parts.length >= 2) {
+      clientName = parts[0] + ', ' + parts.slice(1).join(' ');
+    }
+  }
+  // Title-case
+  clientName = clientName.split(/\b/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('');
+
+  // Store confirmed parcel and update form
+  _propPicker.confirmedParcel = p;
+  document.getElementById('setupClient').value = clientName;
+
+  // Show the selected parcel card
+  document.getElementById('selectedParcelName').textContent = clientName;
+  const meta = [
+    p.upc ? 'UPC: ' + p.upc : '',
+    (p.book && p.page) ? 'Bk ' + p.book + '/' + p.page : '',
+  ].filter(Boolean).join('  ·  ');
+  document.getElementById('selectedParcelMeta').textContent = meta;
+  document.getElementById('selectedParcelCard').classList.remove('hidden');
+
+  // Auto-zoom: briefly fly to the selected parcel so user sees it confirmed
+  if (_propPicker.selectedLayer && _propPicker.map) {
+    try {
+      const b = _propPicker.selectedLayer.getBounds ? _propPicker.selectedLayer.getBounds() : null;
+      if (b && b.isValid()) {
+        _propPicker.map.flyToBounds(b, { padding: [80, 80], maxZoom: 18, duration: 0.6 });
+      }
+    } catch (_) {}
+  }
+
+  closePropPicker();
+  showToast(`✓ Property selected: ${clientName}`, 'success');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2344,17 +2815,17 @@ function _initKmlLeafletMap() {
   // Canvas renderer — MUCH faster than default SVG for 60k+ polygons
   const canvasRenderer = L.canvas({ padding: 0.5 });
 
-  // Use CartoDB Dark Matter — no API key needed
   _kmlMap.map = L.map(container, {
     center: [36.6, -105.5],   // Taos County, NM
     zoom:   11,
     zoomControl: true,
     attributionControl: true,
-    preferCanvas: true,       // fallback flag for older Leaflet
+    preferCanvas: true,
   });
-  _kmlMap.renderer = canvasRenderer;   // store for use in GeoJSON layer
+  _kmlMap.renderer = canvasRenderer;
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  // Voyager — clear road labels, neutral basemap
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_labels_under/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
     subdomains: 'abcd',
     maxZoom: 20,
@@ -2363,13 +2834,17 @@ function _initKmlLeafletMap() {
 
 // ── Load GeoJSON from backend ────────────────────────────────────────────────
 async function _loadKmlMapData() {
-  const statusEl = document.getElementById('kmlMapStatus');
+  const statusEl  = document.getElementById('kmlMapStatus');
+  const loaderEl  = document.getElementById('kmlMapLoader');
+  const countEl   = document.getElementById('kmlMapSearchCount');
   statusEl.textContent = 'Loading parcels…';
+  if (loaderEl) loaderEl.classList.remove('hidden');
+  if (countEl)  countEl.textContent = '';
 
   try {
     const res = await apiFetch('/xml/map-geojson', 'POST', {
       highlight_upcs: _kmlMap.highlightUpcs,
-      max_features:   100000,   // load all county parcels — canvas renderer handles it
+      max_features:   100000,
     });
 
     if (!res.success) {
@@ -2384,10 +2859,13 @@ async function _loadKmlMapData() {
 
     _kmlMap.geojsonData = res.geojson;
     statusEl.textContent = `${res.total.toLocaleString()} parcels loaded`;
+    if (countEl) countEl.textContent = res.total.toLocaleString() + ' parcels';
 
     _renderKmlParcelLayer();
   } catch (e) {
     statusEl.textContent = 'Load failed: ' + e.message;
+  } finally {
+    if (loaderEl) loaderEl.classList.add('hidden');
   }
 }
 
@@ -2404,15 +2882,15 @@ function _renderKmlParcelLayer() {
   );
 
   _kmlMap.parcelLayer = L.geoJSON(_kmlMap.geojsonData, {
-    renderer: _kmlMap.renderer,   // Canvas renderer for 60k+ parcel performance
+    renderer: _kmlMap.renderer,
     style: feature => _kmlParcelStyle(feature, boardNames),
     pointToLayer: (feature, latlng) => {
-      // Parcels with only a centroid → small circle marker
+      const fill = _kmlParcelFill(feature, boardNames);
       return L.circleMarker(latlng, {
         radius:      6,
-        fillColor:   _kmlParcelFill(feature, boardNames),
-        color:       '#1a1f2e',
-        weight:      1,
+        fillColor:   fill,
+        color:       fill,
+        weight:      1.5,
         fillOpacity: 0.75,
       });
     },
@@ -2421,7 +2899,7 @@ function _renderKmlParcelLayer() {
         click:     e => { L.DomEvent.stopPropagation(e); _onKmlParcelClick(feature, layer); },
         mouseover: e => {
           if (layer !== _kmlMap.selectedLayer) {
-            layer.setStyle && layer.setStyle({ fillOpacity: 0.85, weight: 2 });
+            layer.setStyle && layer.setStyle({ fillOpacity: 0.80, weight: 2.5 });
           }
         },
         mouseout: e => {
@@ -2431,12 +2909,13 @@ function _renderKmlParcelLayer() {
         },
       });
 
-      // Compact tooltip
+      // Enriched tooltip with owner, UPC, book/page, cabinet
       const p = feature.properties;
-      layer.bindTooltip(
-        `<b>${p.owner || '(no name)'}</b>${p.upc ? '<br><span style="font-size:10px;opacity:.7">UPC: ' + p.upc + '</span>' : ''}`,
-        { sticky: true, className: 'kml-tooltip', opacity: 0.95 }
-      );
+      const ttLines2 = [`<b>${p.owner || '(no name)'}</b>`];
+      if (p.upc)  ttLines2.push(`<span style="font-size:10px;opacity:.7">UPC: ${p.upc}</span>`);
+      if (p.book || p.page) ttLines2.push(`<span style="font-size:10px;opacity:.65">Bk ${p.book || ''}/${p.page || ''}</span>`);
+      if (p.cab_refs_str) ttLines2.push(`<span style="font-size:10px;opacity:.65">Cab: ${p.cab_refs_str}</span>`);
+      layer.bindTooltip(ttLines2.join('<br>'), { sticky: true, className: 'kml-tooltip', opacity: 0.97 });
     },
   }).addTo(_kmlMap.map);
 
@@ -2448,25 +2927,57 @@ function _renderKmlParcelLayer() {
 
   // Invalidate size now that modal is fully displayed
   setTimeout(() => _kmlMap.map && _kmlMap.map.invalidateSize(), 150);
+
+  // Add pulse rings for any client / highlighted parcels
+  setTimeout(_addClientPulseRings, 400);
 }
 
 // ── Styling helpers ──────────────────────────────────────────────────────────
 function _kmlParcelFill(feature, boardNames) {
   const p = feature.properties;
-  if (p.highlight) return '#e3c55a';                         // client / highlighted
-  if (boardNames.has((p.owner || '').toLowerCase())) return '#b080e0'; // on board
-  return 'rgba(79,172,254,0.45)';                            // regular parcel
+  if (p.highlight) return '#e3c55a';                                      // client / highlighted → gold
+  if (boardNames.has((p.owner || '').toLowerCase())) return '#b080e0';   // on research board → purple
+  return '#4facfe';                                                        // regular parcel → blue
 }
 
 function _kmlParcelStyle(feature, boardNames) {
-  const fill   = _kmlParcelFill(feature, boardNames);
-  const highlighted = feature.properties.highlight;
+  const fill      = _kmlParcelFill(feature, boardNames);
+  const highlight = feature.properties.highlight;
+  const onBoard   = boardNames.has((feature.properties.owner || '').toLowerCase());
   return {
     fillColor:   fill,
-    fillOpacity: highlighted ? 0.55 : 0.30,
-    color:       highlighted ? '#e3c55a' : '#263346',
-    weight:      highlighted ? 2.0 : 0.8,
+    fillOpacity: highlight ? 0.50 : onBoard ? 0.35 : 0.12,  // low fill lets labels show through
+    color:       highlight ? '#f0c040' : onBoard ? '#b080e0' : '#2196f3',  // vivid strokes on light basemap
+    weight:      highlight ? 2.5 : onBoard ? 2.0 : 1.5,
   };
+}
+
+// ── Add a DOM pulse ring over the centroid of highlighted (client) parcels ───
+function _addClientPulseRings() {
+  // Remove any old rings first
+  document.querySelectorAll('.parcel-pulse-ring').forEach(el => el.remove());
+  if (!_kmlMap.parcelLayer || !_kmlMap.map) return;
+
+  _kmlMap.parcelLayer.eachLayer(layer => {
+    if (!layer.feature || !layer.feature.properties.highlight) return;
+    try {
+      let latlng;
+      if (layer.getLatLng) {
+        latlng = layer.getLatLng();
+      } else if (layer.getBounds) {
+        latlng = layer.getBounds().getCenter();
+      } else return;
+
+      const pt = _kmlMap.map.latLngToContainerPoint(latlng);
+      const ring = document.createElement('div');
+      ring.className = 'parcel-pulse-ring';
+      ring.style.left = pt.x + 'px';
+      ring.style.top  = pt.y + 'px';
+      // Find the map container element
+      const pane = _kmlMap.map.getPanes().overlayPane;
+      pane.appendChild(ring);
+    } catch (_) {}
+  });
 }
 
 // ── Click handler ────────────────────────────────────────────────────────────
@@ -2573,7 +3084,8 @@ function kmlMapOwnerSearch(query) {
 
 function _doKmlOwnerSearch(q) {
   if (!_kmlMap.parcelLayer) return;
-  const statusEl = document.getElementById('kmlMapStatus');
+  const statusEl  = document.getElementById('kmlMapStatus');
+  const countEl   = document.getElementById('kmlMapSearchCount');
 
   if (!q) {
     // Reset all styles
@@ -2584,7 +3096,9 @@ function _doKmlOwnerSearch(q) {
       const f = layer.feature;
       if (f && layer.setStyle) layer.setStyle(_kmlParcelStyle(f, boardNames));
     });
-    statusEl.textContent = `${_kmlMap.geojsonData?.features?.length?.toLocaleString() || '?'} parcels`;
+    const total = (_kmlMap.geojsonData?.features?.length || 0).toLocaleString();
+    statusEl.textContent = `${total} parcels`;
+    if (countEl) countEl.textContent = '';
     return;
   }
 
@@ -2598,17 +3112,20 @@ function _doKmlOwnerSearch(q) {
     const match  = owner.includes(q);
     if (match) {
       hits++;
-      layer.setStyle({ fillColor:'#56d3a0', fillOpacity:0.8, color:'#56d3a0', weight:2 });
+      layer.setStyle({ fillColor:'#56d3a0', fillOpacity:0.75, color:'#56d3a0', weight:2 });
       try {
         const b = layer.getBounds?.();
         if (b && firstHitBounds.length < 5) firstHitBounds.push(b);
       } catch (_) {}
     } else {
-      layer.setStyle({ fillColor:'#263346', fillOpacity:0.08, color:'#263346', weight:0.5 });
+      // Dim-out style — visible outline on dark tiles, very low fill
+      layer.setStyle({ fillColor:'#4facfe', fillOpacity:0.04, color:'rgba(79,172,254,0.15)', weight:0.8 });
     }
   });
 
-  statusEl.textContent = `${hits} parcel${hits !== 1 ? 's' : ''} match "${q}"`;
+  const matchLabel = `${hits} match${hits !== 1 ? 'es' : ''}`;
+  statusEl.textContent = `${matchLabel} for "${q}"`;
+  if (countEl) countEl.textContent = matchLabel;
 
   // Pan to first match
   if (firstHitBounds.length) {
@@ -2624,6 +3141,8 @@ function _doKmlOwnerSearch(q) {
 function kmlMapResetView() {
   if (!_kmlMap.parcelLayer || !_kmlMap.map) return;
   document.getElementById('kmlMapSearch').value = '';
+  const countEl = document.getElementById('kmlMapSearchCount');
+  if (countEl) countEl.textContent = '';
   kmlMapOwnerSearch('');
   try {
     const bounds = _kmlMap.parcelLayer.getBounds();

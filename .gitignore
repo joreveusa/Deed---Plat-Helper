@@ -9,7 +9,10 @@ dist/
 build/
 
 # App data / generated
-*.ocr.json
+*.ocr.json           # Tesseract OCR cache files alongside cabinet PDFs
+parcel_index.json    # KML index (rebuilt from source KML/KMZ files)
+
+# Config — intentionally excluded (contains 1stNMTitle credentials)
 config.json
 
 # Survey data (never commit actual client data)
@@ -22,3 +25,5 @@ Thumbs.db
 
 # Logs
 *.log
+server.log
+server_err.log

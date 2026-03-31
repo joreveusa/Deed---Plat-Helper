@@ -6,6 +6,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Deed & Plat Helper</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css?v=1774895000">
   <!-- Leaflet map for KML parcel picker -->
@@ -76,8 +77,8 @@
       <section class="step-panel active" id="step1Panel">
         <div class="glass-card setup-card">
           <h2 class="card-title">Initialize Research Session</h2>
-          <p class="card-desc">Enter a new job number or load an existing session to map folders and track your progress.</p>
-          
+          <p class="card-desc">Select the client's property from the parcel map, or type the name manually below.</p>
+
           <div class="form-grid">
             <div class="form-group">
               <label>Job Number <span class="hint">(e.g. 3001)</span></label>
@@ -87,7 +88,7 @@
               <label>Job Type</label>
               <select id="setupJobType" class="inp">
                 <option value="BDY">Boundary (BDY)</option>
-                <option value="ILR">ILR</option>
+                <option value="ILR">Improvement Location Report (ILR)</option>
                 <option value="SE">Subdivision Exemption (SE)</option>
                 <option value="SUB">Subdivision (SUB)</option>
                 <option value="TIE">Tie (TIE)</option>
@@ -97,24 +98,67 @@
                 <option value="CONS">Consultation (CONS)</option>
               </select>
             </div>
-            <div class="form-group full-width">
-              <label>Client Name <span class="hint">(e.g. Garza, Veronica)</span></label>
-              <input type="text" id="setupClient" class="inp" placeholder="Last, First">
+          </div>
+
+          <!-- Property Map Picker -->
+          <button class="btn btn-pick-property w-full" id="btnPickProperty" onclick="showPropertyPicker()">
+            <span style="font-size:18px">🗺️</span>
+            <span>
+              <strong>Pick Property on Map</strong>
+              <span class="pick-sub">Click a parcel to identify the client</span>
+            </span>
+          </button>
+
+          <!-- Selected parcel display (hidden until a parcel is chosen) -->
+          <div id="selectedParcelCard" class="selected-parcel-card hidden">
+            <div class="selected-parcel-inner">
+              <div class="selected-parcel-icon">📍</div>
+              <div class="selected-parcel-info">
+                <div class="selected-parcel-name" id="selectedParcelName">—</div>
+                <div class="selected-parcel-meta" id="selectedParcelMeta"></div>
+              </div>
+              <button class="btn btn-outline btn-sm" onclick="clearPropertySelection()" title="Clear selection">✕</button>
             </div>
           </div>
-          
+
+          <!-- Divider -->
+          <div class="or-divider"><span>or type manually</span></div>
+
+          <div class="form-group">
+            <label>Client Name <span class="hint">(e.g. Garza, Veronica)</span></label>
+            <input type="text" id="setupClient" class="inp" placeholder="Last, First"
+              oninput="onClientNameTyped()">
+          </div>
+
           <div class="setup-actions">
-            <button class="btn btn-primary w-full" id="btnStartSession" onclick="startSession()">Start Research Session →</button>
+            <button class="btn btn-primary w-full" id="btnStartSession" onclick="startSession()">Start Research Session &rarr;</button>
           </div>
         </div>
 
         <div class="glass-card recent-jobs-card">
-          <h3 class="card-title">🕒 Recent & Pinned Jobs</h3>
+          <h3 class="card-title">🕒 Recent &amp; Pinned Jobs</h3>
           <div id="setupRecentJobs" class="recent-jobs-list">
             <div class="loading-state">Loading recent jobs...</div>
           </div>
         </div>
       </section>
+
+      <!-- KML Index Status Modal -->
+      <div class="modal-overlay hidden" id="kmlIndexOverlay" onclick="if(event.target===this) closeKmlModal()">
+        <div class="modal glass-card" style="max-width:520px">
+          <div class="modal-header">
+            <h2>🗺️ KML Parcel Index</h2>
+            <button class="close-btn" onclick="closeKmlModal()">✕</button>
+          </div>
+          <div class="modal-body" id="kmlIndexBody">
+            <div class="loading-state">Loading index status...</div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-outline" onclick="closeKmlModal()">Close</button>
+            <button class="btn btn-primary" id="btnBuildIndex" onclick="buildKmlIndex()">⚡ Build / Rebuild Index</button>
+          </div>
+        </div>
+      </div>
 
       <!-- STEP 2: CLIENT DEED -->
       <section class="step-panel hidden" id="step2Panel">
@@ -147,7 +191,7 @@
               <div class="table-wrap">
                 <table class="data-table" id="s2ResultsTable">
                   <thead>
-                    <tr><th>Doc #</th><th>Grantor</th><th>Type</th><th>Loc</th><th>Year</th></tr>
+                    <tr><th>Doc #</th><th>Grantor</th><th>Type</th><th>Book/Page</th><th>Year</th></tr>
                   </thead>
                   <tbody id="s2ResultsBody">
                     <tr><td colspan="5" class="empty-cell">Enter a search above or start session.</td></tr>
@@ -225,22 +269,7 @@
          </div>
       </section>
 
-      <!-- KML Index Status Modal -->
-      <div class="modal-overlay hidden" id="kmlIndexOverlay" onclick="if(event.target===this) closeKmlModal()">
-        <div class="modal glass-card" style="max-width:520px">
-          <div class="modal-header">
-            <h2>🗺️ KML Parcel Index</h2>
-            <button class="close-btn" onclick="closeKmlModal()">✕</button>
-          </div>
-          <div class="modal-body" id="kmlIndexBody">
-            <div class="loading-state">Loading index status...</div>
-          </div>
-          <div class="modal-footer">
-            <button class="btn btn-outline" onclick="closeKmlModal()">Close</button>
-            <button class="btn btn-primary" id="btnBuildIndex" onclick="buildKmlIndex()">⚡ Build / Rebuild Index</button>
-          </div>
-        </div>
-      </div>
+      <!-- KML Index Status Modal (2nd location removed, kept single above) -->
 
       <!-- STEP 4: ADJOINER DISCOVERY -->
       <section class="step-panel hidden" id="step4Panel">
@@ -395,7 +424,7 @@
 
   <!-- OVERALL PROGRESS FOOTER -->
   <footer class="app-footer">
-    <div class="footer-stats" id="footerStats">
+    <div class="footer-stats hidden" id="footerStats">
       <span class="stat">Deeds: <strong id="statDeeds" class="text-accent2">0/0</strong></span>
       <span class="stat">Plats: <strong id="statPlats" class="text-accent2">0/0</strong></span>
     </div>
@@ -405,7 +434,7 @@
       </div>
     </div>
     <div class="footer-actions">
-       <button class="btn btn-outline btn-sm" onclick="exportSession()">📥 Export CSV</button>
+       <button class="btn btn-outline btn-sm" onclick="exportSession()">📥 Export Summary</button>
     </div>
   </footer>
 
@@ -439,6 +468,98 @@
     </div>
   </div>
 
+  <!-- PROPERTY PICKER MODAL (Step 1) -->
+  <div class="modal-overlay hidden" id="propPickerOverlay" onclick="if(event.target===this) closePropPicker()">
+    <div class="glass-card" id="propPickerPanel" style="
+      position:fixed; top:4vh; left:3vw; right:3vw; bottom:4vh;
+      display:flex; flex-direction:column; z-index:1200;
+      border-radius:16px; overflow:hidden; box-shadow:0 24px 80px rgba(0,0,0,.8);
+    ">
+      <!-- Header -->
+      <div class="modal-header" style="flex-shrink:0; padding:14px 20px; background:linear-gradient(135deg,rgba(79,172,254,.12),rgba(79,172,254,.04))">
+        <div style="display:flex; align-items:center; gap:14px">
+          <span style="font-size:26px">🗺️</span>
+          <div>
+            <div style="font-size:17px;font-weight:800;font-family:'Outfit',sans-serif;color:var(--text1)">Choose Client Property</div>
+            <div style="font-size:11px;color:var(--text3)">Search by owner name or UPC · Click a parcel on the map to select it</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
+          <button class="btn btn-outline btn-sm" onclick="propPickerResetView()" title="Reset map zoom">⟳ Reset</button>
+          <button class="close-btn" onclick="closePropPicker()">✕</button>
+        </div>
+      </div>
+
+      <!-- Search bar -->
+      <div style="flex-shrink:0;padding:10px 16px;background:var(--bg3);border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center">
+        <span style="font-size:13px;color:var(--text3);white-space:nowrap">🔍 Search owner:</span>
+        <input id="propPickerSearch" class="inp" style="flex:1;font-size:13px;padding:7px 12px"
+          placeholder="Type last name or UPC..."
+          oninput="onPropPickerSearch(this.value)">
+        <div id="propPickerSearchCount" style="font-size:11px;color:var(--text3);white-space:nowrap">—</div>
+      </div>
+
+      <!-- Body: map + side panel -->
+      <div style="flex:1;display:flex;overflow:hidden;min-height:0">
+
+        <!-- Left: search results list (desktop) -->
+        <div id="propPickerList" style="
+          width:300px;flex-shrink:0;overflow-y:auto;
+          background:var(--bg2);border-right:1px solid var(--border);
+          display:flex;flex-direction:column;
+        ">
+          <div style="padding:12px 14px;font-size:11px;color:var(--text3);font-style:italic">Search or click a parcel on the map.</div>
+        </div>
+
+        <!-- Leaflet map -->
+        <div style="flex:1;position:relative;border-radius:8px;overflow:hidden">
+          <div id="propPickerLeafletMap" style="position:absolute;inset:0;background:#0d1117"></div>
+          <!-- Loading overlay -->
+          <div id="propPickerMapLoader" class="map-loader-overlay">
+            <div class="map-loader-spinner"></div>
+            <div class="map-loader-text">Loading parcels…</div>
+          </div>
+        </div>
+
+        <!-- Right: selected parcel info + confirm -->
+        <div id="propPickerInfoPanel" style="
+          width:270px;flex-shrink:0;
+          background:var(--bg2);border-left:1px solid var(--border);
+          display:flex;flex-direction:column;
+        ">
+          <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text3);margin-bottom:8px">Selected Parcel</div>
+            <div id="propPickerOwner" style="font-size:16px;font-weight:700;color:var(--text1);margin-bottom:6px;line-height:1.3">—</div>
+            <div id="propPickerDetails" style="font-size:11px;color:var(--text3);line-height:1.8">Click a parcel to inspect it.</div>
+          </div>
+          <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px">
+            <button id="btnConfirmProperty" class="btn btn-primary w-full" disabled
+              onclick="confirmPropertySelection()"
+              style="font-size:14px;padding:12px;letter-spacing:.3px">
+              ✓ Select as Client Property
+            </button>
+            <div style="font-size:10px;color:var(--text3);text-align:center">Owner name will fill the form automatically.</div>
+          </div>
+          <!-- Parcel map legend -->
+          <div style="padding:10px 16px;border-top:1px solid var(--border);margin-top:auto">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px">Legend</div>
+            <div style="display:flex;flex-direction:column;gap:5px;font-size:11px">
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                <span style="width:12px;height:12px;background:#56d3a0;border-radius:2px;display:inline-block"></span> Selected parcel
+              </span>
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                <span style="width:12px;height:12px;background:rgba(79,172,254,.5);border-radius:2px;display:inline-block"></span> Other parcels
+              </span>
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                <span style="width:12px;height:12px;background:#56d3a0;border-radius:2px;opacity:.4;display:inline-block"></span> Name match
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- KML MAP PICKER MODAL -->
   <div class="modal-overlay hidden" id="kmlMapPickerOverlay" onclick="if(event.target===this) closeKmlMapPicker()">
     <div class="glass-card" id="kmlMapPickerPanel" style="
@@ -456,8 +577,6 @@
           </div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
-          <input id="kmlMapSearch" class="inp" style="width:200px;font-size:12px;padding:6px 10px" placeholder="Search owner name..." oninput="kmlMapOwnerSearch(this.value)">
-          <button class="btn btn-outline btn-sm" onclick="kmlMapResetView()" title="Reset map zoom">⟳ Reset</button>
           <button class="close-btn" onclick="closeKmlMapPicker()">✕</button>
         </div>
       </div>
@@ -484,10 +603,31 @@
         <div id="kmlMapStatus" style="margin-left:auto;font-size:11px;color:var(--text3)">Loading map data...</div>
       </div>
 
+      <!-- Search bar strip (below toolbar) -->
+      <div id="kmlMapSearchBar" style="
+        flex-shrink:0; background:var(--bg3);
+        border-bottom:1px solid var(--border);
+        display:flex; align-items:center; gap:10px; padding:8px 16px;
+      ">
+        <span style="font-size:13px;color:var(--text3);white-space:nowrap">🔍</span>
+        <input id="kmlMapSearch" class="inp" style="flex:1;font-size:13px;padding:7px 12px"
+          placeholder="Search by owner name…"
+          oninput="kmlMapOwnerSearch(this.value)">
+        <div id="kmlMapSearchCount" style="font-size:11px;color:var(--text3);white-space:nowrap;min-width:80px;text-align:right"></div>
+        <button class="btn btn-outline btn-sm" onclick="kmlMapResetView()" title="Reset map zoom">⟳ Reset</button>
+      </div>
+
       <!-- Body: map + info panel side by side -->
       <div style="flex:1;display:flex;overflow:hidden;min-height:0">
         <!-- Leaflet map -->
-        <div id="kmlLeafletMap" style="flex:1;background:#0d1117"></div>
+        <div style="flex:1;position:relative">
+          <div id="kmlLeafletMap" style="position:absolute;inset:0;background:#0d1117"></div>
+          <!-- Loading overlay -->
+          <div id="kmlMapLoader" class="map-loader-overlay">
+            <div class="map-loader-spinner"></div>
+            <div class="map-loader-text">Loading parcels…</div>
+          </div>
+        </div>
 
         <!-- Info panel -->
         <div id="kmlMapInfoPanel" style="
@@ -589,11 +729,9 @@
       box.innerHTML += '\n❌ ' + msg + '\n   at ' + (src||'?') + ':' + line + ':' + col + '\n';
       return false;
     };
-    console.log('[DEBUG] Error handler installed');
 
     document.addEventListener('DOMContentLoaded', function() {
-      console.log('[DEBUG] DOMContentLoaded fired');
-      // Check if app.js loaded successfully
+      // Check if app.js loaded successfully (runs 2s after DOM ready)
       setTimeout(function() {
         if (typeof showSettingsModal !== 'function') {
           var box = document.getElementById('_errBox');
@@ -609,8 +747,6 @@
           box.innerHTML += 'startSession is ' + typeof startSession + '<br>';
           box.innerHTML += 'Errors: ' + JSON.stringify(window._errors) + '<br>';
           box.innerHTML += '<br><b>Try: Ctrl+Shift+R to hard refresh</b>';
-        } else {
-          console.log('[DEBUG] app.js loaded OK - all functions available');
         }
       }, 2000);
     });

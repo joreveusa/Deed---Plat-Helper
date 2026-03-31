@@ -861,3 +861,237 @@ select.inp option { background: var(--bg2); color: var(--text); }
   font-size: 10px !important;
 }
 .leaflet-control-attribution a { color: rgba(64, 194, 159, 0.8) !important; }
+
+/* ─── Step 1: Property Map Picker ─────────────────────────────────────────── */
+
+.btn-pick-property {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+  width: 100%;
+  padding: 18px 22px;
+  margin: 16px 0 8px;
+  background: linear-gradient(135deg, rgba(79,172,254,0.10) 0%, rgba(79,172,254,0.04) 100%);
+  border: 2px solid rgba(79,172,254,0.30);
+  border-radius: var(--radius);
+  color: var(--text1, #e6edf3);
+  font-family: 'Outfit', sans-serif;
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.22s cubic-bezier(0.4,0,0.2,1);
+  box-shadow: 0 4px 18px rgba(79,172,254,0.08), inset 0 1px 0 rgba(255,255,255,0.05);
+  text-align: left;
+}
+.btn-pick-property:hover {
+  background: linear-gradient(135deg, rgba(79,172,254,0.20) 0%, rgba(79,172,254,0.09) 100%);
+  border-color: rgba(79,172,254,0.60);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px rgba(79,172,254,0.18);
+}
+.btn-pick-property strong {
+  font-size: 15px;
+  font-weight: 800;
+  display: block;
+  color: #79c8e0;
+}
+.pick-sub {
+  font-size: 11px;
+  color: var(--text3);
+  font-weight: 400;
+  font-family: 'Inter', sans-serif;
+  display: block;
+  margin-top: 2px;
+}
+
+/* Selected parcel display card in Step 1 */
+.selected-parcel-card {
+  background: linear-gradient(135deg, rgba(86,211,160,0.10) 0%, rgba(86,211,160,0.04) 100%);
+  border: 1px solid rgba(86,211,160,0.35);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  animation: fadeIn 0.25s ease;
+  overflow: hidden;
+}
+.selected-parcel-inner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+}
+.selected-parcel-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 8px rgba(86,211,160,0.4));
+}
+.selected-parcel-info { flex: 1; min-width: 0; }
+.selected-parcel-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #56d3a0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'Outfit', sans-serif;
+}
+.selected-parcel-meta {
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 3px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* OR divider between map picker and manual input */
+.or-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 14px;
+  color: var(--text3);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+}
+.or-divider::before,
+.or-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Property picker modal: ensure it sits above everything else */
+#propPickerOverlay { z-index: 1200; }
+
+/* Property picker parcel list items */
+.prop-picker-result-item {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--trans);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.prop-picker-result-item:hover {
+  background: rgba(79,172,254,0.06);
+}
+.prop-picker-result-item.selected {
+  background: rgba(86,211,160,0.10);
+  border-left: 3px solid #56d3a0;
+}
+.prop-picker-result-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.prop-picker-result-meta {
+  font-size: 10px;
+  color: var(--text3);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ─── Map Loading Overlay ───────────────────────────────────────────────────── */
+.map-loader-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 800;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: rgba(13, 17, 23, 0.82);
+  backdrop-filter: blur(6px);
+  transition: opacity 0.35s ease, visibility 0.35s;
+}
+.map-loader-overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.map-loader-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(64, 194, 159, 0.2);
+  border-top-color: #40c29f;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+.map-loader-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text3);
+  letter-spacing: 0.3px;
+}
+
+/* ─── Leaflet Canvas Pulse for highlighted (client) parcels ─────────────────── */
+/* We inject an SVG circle marker on top of highlighted polygons; the keyframe
+   is used for the CSS ring elements injected via JS */
+@keyframes parcelPulse {
+  0%   { box-shadow: 0 0 0 0   rgba(227,197, 90, 0.60); }
+  70%  { box-shadow: 0 0 0 12px rgba(227,197, 90, 0);    }
+  100% { box-shadow: 0 0 0 0   rgba(227,197, 90, 0);     }
+}
+@keyframes pulseBorder {
+  0%   { outline-color: rgba(227,197,90,.8);  }
+  50%  { outline-color: rgba(227,197,90,.15); }
+  100% { outline-color: rgba(227,197,90,.8);  }
+}
+
+/* Pulse ring element injected via JS on the Leaflet pane for the client parcel */
+.parcel-pulse-ring {
+  pointer-events: none;
+  border-radius: 50%;
+  animation: parcelPulse 1.8s ease-out infinite;
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  background: transparent;
+  z-index: 650;
+}
+
+/* ─── Leaflet Zoom Controls — stronger contrast ──────────────────────────────── */
+.leaflet-bar {
+  border: 1px solid rgba(64, 194, 159, 0.18) !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.04) !important;
+}
+.leaflet-control-zoom a {
+  background: rgba(16, 20, 26, 0.95) !important;
+  color: #a8d8c4 !important;
+  border-bottom-color: rgba(64, 194, 159, 0.12) !important;
+  transition: background 0.18s, color 0.18s !important;
+}
+.leaflet-control-zoom a:hover {
+  background: rgba(45, 138, 110, 0.5) !important;
+  color: #fff !important;
+}
+.leaflet-control-zoom-in { border-radius: 8px 8px 0 0 !important; }
+.leaflet-control-zoom-out { border-radius: 0 0 8px 8px !important; }
+
+/* Dark Matter tile attribution — keep it readable */
+.leaflet-control-attribution {
+  background: rgba(10, 13, 18, 0.75) !important;
+  color: rgba(100, 110, 120, 0.9) !important;
+  font-size: 10px !important;
+  padding: 2px 6px !important;
+  border-radius: 6px 0 0 0 !important;
+}
+.leaflet-control-attribution a {
+  color: rgba(64, 194, 159, 0.8) !important;
+}
+
+/* ─── KML Search Count badge ─────────────────────────────────────────────────── */
+#kmlMapSearchCount:not(:empty) {
+  background: rgba(64,194,159,0.08);
+  border: 1px solid rgba(64,194,159,0.2);
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-weight: 600;
+  color: var(--accent2);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+

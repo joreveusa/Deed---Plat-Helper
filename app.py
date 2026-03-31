@@ -1,7 +1,7 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 import requests as req_lib
 from bs4 import BeautifulSoup
-import os, re, json, traceback, subprocess
+import os, re, json, traceback, subprocess, gzip
 from pathlib import Path
 import fitz          # PyMuPDF  — PDF → image
 import pytesseract
@@ -12,15 +12,15 @@ import xml_processor
 # Point pytesseract at the Tesseract binary
 # Auto-detect Tesseract in common locations
 def _find_tesseract():
+    """Locate the Tesseract binary. Checks standard install paths first, then PATH."""
     candidates = [
         r"C:\Program Files\Tesseract-OCR\tesseract.exe",
         r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-        r"C:\Users\Tina\AppData\Local\Programs\Tesseract-OCR\tesseract.exe",
     ]
     for p in candidates:
         if os.path.exists(p):
             return p
-    # Try PATH
+    # Try PATH (covers custom installs, Linux/Mac, conda environments)
     import shutil
     found = shutil.which("tesseract")
     return found or candidates[0]  # fall back to default path even if missing
@@ -81,7 +81,7 @@ def get_survey_data_path() -> str:
     drive = detect_survey_drive()
     if drive:
         return str(Path(f"{drive}:\\") / _SURVEY_RELATIVE)
-    return r"F:\AI DATA CENTER\Survey Data"  # fallback placeholder
+    return ""  # drive not found — caller should check for empty string and warn user
 
 
 def get_cabinet_path() -> str:
@@ -110,7 +110,8 @@ CABINET_FOLDERS = {
 }
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
-JOB_TYPES = ["BDY", "CNS", "TOPO", "ALTA", "LOC", "SPLIT", "CONDO", "EASE", "ROW", "UTIL", "OTHER"]
+# Must match the <select> options in index.html
+JOB_TYPES = ["BDY", "ILR", "SE", "SUB", "TIE", "TOPO", "ELEV", "ALTA", "CONS", "OTHER"]
 
 # One persistent session per server run
 web_session = req_lib.Session()
@@ -222,21 +223,17 @@ def index():
 
 @app.route("/app.js")
 def serve_appjs():
-    from flask import make_response
-    resp = make_response(send_from_directory(".", "app.js"))
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-    return resp
+    # No-cache headers are applied by the @after_request hook below
+    return send_from_directory(".", "app.js")
 
 @app.route("/style.css")
 def serve_css():
-    from flask import make_response
-    resp = make_response(send_from_directory(".", "style.css"))
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-    return resp
+    # No-cache headers are applied by the @after_request hook below
+    return send_from_directory(".", "style.css")
+
+@app.route("/favicon.png")
+def serve_favicon():
+    return send_from_directory(".", "favicon.png")
 
 @app.after_request
 def add_no_cache(response):
@@ -857,6 +854,8 @@ def api_find_adjoiners():
                 results.append(item)
 
         # ── Strategy 2: OCR the local plat referenced by this deed ─────────────
+        #   Use ocr_plat_file() which has a disk cache — avoids re-rendering pages
+        #   on repeat calls. The raw text is stored in the cache file alongside.
         cab_refs = parse_cabinet_refs(detail)
         print(f"[adjoiners] cabinet refs found: {cab_refs}", flush=True)
         for ref in cab_refs:
@@ -864,20 +863,16 @@ def api_find_adjoiners():
             if hits:
                 plat_path = hits[0]["path"]
                 plat_file_used = hits[0]["file"]
-                # Run OCR and capture raw text
-                try:
-                    from PIL import ImageEnhance
-                    doc_pdf = fitz.open(plat_path)
-                    for page in doc_pdf:
-                        pix = page.get_pixmap(dpi=250)
-                        img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
-                        img = ImageEnhance.Contrast(img).enhance(2.0)
-                        img = img.point(lambda x: 255 if x > 128 else 0, "1")
-                        raw_ocr_text += pytesseract.image_to_string(img, config="--oem 3 --psm 6") + "\n"
-                    doc_pdf.close()
-                except Exception as ocr_err:
-                    print(f"[adjoiners] OCR error: {ocr_err}", flush=True)
+                # ocr_plat_file() handles caching — only renders pages once
                 ocr_names = ocr_plat_file(plat_path)
+                # Capture raw OCR text from cache file for the response
+                try:
+                    cache = _ocr_cache_path(plat_path)
+                    if cache.exists():
+                        cached = json.loads(cache.read_text(encoding="utf-8"))
+                        raw_ocr_text = " ".join(cached.get("names", []))
+                except Exception:
+                    pass
                 for name in ocr_names:
                     key = name.lower()
                     if key not in seen_names:
@@ -1328,18 +1323,36 @@ def api_find_plat_kml():
     """
     KML parcel index cross-reference.
     Requires the index to be built first (via /api/xml/build-index).
+
+    When deed detail is empty but client_name is provided, performs a
+    name-only owner search so Step 3 can show KML results without a deed.
     """
     try:
-        data   = request.get_json() or {}
-        detail = data.get("detail", {})
+        data        = request.get_json() or {}
+        detail      = data.get("detail", {})
+        client_name = data.get("client_name", "").strip()
         kml_matches = []
         idx = xml_processor._cached_index
         if idx is None:
             survey = get_survey_data_path()
             idx    = xml_processor.load_index(survey)
         if idx:
-            survey      = get_survey_data_path()
-            kml_results = xml_processor.cross_reference_deed(survey, detail)
+            survey = get_survey_data_path()
+            # If we have a deed, use the full cross-reference (grantor/grantee/book/page/cab)
+            if detail and (detail.get("Grantor") or detail.get("Grantee") or detail.get("Location")):
+                kml_results = xml_processor.cross_reference_deed(survey, detail)
+            elif client_name:
+                # No deed yet — search by client name (owner contains last name)
+                last_name = client_name.split(",")[0].strip().upper()
+                if len(last_name) >= 2:
+                    raw = xml_processor.search_parcels_in_index(idx, owner=last_name, operator="contains", limit=15)
+                    for p in raw:
+                        p["_match_reason"] = f"Client name: {client_name}"
+                    kml_results = raw
+                else:
+                    kml_results = []
+            else:
+                kml_results = []
             for p in kml_results:
                 kml_matches.append({
                     "owner":        p.get("owner", ""),
@@ -1419,11 +1432,41 @@ def api_find_plat_local():
             if r["doc"] not in deed_cab_refs[r["cabinet"]]:
                 deed_cab_refs[r["cabinet"]].append(r["doc"])
 
+        # ── Build client name tokens for cabinet filename matching ───────────────
+        # The client IS the current property owner, so their name appears on cabinet
+        # files (e.g. "Rael Adela.pdf" or "Adela Rael.pdf").
+        # We build tokens from client_name AND the deed grantee (same person).
+        #
+        #  client_name format examples: "Rael, Adela"  "ADELA RAEL"  "rael adela"
+        #  Cabinet file name examples:  "Adela Rael.pdf"  "Rael Adela.pdf"
+        #    → We need both "Rael" and "Adela" to reliably find the file.
+        client_tokens: list[str] = []
+        for raw_name in [client_name, grantee]:
+            if not raw_name or not raw_name.strip():
+                continue
+            raw = raw_name.strip()
+            # Add the full string (handles "Adela Rael" matching "Adela Rael.pdf")
+            if len(raw) >= 3 and raw.lower() not in [t.lower() for t in client_tokens]:
+                client_tokens.append(raw)
+            # Swap "Last, First" → "First Last" (handles "Rael, Adela" → "Adela Rael")
+            if ',' in raw:
+                parts = [p.strip() for p in raw.split(',', 1) if p.strip()]
+                if len(parts) == 2:
+                    swapped = f"{parts[1]} {parts[0]}"
+                    if swapped.lower() not in [t.lower() for t in client_tokens]:
+                        client_tokens.append(swapped)
+                # Also add just the last name (before comma)
+                last = parts[0]
+                if len(last) >= 3 and last.lower() not in [t.lower() for t in client_tokens]:
+                    client_tokens.append(last)
+            # Add individual words >= 4 chars
+            for w in re.split(r'[\s,]+', raw):
+                if len(w) >= 4 and w.lower() not in [t.lower() for t in client_tokens]:
+                    client_tokens.append(w)
+
+        print(f"[local] client_tokens for cabinet search: {client_tokens}", flush=True)
+
         # ── Scan each target cabinet ─────────────────────────────────────────────
-        # NOTE: client_name (e.g. "garza, veronica") is the survey CLIENT, not the
-        # property owner whose name appears in cabinet filenames (e.g. "Rael Adela.pdf").
-        # Do NOT use client_name for filename matching — it causes false hits.
-        # Name tokens come from: KML owner/PLAT field, then deed grantor/grantee.
         for cab_letter in target_cabs:
             if not CABINET_FOLDERS.get(cab_letter):
                 continue
@@ -1503,15 +1546,32 @@ def api_find_plat_local():
                     except Exception:
                         pass
 
-            # c) Grantor/grantee name from deed — lowest priority, may not match
-            #    if ownership has changed since the deed was recorded.
-            if grantor or grantee:
+            # c) Client name tokens — HIGH priority for Step 3 (client plat).
+            #    The client IS the current owner, so their name IS on the cabinet file
+            #    (e.g. "Rael, Adela" → finds "Adela Rael.pdf" or "Rael Adela.pdf").
+            #    This also covers the grantee since they were pre-merged into client_tokens.
+            for tok in client_tokens:
                 try:
-                    for h in search_local_cabinet(cab_letter, "", grantor, grantee):
+                    for h in search_local_cabinet(cab_letter, "", tok, ""):
+                        if h["path"] not in seen_local_paths:
+                            seen_local_paths.add(h["path"])
+                            h["source"]   = "local"
+                            h["ref"]      = "client_name"
+                            h["strategy"] = "client_name"
+                            h["_tok_len"] = len(tok) + 100
+                            local_hits.append(h)
+                except Exception:
+                    pass
+
+            # d) Grantor name from deed — lowest priority, may not match
+            #    if ownership has changed since the deed was recorded.
+            if grantor:
+                try:
+                    for h in search_local_cabinet(cab_letter, "", grantor, ""):
                         if h["path"] not in seen_local_paths:
                             seen_local_paths.add(h["path"])
                             h["source"] = "local"
-                            h["ref"]    = "name_search"
+                            h["ref"]    = "grantor_search"
                             local_hits.append(h)
                 except Exception:
                     pass
@@ -1541,62 +1601,101 @@ def api_find_plat_local():
 def api_find_plat_online():
     """
     Slow online survey search (separate endpoint so it doesn't block the UI).
+    Searches by client name (current owner), grantee, and deed grantor — in
+    that order — since the survey plat lists the current owner as the grantor.
     """
     try:
-        data    = request.get_json() or {}
-        detail  = data.get("detail", {})
-        grantor = data.get("grantor", "") or detail.get("Grantor", "")
-        hits    = []
-        try:
-            search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
-            resp       = web_session.get(search_url, timeout=8)
-            if 'CROSSNAMEFIELD' in resp.text or 'FIELD14' in resp.text:
+        data        = request.get_json() or {}
+        detail      = data.get("detail", {})
+        grantor     = data.get("grantor", "") or detail.get("Grantor", "")
+        grantee     = data.get("grantee", "") or detail.get("Grantee", "")
+        client_name = data.get("client_name", "")
+        hits      = []
+        seen_docs = set()
+
+        def _do_online_search(name_last, label):
+            """Run one surname search and append any survey hits found."""
+            if not name_last or len(name_last) < 2:
+                return
+            try:
+                search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+                resp = web_session.get(search_url, timeout=8)
+                if "CROSSNAMEFIELD" not in resp.text and "FIELD14" not in resp.text:
+                    return  # not logged in
                 soup = BeautifulSoup(resp.text, "html.parser")
                 form = soup.find("form")
-                if form:
-                    fd = {}
-                    for inp in form.find_all("input"):
-                        nm = inp.get("name")
-                        if nm: fd[nm] = inp.get("value", "")
-                    for sel in form.find_all("select"):
-                        nm = sel.get("name")
-                        if nm:
-                            opt = sel.find("option", selected=True) or sel.find("option")
-                            fd[nm] = opt["value"] if opt and opt.get("value") else ""
-                    last = grantor.split(",")[0].strip() if grantor else ""
-                    if last:
-                        fd["CROSSNAMEFIELD"] = last
-                        fd["CROSSNAMETYPE"]  = "begin"
-                        fd["FIELD7"] = "SUR"
-                        post  = web_session.post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=10)
-                        soup2 = BeautifulSoup(post.text, "html.parser")
-                        for row in soup2.find_all("tr"):
-                            cells = row.find_all("td")
-                            if len(cells) < 9:
-                                continue
-                            doc_link = cells[1].find("a") if len(cells) > 1 else None
-                            if not doc_link:
-                                continue
-                            doc_no = doc_link.text.strip()
-                            itype  = cells[5].text.strip() if len(cells) > 5 else ""
-                            if not re.search(r'survey|plat|map|lot.?line|replat|subdiv', itype, re.I):
-                                continue
-                            hits.append({
-                                "doc_no":          doc_no,
-                                "instrument_type": itype,
-                                "location":        cells[2].text.strip() if len(cells) > 2 else "",
-                                "recorded_date":   cells[7].text.strip() if len(cells) > 7 else "",
-                                "grantor":         cells[9].text.strip() if len(cells) > 9 else "",
-                                "grantee":         cells[10].text.strip() if len(cells) > 10 else "",
-                                "pdf_url":         f"{BASE_URL}/WebTemp/{doc_no}.pdf",
-                                "source":          "online",
-                            })
-        except Exception:
-            pass
+                if not form:
+                    return
+                fd = {}
+                for inp in form.find_all("input"):
+                    nm = inp.get("name")
+                    if nm:
+                        fd[nm] = inp.get("value", "")
+                for sel in form.find_all("select"):
+                    nm = sel.get("name")
+                    if nm:
+                        opt = sel.find("option", selected=True) or sel.find("option")
+                        fd[nm] = opt["value"] if opt and opt.get("value") else ""
+                fd["CROSSNAMEFIELD"] = name_last
+                fd["CROSSNAMETYPE"]  = "begin"
+                # NOTE: Do NOT set FIELD7="SUR" here — it conflicts with the form
+                # and may suppress all results. Instrument-type filtering is done
+                # by the regex below after results are returned.
+                post  = web_session.post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=10)
+                soup2 = BeautifulSoup(post.text, "html.parser")
+                for row in soup2.find_all("tr"):
+                    cells = row.find_all("td")
+                    if len(cells) < 9:
+                        continue
+                    doc_link = cells[1].find("a") if len(cells) > 1 else None
+                    if not doc_link:
+                        continue
+                    doc_no = doc_link.text.strip()
+                    if doc_no in seen_docs:
+                        continue
+                    itype = cells[5].text.strip() if len(cells) > 5 else ""
+                    if not re.search(r"survey|plat|map|lot.?line|replat|subdiv", itype, re.I):
+                        continue
+                    seen_docs.add(doc_no)
+                    hits.append({
+                        "doc_no":          doc_no,
+                        "instrument_type": itype,
+                        "location":        cells[2].text.strip() if len(cells) > 2 else "",
+                        "recorded_date":   cells[7].text.strip() if len(cells) > 7 else "",
+                        "grantor":         cells[9].text.strip() if len(cells) > 9 else "",
+                        "grantee":         cells[10].text.strip() if len(cells) > 10 else "",
+                        "pdf_url":         f"{BASE_URL}/WebTemp/{doc_no}.pdf",
+                        "source":          "online",
+                        "search_label":    label,
+                    })
+            except Exception:
+                pass
+
+        # Build ordered list of last names to search (most specific first)
+        names_to_search = []   # list of (last_name, label) tuples
+        seen_lasts = set()
+
+        def _add_last(raw, label):
+            if not raw:
+                return
+            last = raw.split(",")[0].strip().upper()
+            if last and len(last) >= 2 and last not in seen_lasts:
+                seen_lasts.add(last)
+                names_to_search.append((last, label))
+
+        # Priority 1: client_name (current owner — most likely survey grantor)
+        _add_last(client_name, "client")
+        # Priority 2: grantee from deed (same person as client in Step 3)
+        _add_last(grantee, "grantee")
+        # Priority 3: grantor from deed (the seller — less likely to have a survey here)
+        _add_last(grantor, "grantor")
+
+        for last, label in names_to_search:
+            _do_online_search(last, label)
+
         return jsonify({"success": True, "online": hits})
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "online": []})
-
 
 
 # ── save plat to project folder ────────────────────────────────────────────────
@@ -2723,6 +2822,107 @@ def api_xml_cross_reference():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
+
+
+# ── /api/parcel-search  (Step 1 Property Picker) ─────────────────────────────
+
+@app.route("/api/parcel-search", methods=["POST"])
+def api_parcel_search():
+    """
+    Search KML parcel index by owner name or UPC for the Step 1 property picker.
+
+    Body: { query: str, operator: str ("contains"|"begins"|"exact"), limit: int }
+    Returns: { success, results: [{owner, upc, book, page, plat, cab_refs, centroid, polygon}], count }
+    """
+    try:
+        data     = request.get_json() or {}
+        query    = data.get("query", "").strip()
+        operator = data.get("operator", "contains")
+        limit    = int(data.get("limit", 30))
+
+        if not query or len(query) < 2:
+            return jsonify({"success": True, "results": [], "count": 0,
+                            "hint": "Enter at least 2 characters to search"})
+
+        survey = get_survey_data_path()
+        idx = xml_processor._cached_index
+        if idx is None:
+            idx = xml_processor.load_index(survey)
+        if not idx:
+            return jsonify({"success": False, "error": "Parcel index not built yet. Use the KML Index button to build it.",
+                            "results": [], "count": 0})
+
+        # Search by owner name
+        results = xml_processor.search_parcels_in_index(
+            idx, owner=query, operator=operator, limit=limit
+        )
+
+        # If no name hits and query looks like a UPC (all digits), try UPC search
+        if not results and re.match(r'^\d+$', query):
+            results = xml_processor.search_parcels_in_index(
+                idx, upc=query, limit=limit
+            )
+
+        # Return minimal fields (strip heavy polygon data for list view)
+        out = []
+        for p in results:
+            out.append({
+                "owner":    p.get("owner", ""),
+                "upc":      p.get("upc", ""),
+                "book":     p.get("book", ""),
+                "page":     p.get("page", ""),
+                "plat":     p.get("plat", ""),
+                "cab_refs": p.get("cab_refs", []),
+                "centroid": p.get("centroid"),
+            })
+
+        return jsonify({"success": True, "results": out, "count": len(out)})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e), "results": [], "count": 0})
+
+
+# ── /api/xml/map-geojson  (Leaflet map data) ─────────────────────────────────
+
+@app.route("/api/xml/map-geojson", methods=["POST"])
+def api_xml_map_geojson():
+    """
+    Return a GeoJSON FeatureCollection for Leaflet rendering.
+    Body: { highlight_upcs: [str], max_features: int }
+    Response is gzip-compressed when the client accepts it (browsers always do).
+    """
+    try:
+        data           = request.get_json() or {}
+        highlight_upcs = data.get("highlight_upcs", [])
+        max_features   = int(data.get("max_features", 100000))
+
+        survey  = get_survey_data_path()
+        geojson = xml_processor.get_map_geojson(survey, highlight_upcs, max_features)
+        total   = len(geojson.get("features", []))
+
+        payload = json.dumps({"success": True, "geojson": geojson, "total": total},
+                             separators=(",", ":"))  # compact JSON — no spaces
+
+        # Compress if client supports it (all modern browsers do)
+        accept_enc = request.headers.get("Accept-Encoding", "")
+        if "gzip" in accept_enc:
+            compressed = gzip.compress(payload.encode("utf-8"), compresslevel=6)
+            return Response(
+                compressed,
+                status=200,
+                mimetype="application/json",
+                headers={
+                    "Content-Encoding": "gzip",
+                    "Content-Length":   str(len(compressed)),
+                    "Vary":             "Accept-Encoding",
+                },
+            )
+        return Response(payload, status=200, mimetype="application/json")
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e), "total": 0})
+
 
 
 # ── run ────────────────────────────────────────────────────────────────────────

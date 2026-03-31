@@ -200,19 +200,18 @@ def _extract_placemark(elem, source_name: str, ns: str = "{http://www.opengis.ne
             owner = "Unknown Owner"  # include in index so geometry isn't lost
 
     # Coordinates — extract centroid and full polygon from first polygon
-    # Try both namespaced and plain coordinate elements
+    # Always try BOTH the namespaced and plain "coordinates" tags.
+    # KMZ-embedded KML often uses plain coords even when a namespace is declared.
+    coords_raw = []
+    seen_coord_texts = set()
+    for tag in ([f"{ns}coordinates", "coordinates"] if ns else ["coordinates"]):
+        for coord_el in elem.iter(tag):
+            txt = (coord_el.text or "").strip()
+            if txt and txt not in seen_coord_texts:
+                coords_raw.append(txt)
+                seen_coord_texts.add(txt)
     centroid = None
     polygon = None
-    coords_raw = []
-    coord_tag = f"{ns}coordinates" if ns else "coordinates"
-    for coord_el in elem.iter(coord_tag):
-        if coord_el.text:
-            coords_raw.append(coord_el.text.strip())
-    if not coords_raw and ns:
-        # Fallback: try without namespace
-        for coord_el in elem.iter("coordinates"):
-            if coord_el.text:
-                coords_raw.append(coord_el.text.strip())
 
     if coords_raw:
         centroid = _compute_centroid(coords_raw[0])
@@ -437,7 +436,12 @@ def build_index(survey_data_path: str, progress_callback=None) -> dict:
     t0 = time.time()
     all_records = []
 
-    files = [f for f in xml_dir.iterdir() if f.suffix.lower() in (".kml", ".kmz")]
+    # Sort files so KMZ sources are processed LAST — they win de-duplication
+    # (Parcel_Maintenance.kmz is preferred over TC_Parcels_2024.kml)
+    raw_files = [f for f in xml_dir.iterdir() if f.suffix.lower() in (".kml", ".kmz")]
+    kml_files = sorted([f for f in raw_files if f.suffix.lower() == ".kml"])
+    kmz_files = sorted([f for f in raw_files if f.suffix.lower() == ".kmz"])
+    files = kml_files + kmz_files   # KML first, KMZ last → KMZ wins
     sources = []
 
     for fi, f in enumerate(files):
@@ -455,14 +459,29 @@ def build_index(survey_data_path: str, progress_callback=None) -> dict:
         all_records.extend(records)
         print(f"[xml] Parsed {source_name}: {len(records)} parcels")
 
-    # De-duplicate by UPC (prefer record with more data)
+    # De-duplicate by UPC.
+    # Priority order: KMZ records always beat KML records for the same UPC;
+    # within the same format, prefer whichever has more plat data.
     by_upc = {}
     no_upc = []
     for r in all_records:
         if r["upc"]:
             existing = by_upc.get(r["upc"])
-            if not existing or len(r.get("plat", "")) > len(existing.get("plat", "")):
+            if not existing:
                 by_upc[r["upc"]] = r
+            else:
+                # KMZ source always beats KML source
+                r_is_kmz = r.get("source", "").lower().endswith(".kmz") or \
+                            ".kmz/" in r.get("source", "").lower()
+                ex_is_kmz = existing.get("source", "").lower().endswith(".kmz") or \
+                            ".kmz/" in existing.get("source", "").lower()
+                if r_is_kmz and not ex_is_kmz:
+                    by_upc[r["upc"]] = r   # KMZ beats KML unconditionally
+                elif r_is_kmz == ex_is_kmz:
+                    # Same format — prefer richer plat data
+                    if len(r.get("plat", "")) > len(existing.get("plat", "")):
+                        by_upc[r["upc"]] = r
+                # else existing is KMZ, incoming is KML → keep existing
         else:
             no_upc.append(r)
 
@@ -483,7 +502,7 @@ def build_index(survey_data_path: str, progress_callback=None) -> dict:
     idx_path.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
 
     elapsed = round(time.time() - t0, 1)
-    print(f"[xml] Index built: {len(deduped)} parcels in {elapsed}s → {idx_path}")
+    print(f"[xml] Index built: {len(deduped)} parcels in {elapsed}s -> {idx_path}")
 
     return {
         "total":      len(deduped),
@@ -725,6 +744,24 @@ def cross_reference_deed(survey_data_path: str, deed_detail: dict) -> list[dict]
 # GEOJSON MAP EXPORT
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _simplify_ring(ring: list, max_pts: int = 50) -> list:
+    """
+    Reduce a polygon ring to at most max_pts vertices using simple stride sampling.
+    Always keeps first and last point (so ring stays closed).
+    Coordinates are rounded to 4 decimal places (~11m accuracy — fine for parcel outlines).
+    """
+    # Round coords first
+    ring = [[round(c[0], 4), round(c[1], 4)] for c in ring]
+    if len(ring) <= max_pts:
+        return ring
+    # Keep first, last, and evenly-spaced intermediate points
+    step = (len(ring) - 1) / (max_pts - 1)
+    indices = set([0, len(ring) - 1])
+    for i in range(1, max_pts - 1):
+        indices.add(round(i * step))
+    return [ring[i] for i in sorted(indices)]
+
+
 def get_map_geojson(
     survey_data_path: str,
     highlight_upcs: list[str] | None = None,
@@ -738,6 +775,8 @@ def get_map_geojson(
       - highlight: True if the parcel UPC is in highlight_upcs
 
     Parcels without polygon data are emitted as Point (centroid).
+    Coordinates are simplified to 4 decimal places and polygons are
+    capped at 50 vertices to keep the response size manageable.
     """
     idx = load_index(survey_data_path)
     if not idx:
@@ -747,28 +786,30 @@ def get_map_geojson(
     features = []
 
     for p in idx.get("parcels", [])[:max_features]:
-        upc = p.get("upc", "")
-        owner = p.get("owner", "")
-        polygon = p.get("polygon")
+        upc      = p.get("upc", "")
+        owner    = p.get("owner", "")
+        polygon  = p.get("polygon")
         centroid = p.get("centroid")
-        cab_refs_str = ", ".join(p.get("cab_refs", []))
 
-        props = {
-            "owner":        owner,
-            "upc":          upc,
-            "book":         p.get("book", ""),
-            "page":         p.get("page", ""),
-            "plat":         p.get("plat", ""),
-            "cab_refs_str": cab_refs_str,
-            "highlight":    upc in highlight_set if upc else False,
-        }
+        # Build lean properties — omit empty strings to reduce JSON size
+        props: dict = {"owner": owner, "upc": upc}
+        for key in ("book", "page", "plat"):
+            val = p.get(key, "")
+            if val:
+                props[key] = val
+        cab_refs_str = ", ".join(p.get("cab_refs", []))
+        if cab_refs_str:
+            props["cab_refs_str"] = cab_refs_str
+        if upc and upc in highlight_set:
+            props["highlight"] = True
 
         if polygon and len(polygon) >= 3:
-            # GeoJSON polygon rings need to be closed (first == last)
             ring = polygon if polygon[0] == polygon[-1] else polygon + [polygon[0]]
+            ring = _simplify_ring(ring, max_pts=50)
             geometry = {"type": "Polygon", "coordinates": [ring]}
         elif centroid:
-            geometry = {"type": "Point", "coordinates": centroid}
+            geometry = {"type": "Point",
+                        "coordinates": [round(centroid[0], 4), round(centroid[1], 4)]}
         else:
             continue  # skip parcels with no geometry
 
@@ -782,3 +823,4 @@ def get_map_geojson(
         "type":     "FeatureCollection",
         "features": features,
     }
+

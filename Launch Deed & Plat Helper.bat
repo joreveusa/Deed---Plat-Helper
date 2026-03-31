@@ -10,7 +10,7 @@ echo  ==========================================
 echo.
 
 :: Full path to Python launcher (works even if py is not on PATH)
-set PY="C:\Users\Tina\AppData\Local\Programs\Python\Launcher\py.exe"
+set PY="C:\Users\User\AppData\Local\Programs\Python\Python311\python.exe"
 
 :: Verify Python exists
 if not exist %PY% (
