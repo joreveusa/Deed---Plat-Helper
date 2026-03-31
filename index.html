@@ -8,7 +8,7 @@
   <title>Deed & Plat Helper</title>
   <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=1774895000">
+  <link rel="stylesheet" href="style.css?v=1774920000">
   <!-- Leaflet map for KML parcel picker -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
@@ -182,6 +182,10 @@
                 </div>
                 <button class="btn btn-accent btn-search" id="btnS2Search" onclick="doStep2Search()">Search</button>
               </div>
+              <!-- Skip shortcut for jobs that don't need deed research -->
+              <div style="text-align:right;margin-top:6px">
+                <button class="btn btn-outline btn-sm" style="font-size:11px;opacity:.75" onclick="skipToStep3()" title="Skip deed research and go straight to plat search">Skip to Plat &rarr;</button>
+              </div>
             </div>
 
             <div class="results-container glass-card mt-3">
@@ -293,7 +297,7 @@
         <div class="discovery-results mt-3 glass-card hidden" id="s4DiscoveryResults">
           <div class="row-layout discovery-header">
             <h3>Found <span id="s4CountText" class="text-accent2">0</span> Potential Adjoiners</h3>
-            <button class="btn btn-success btn-sm" onclick="addAllDiscoveredToBoard()">+ Add All to Board</button>
+            <button class="btn btn-success btn-sm" onclick="addAllAndContinue()">&#10133; Add All &amp; Continue &rarr;</button>
           </div>
           <div class="adjoiner-discovery-grid" id="s4AdjoinerGrid">
             <!-- Populated via JS -->
@@ -343,7 +347,7 @@
               
               <div class="tab-content flex-1" id="s6TabCalls">
                 <div class="row-layout gap-2 mb-2 p-2" style="background:var(--bg3);border-bottom:1px solid var(--border)">
-                  <button class="btn btn-outline btn-sm" onclick="reparseClientCallsFromSession()">📥 Import from Client Deed</button>
+                  <button class="btn btn-outline btn-sm" onclick="reparseClientCallsFromSession()" title="Re-import boundary calls from the saved client deed">📥 Re-import Calls</button>
                   <button class="btn btn-outline btn-sm" onclick="addManualCall()">+ Add Call</button>
                   <button class="btn btn-outline btn-sm text-danger ml-auto" onclick="clearAllCalls()">🗑️ Clear</button>
                 </div>
@@ -751,7 +755,7 @@
       }, 2000);
     });
   </script>
-  <script src="app.js?v=1774895000" onerror="
+  <script src="app.js?v=1774924800" onerror="
     var box = document.createElement('div');
     box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1a0505;border-bottom:2px solid #ff3333;color:#ff7b72;font-family:monospace;font-size:14px;padding:16px;text-align:center';
     box.textContent = '❌ Failed to load app.js - server may be down';

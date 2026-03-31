@@ -550,6 +550,64 @@ select.inp option { background: var(--bg2); color: var(--text); }
 
 .detail-actions { display: flex; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--border); flex-shrink: 0; background: rgba(0,0,0,0.15); }
 
+/* ─── Plat Hint Card (Step 2 deed insight) ───────────────────────────────── */
+.plat-hint-card {
+  border: 1px solid rgba(227,197,90,0.35);
+  background: linear-gradient(135deg, rgba(227,197,90,0.06), rgba(0,0,0,0.05));
+  border-radius: var(--radius-sm);
+  margin-bottom: 14px;
+  overflow: hidden;
+  animation: fadeIn 0.3s ease;
+}
+.plat-hint-none {
+  padding: 8px 14px;
+  border-color: rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.1);
+}
+.plat-hint-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  background: rgba(227,197,90,0.08);
+  border-bottom: 1px solid rgba(227,197,90,0.2);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #e3c55a;
+}
+.plat-hint-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-size: 12px;
+}
+.plat-hint-row:last-child { border-bottom: none; }
+.plat-hint-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text3);
+  min-width: 90px;
+  padding-top: 2px;
+  flex-shrink: 0;
+}
+.plat-hint-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.plat-hint-values .badge {
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.15s;
+}
+.plat-hint-values .badge:hover { filter: brightness(1.3); transform: translateY(-1px); }
+
 /* Step 3: Plats */
 .header-card { padding: 16px 24px; flex-shrink: 0; }
 .plat-list-card { padding: 0; overflow: hidden; display: flex; flex-direction: column; }

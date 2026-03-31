@@ -1396,6 +1396,7 @@ def api_find_plat_local():
         grantor        = data.get("grantor", "") or detail.get("Grantor", "")
         grantee        = data.get("grantee", "") or detail.get("Grantee", "")
         client_name    = data.get("client_name", "")
+        prior_owners   = data.get("prior_owners", [])   # grantor names from deed hint
         kml_matches    = data.get("kml_matches", [])   # may be populated if frontend chains requests
         forced_cabinets = [c.upper() for c in data.get("forced_cabinets", []) if c]
 
@@ -1563,9 +1564,39 @@ def api_find_plat_local():
                 except Exception:
                     pass
 
-            # d) Grantor name from deed — lowest priority, may not match
+            # d) Prior owner name tokens — the plat may be filed under a previous owner.
+            #    Build tokens the same way as client_tokens: full name + individual words.
+            #    Strategy = 'prior_owner' ranks below client hits but above generic grantor.
+            for raw_name in prior_owners:
+                if not raw_name or not raw_name.strip():
+                    continue
+                raw = raw_name.strip()
+                prior_tokens = [raw]
+                if ',' in raw:
+                    parts = [p.strip() for p in raw.split(',', 1) if p.strip()]
+                    if len(parts) == 2:
+                        prior_tokens.append(f"{parts[1]} {parts[0]}")
+                    prior_tokens.append(parts[0])  # last name only
+                for w in re.split(r'[\s,]+', raw):
+                    if len(w) >= 4 and w not in prior_tokens:
+                        prior_tokens.append(w)
+
+                for tok in prior_tokens:
+                    try:
+                        for h in search_local_cabinet(cab_letter, "", tok, ""):
+                            if h["path"] not in seen_local_paths:
+                                seen_local_paths.add(h["path"])
+                                h["source"]   = "local"
+                                h["ref"]      = "prior_owner"
+                                h["strategy"] = "prior_owner"
+                                h["_tok_len"] = len(tok) + 60
+                                local_hits.append(h)
+                    except Exception:
+                        pass
+
+            # e) Grantor name from deed — lowest priority, may not match
             #    if ownership has changed since the deed was recorded.
-            if grantor:
+            if grantor and grantor not in prior_owners:
                 try:
                     for h in search_local_cabinet(cab_letter, "", grantor, ""):
                         if h["path"] not in seen_local_paths:
@@ -1576,9 +1607,9 @@ def api_find_plat_local():
                 except Exception:
                     pass
 
-        # ── Sort: kml_cab_ref → deed_cab_ref → client_name → name_match ─────────
+        # ── Sort: kml_cab_ref → deed_cab_ref → client_name → prior_owner → name_match ─
         strategy_order = {"kml_cab_ref": 0, "deed_cab_ref": 1, "client_name": 2,
-                          "name_match": 3, "page_ref": 4}
+                          "prior_owner": 3, "name_match": 4, "page_ref": 5}
         local_hits.sort(key=lambda r: (
             strategy_order.get(r.get("strategy", ""), 9),
             -(r.get("_tok_len") or 0)

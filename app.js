@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 const API = "/api";  // Use relative URL to avoid CORS issues
 
 
@@ -102,18 +102,40 @@ function updateStepUI() {
 
   // Trigger step-specific logic
   if (state.currentStep === 2 && state.researchSession) {
-    if (!document.getElementById("s2SearchName").value) {
-      document.getElementById("s2SearchName").value = state.researchSession.client_name;
+    const nameField = document.getElementById("s2SearchName");
+    if (!nameField.value) {
+      nameField.value = state.researchSession.client_name;
+    }
+    // Auto-fire search if name is pre-populated (avoid redundant searches)
+    if (nameField.value && nameField.value.length >= 2 && !state._step2Searched) {
+      state._step2Searched = true;
+      setTimeout(() => doStep2Search(), 400);
     }
   }
   if (state.currentStep === 3) {
     doStep3Search();
+  }
+  if (state.currentStep === 4 && state.researchSession) {
+    // Auto-run discovery scan if the client deed has been saved
+    const clientSubj = state.researchSession.subjects.find(s => s.type === 'client');
+    if (clientSubj && clientSubj.deed_saved && !state._adjDiscoveryRan) {
+      state._adjDiscoveryRan = true;
+      setTimeout(() => runAdjoinerDiscovery(true), 600);
+    }
   }
   if (state.currentStep === 5) {
     renderResearchBoard();
   }
   if (state.currentStep === 6) {
     switchS6Tab('calls');
+    // Auto-import calls from deed if not already done
+    if (state.selectedDetail && !state.parsedCalls.length) {
+      setTimeout(() => reparseClientCallsFromSession(true), 400);
+    }
+    // Auto-populate adjoiner parcels from board
+    if (state.researchSession && !state.adjoinParcels.length) {
+      setTimeout(() => autoPopulateAdjoiners(true), 600);
+    }
   }
 }
 
@@ -156,6 +178,9 @@ async function startSession() {
       state.selectedDetail = null;
       state._kmlHits       = null;
       state._cabinetHits   = null;
+      // Reset per-session automation flags
+      state._step2Searched    = false;
+      state._adjDiscoveryRan  = false;
 
       // If the user selected a property from the KML map in Step 1, pre-seed
       // the client_upc in the session. Steps 3 & 4 will use it for parcel matching.
@@ -258,15 +283,15 @@ async function doStep2Search() {
   if (!state.loggedIn) {
     showToast("Not connected to 1stNMTitle — click Settings to log in", "warn");
     await checkLogin();
-    return;
+    if (!state.loggedIn) return;
   }
   if (!name || name.length < 2) { showToast("Enter a longer name", "warn"); return; }
 
   const btn = document.getElementById("btnS2Search");
   const tbody = document.getElementById("s2ResultsBody");
   btn.disabled = true;
-  btn.innerHTML = "Search";
-  tbody.innerHTML = `<tr><td colspan="5" class="empty-cell"><div class="loading-state">Searching records...</div></td></tr>`;
+  btn.innerHTML = `<span class="spinner" style="width:12px;height:12px;display:inline-block;vertical-align:middle;margin-right:4px"></span>Searching…`;
+  tbody.innerHTML = `<tr><td colspan="5" class="empty-cell"><div class="loading-state">Searching records for <strong>${escHtml(name)}</strong>…</div></td></tr>`;
   document.getElementById("s2ResultCount").textContent = "0";
 
   try {
@@ -277,7 +302,7 @@ async function doStep2Search() {
     }
 
     if (!res.results.length) {
-      tbody.innerHTML = `<tr><td colspan="5" class="empty-cell text-text3">No records found for "${name}"</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="empty-cell text-text3">No records found for "${escHtml(name)}"</td></tr>`;
       return;
     }
 
@@ -292,6 +317,15 @@ async function doStep2Search() {
         <td class="text-xs text-text3">${(r.recorded_date||r.instrument_date||'').split("-")[0] || r.date||''}</td>
       </tr>
     `).join("");
+
+    // Auto-select if only one result
+    if (res.results.length === 1) {
+      const onlyRow = tbody.querySelector('tr');
+      if (onlyRow) {
+        showToast(`1 record found — loading automatically`, 'info');
+        setTimeout(() => loadS2Detail(res.results[0].doc_no, 0, onlyRow), 300);
+      }
+    }
 
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="5" class="text-danger p-3">Search error: ${e.message}</td></tr>`;
@@ -351,6 +385,7 @@ async function loadS2Detail(docNo, idx, trEl) {
       </div>
 
       <div class="deed-viewer-body" id="deedTabSummary">
+        <div id="deedPlatHintArea"></div>
         ${buildDeedSummaryTab(extracted, d)}
       </div>
 
@@ -373,12 +408,177 @@ async function loadS2Detail(docNo, idx, trEl) {
       </div>
     `;
 
+    // Async: extract plat hints from deed in background — don't block UI
+    extractPlatHintsFromDeed(res.detail);
+
   } catch (e) {
     container.innerHTML = `<div class="empty-state text-danger">Error: ${e.message}</div>`;
   }
 }
 
 /** Extract well-known fields from deed detail object */
+
+/**
+ * Called immediately after a deed is loaded in Step 2.
+ * Calls /find-plat to extract cabinet refs and plat hints from the deed text,
+ * then injects a highlighted insight card at the top of the summary tab.
+ */
+async function extractPlatHintsFromDeed(detail) {
+  const hintArea = document.getElementById('deedPlatHintArea');
+  if (!hintArea) return;
+
+  try {
+    // Call the fast (zero I/O) deed parser
+    const res = await apiFetch('/find-plat', 'POST', { detail });
+    const cabRefs = (res && res.cabinet_refs) || [];
+
+    // Also scan legal description client-side for any plat/book/page mentions
+    const legalText = [
+      detail['Legal Description'] || '',
+      detail['Other Legal'] || '',
+      detail['Legal'] || '',
+      detail['Comments'] || '',
+      detail['Remarks'] || '',
+    ].join(' ');
+
+    // Match patterns like: Cabinet C-191A, C-191-A, Book 5 Page 12, Plat Book, Cab. D-22
+    const bookPageMatches = [...legalText.matchAll(/(?:book|bk)[.\s]*?(\d+)[\s,]*(?:page|pg)[.\s]*?(\d+[A-Z]?)/gi)]
+      .map(m => `Book ${m[1]} Page ${m[2]}`);
+
+    const platNameMatches = [...legalText.matchAll(/(?:plat\s+(?:of|entitled?|called?|named?)[:\s]+)([^,;\n]{4,60})/gi)]
+      .map(m => m[1].trim());
+
+    const surveyorRefs = [...legalText.matchAll(/(?:survey(?:ed)?\s+by|surveyor)[:\s]+([A-Z][a-zA-Z\s.&,]{3,50})/gi)]
+      .map(m => m[1].trim());
+
+    // Prior owners = grantor names from the deed (the plat may be filed under their name)
+    const grantorRaw = detail['Grantor'] || state.selectedDoc?.grantor || '';
+    // Split on common multi-grantor separators: " and ", " & ", ";"
+    const priorOwners = grantorRaw
+      .split(/\s*(?:;|\band\b|&)\s*/i)
+      .map(n => n.trim())
+      .filter(n => n.length > 2);
+
+    // Store all hints in state for Step 3 to use
+    state._platHint = {
+      cabRefs,
+      bookPageMatches: [...new Set(bookPageMatches)],
+      platNameMatches: [...new Set(platNameMatches)],
+      surveyorRefs:    [...new Set(surveyorRefs)],
+      priorOwners,
+    };
+
+    const hasAny = cabRefs.length || bookPageMatches.length || platNameMatches.length || priorOwners.length;
+    if (!hasAny) {
+      hintArea.innerHTML = `<div class="plat-hint-card plat-hint-none">
+        <span style="opacity:.6;font-size:12px">&#128270; No plat references found directly in this deed.</span>
+      </div>`;
+      return;
+    }
+
+    // Build the hint card
+    let rows = [];
+
+    if (cabRefs.length) {
+      rows.push(`<div class="plat-hint-row">
+        <span class="plat-hint-label">&#128230; Cabinet Refs</span>
+        <span class="plat-hint-values">${cabRefs.map(r =>
+          `<span class="badge badge-local" style="cursor:pointer" onclick="jumpToPlat('${r.cabinet}','${r.doc}')" title="Search Cabinet ${r.cabinet} for ${r.doc}">`+
+          `${escHtml('C-'+r.cabinet+'-'+r.doc)} <span style="opacity:.6;font-size:9px">▶ Plat</span></span>`
+        ).join(' ')}</span>
+      </div>`);
+    }
+
+    if (bookPageMatches.length) {
+      rows.push(`<div class="plat-hint-row">
+        <span class="plat-hint-label">&#128213; Book / Page</span>
+        <span class="plat-hint-values">${bookPageMatches.map(b =>
+          `<span class="badge badge-online">${escHtml(b)}</span>`
+        ).join(' ')}</span>
+      </div>`);
+    }
+
+    if (platNameMatches.length) {
+      rows.push(`<div class="plat-hint-row">
+        <span class="plat-hint-label">&#128196; Plat Name</span>
+        <span class="plat-hint-values">${platNameMatches.map(p =>
+          `<span class="badge" style="background:rgba(121,168,224,.15);color:#79a8e0">${escHtml(p)}</span>`
+        ).join(' ')}</span>
+      </div>`);
+    }
+
+    if (surveyorRefs.length) {
+      rows.push(`<div class="plat-hint-row">
+        <span class="plat-hint-label">&#9998; Surveyor</span>
+        <span class="plat-hint-values">${surveyorRefs.map(s =>
+          `<span class="badge" style="background:rgba(108,71,255,.15);color:#a78bfa">${escHtml(s)}</span>`
+        ).join(' ')}</span>
+      </div>`);
+    }
+
+    if (priorOwners.length) {
+      rows.push(`<div class="plat-hint-row">
+        <span class="plat-hint-label">&#128100; Prior Owners</span>
+        <span class="plat-hint-values">${priorOwners.map(n =>
+          `<span class="badge" style="background:rgba(227,197,90,.12);color:#e3c55a;cursor:pointer"
+            onclick="jumpToPlatByOwner('${escHtml(n).replace(/'/g,'&#39;')}')"
+            title="Search plat under prior owner: ${escHtml(n)}">` +
+          `${escHtml(n.split(',')[0])} <span style="opacity:.5;font-size:9px">▶ Search</span></span>`
+        ).join(' ')}</span>
+      </div>`);
+    }
+
+    hintArea.innerHTML = `
+      <div class="plat-hint-card">
+        <div class="plat-hint-header">
+          <span>&#128269; Plat Info Found in Deed</span>
+          <button class="btn btn-success btn-sm" onclick="saveClientDeedAndGoToPlat()" style="font-size:11px;padding:3px 10px">
+            Save &amp; Find Plat &rarr;
+          </button>
+        </div>
+        ${rows.join('')}
+      </div>`;
+
+  } catch(e) {
+    // Non-fatal — just don't show the hint
+    console.warn('extractPlatHintsFromDeed failed:', e.message);
+  }
+}
+
+/**
+ * Save the client deed and immediately jump to Step 3 plat search.
+ * Used by the "Save & Find Plat →" button in the plat hint card.
+ */
+async function saveClientDeedAndGoToPlat() {
+  const detail = state.selectedDetail;
+  const docNo  = detail?.doc_no || state.selectedDoc?.doc_no;
+  if (!docNo) { showToast('No deed selected', 'warn'); return; }
+  await saveClientDeed(docNo);
+  // saveClientDeed already calls goToStep(3) after 800ms — we're done
+}
+
+/**
+ * Jump to plat search pre-targeted at a specific cabinet + doc from the deed.
+ */
+function jumpToPlat(cabinet, doc) {
+  // Pre-set the cabinet override so Step 3 auto-targets it
+  const sel = document.getElementById('s3CabinetSelect');
+  if (sel) sel.value = cabinet;
+  showToast(`Opening plat search — targeting Cabinet ${cabinet} for ${doc}`, 'info');
+  goToStep(3);
+}
+
+/**
+ * Jump to plat search using a prior owner name as the primary search token.
+ * Sets state._platHint.activeOwnerSearch so doStep3Search picks it up.
+ */
+function jumpToPlatByOwner(ownerName) {
+  if (!state._platHint) state._platHint = {};
+  state._platHint.activeOwnerSearch = ownerName;
+  showToast(`Searching plat under prior owner: ${ownerName.split(',')[0]}`, 'info');
+  goToStep(3);
+}
+
 function extractDeedData(d, docNo, searchRow) {
   const docNumbers = [{ label: 'Doc #', value: docNo, type: 'docnum' }];
   ['Document Number','Document No','Instrument Number','Instrument No'].forEach(k => {
@@ -689,12 +889,22 @@ async function doStep3Search() {
   const grantee = detail?.Grantee || detail?.grantee
     || state.selectedDoc?.grantee || '';
 
+  // Prior owners from the deed hint (extracted when deed was loaded).
+  // These are grantor names — the plat may be filed under any of these.
+  const hint = state._platHint || {};
+  const priorOwners = hint.priorOwners || (grantor ? [grantor] : []);
+  // If the user clicked a specific prior owner, prioritise that name
+  const activeOwner = hint.activeOwnerSearch || '';
+  // Clear the one-shot override so it only applies to this search run
+  if (hint.activeOwnerSearch) { hint.activeOwnerSearch = null; }
+
   // ── Online search — runs in parallel, uses client_name as primary ──────────
   apiFetch('/find-plat-online', 'POST', {
     detail,
-    client_name: clientName,
+    client_name: activeOwner || clientName,
     grantee,
-    grantor,
+    grantor:     activeOwner || grantor,
+    prior_owners: priorOwners,
   })
     .then(res => {
       const surveyHits = (res && res.online) || [];
@@ -758,11 +968,12 @@ async function doStep3Search() {
 
     const payload = {
       detail,
-      cabinet_refs: cabinetOverride ? [] : cabRefs,
-      kml_matches:  cabinetOverride ? [] : kmlHits,
-      client_name:  clientName,
-      grantor,
+      cabinet_refs:  cabinetOverride ? [] : cabRefs,
+      kml_matches:   cabinetOverride ? [] : kmlHits,
+      client_name:   activeOwner || clientName,
+      grantor:       activeOwner || grantor,
       grantee,
+      prior_owners:  priorOwners,   // also search under prior owner names
     };
     if (cabinetOverride) payload.forced_cabinets = [cabinetOverride];
 
@@ -789,12 +1000,13 @@ async function doStep3Search() {
         const stratLabel = f.strategy === 'kml_cab_ref'  ? '\u2605 KML Ref Match'
           : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
           : f.strategy === 'client_name'  ? '\u2B50 Client Match'
+          : f.strategy === 'prior_owner'  ? '\uD83D\uDC64 Prior Owner'
           : f.strategy === 'name_match'   ? 'Name Match'
           : f.strategy === 'page_ref'     ? 'Page Ref'
           : (f.strategy || 'match');
-        const isTop = f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name';
+        const isTop = f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
         return '<div class="plat-item' + (isTop ? ' plat-item-client' : '') + '">' +
-          '<div class="plat-info">' +
+
             '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
             '<span class="plat-meta">Cabinet ' + (f.cabinet||'') + ' \u00A0\u00B7\u00A0 ' + stratLabel + '</span>' +
           '</div>' +
@@ -1028,9 +1240,9 @@ async function _executeKmlCabinetSearch(pi) {
           : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
           : f.strategy === 'client_name'  ? '\u2B50 Client Match'
           : f.strategy === 'name_match'   ? 'Name Match'
-          : f.strategy === 'page_ref'     ? 'Page Ref'
+          : f.strategy === 'name_match'   ? 'Name Match'
           : (f.strategy || 'match');
-        const isTop = f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name';
+        const isTop = f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
         return '<div class="plat-item' + (isTop ? ' plat-item-client' : '') + '">' +
           '<div class="plat-info">' +
             '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
@@ -1198,25 +1410,27 @@ async function saveClientPlatOnline(docNo, loc) {
 // 
 // STEP 4: ADJOINER DISCOVERY
 // 
-async function runAdjoinerDiscovery() {
+async function runAdjoinerDiscovery(autoMode = false) {
   const rs = state.researchSession;
-  if (!rs) { showToast("No active session", "error"); return; }
+  if (!rs) { if (!autoMode) showToast("No active session", "error"); return; }
   
   const clientSubj = rs.subjects.find(s => s.type === "client");
   if (!clientSubj || !clientSubj.deed_saved) {
-    showToast("Save the client deed first", "warn");
+    if (!autoMode) showToast("Save the client deed first", "warn");
     return;
   }
 
-  const btn = document.getElementById("btnDiscoverAdjoiners");
-  const grid = document.getElementById("s4AdjoinerGrid");
+  const btn     = document.getElementById("btnDiscoverAdjoiners");
+  const grid    = document.getElementById("s4AdjoinerGrid");
   const resArea = document.getElementById("s4DiscoveryResults");
+  const countEl = document.getElementById("s4CountText");
 
-  btn.disabled = true;
-  btn.innerHTML = `<div class="spinner"></div> Scanning...`;
-  resArea.classList.remove("hidden");
-  grid.innerHTML = `<div class="loading-state col-span-full">Running OCR on plat and scanning online records...</div>`;
-  document.getElementById("s4CountText").textContent = "...";
+  if (btn)     { btn.disabled = true; btn.innerHTML = `<div class="spinner"></div> Scanning...`; }
+  if (resArea) resArea.classList.remove("hidden");
+  if (grid)    grid.innerHTML = `<div class="loading-state col-span-full">Running OCR on plat and scanning online records\u2026</div>`;
+  if (countEl) countEl.textContent = "...";
+
+  if (autoMode) showToast("\ud83d\udd0d Auto-running adjoiner discovery\u2026", "info");
 
   try {
     const res = await apiFetch("/find-adjoiners", "POST", {
@@ -1233,13 +1447,14 @@ async function runAdjoinerDiscovery() {
     state.ocrRawText = res.ocr_text || "";
 
     const count = state.discoveredAdjoiners.length;
-    document.getElementById("s4CountText").textContent = count;
+    if (countEl) countEl.textContent = count;
 
     if (!count) {
       const noDetailHint = !state.selectedDetail
         ? `<br><br><span class="text-xs" style="color:var(--text3)">&#128161; Tip: Go to <button class="link-btn" onclick="goToStep(2)">Step 2</button> and select the client deed to enable full-text scanning.</span>`
         : "";
-      grid.innerHTML = `<div class="empty-state col-span-full">No adjoiners found automatically. Add manually below.${noDetailHint}</div>`;
+      if (grid) grid.innerHTML = `<div class="empty-state col-span-full">No adjoiners found automatically. Add manually below.${noDetailHint}</div>`;
+      if (autoMode) showToast("Discovery scan found no adjoiners — add manually or use map picker", "info");
     } else {
       let html = state.discoveredAdjoiners.map(j => `
         <div class="adjoiner-chip">
@@ -1254,10 +1469,10 @@ async function runAdjoinerDiscovery() {
     }
 
   } catch (e) {
-    grid.innerHTML = `<div class="text-danger col-span-full p-4">Discovery failed: ${e.message}</div>`;
+    if (grid) grid.innerHTML = `<div class="text-danger col-span-full p-4">Discovery failed: ${e.message}</div>`;
+    if (!autoMode) showToast("Discovery failed: " + e.message, "error");
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = `⚡ Re-run Scan`;
+    if (btn) { btn.disabled = false; btn.innerHTML = `⚡ Re-run Scan`; }
   }
 }
 
@@ -1280,27 +1495,60 @@ async function addFoundAdjoiner(name) {
 }
 
 async function addAllDiscoveredToBoard() {
-  let count = 0;
-  for (const j of state.discoveredAdjoiners) {
-    const exists = state.researchSession.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === j.name.toLowerCase());
+  await addAllAndContinue();
+}
+
+/**
+ * One-click: add ALL discovered adjoiners to the board, then navigate to Step 5.
+ * Safe to call even if no adjoiners were discovered (won't navigate if none on board).
+ */
+async function addAllAndContinue() {
+  const rs = state.researchSession;
+  if (!rs) { showToast("No active session", "warn"); return; }
+
+  let added = 0;
+  const discovered = state.discoveredAdjoiners || [];
+  for (const j of discovered) {
+    const exists = rs.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === j.name.toLowerCase());
     if (!exists) {
-      state.researchSession.subjects.push({
-        id: "adj_" + Date.now() + "_" + count,
+      rs.subjects.push({
+        id: "adj_" + Date.now() + "_" + Math.random().toString(36).substr(2,5),
         type: "adjoiner",
         name: j.name,
         deed_saved: false, plat_saved: false, status: "pending", notes: ""
       });
-      count++;
+      added++;
     }
   }
-  
-  if (count > 0) {
-    await persistSession();
-    showToast(`Added ${count} adjoiners to Research Board`, "success");
-    goToStep(5);
-  } else {
-    showToast("All discovered adjoiners already on board", "info");
+
+  if (added > 0) await persistSession();
+
+  const totalAdj = rs.subjects.filter(s => s.type === "adjoiner").length;
+  if (totalAdj === 0) {
+    showToast("No adjoiners on board yet — add some above or pick from map", "warn");
+    return;
   }
+
+  showToast(
+    added > 0 ? `✓ Added ${added} adjoiners — opening Research Board` : `Going to Research Board (adjoiners already on board)`,
+    "success"
+  );
+  setTimeout(() => goToStep(5), 300);
+}
+
+/**
+ * Skip deed research and go directly to Client Plat step.
+ */
+function skipToStep3() {
+  const rs = state.researchSession;
+  if (!rs) { showToast("Start a session first", "warn"); return; }
+  // Ensure client subject exists even without a deed
+  const clientSubj = rs.subjects.find(s => s.type === "client");
+  if (clientSubj && !clientSubj.deed_saved) {
+    // Mark deed as skipped so Step 4 still functions
+    showToast("Skipping deed — going to Client Plat search", "info");
+  }
+  goToStep(3);
 }
 
 async function manualAddAdjoiner() {
@@ -1693,74 +1941,169 @@ async function _doSaveAdjDeedFromLoaded(subjId, rs, subj) {
   }
 }
 
-// ── Adjoiner: find plat by name (no deed required) ────────────────────────────
+// ── Adjoiner: find plat using full 3-way parallel search ─────────────────────
 async function saveAdjPlat(subjId) {
   const rs = state.researchSession;
   const subj = rs.subjects.find(s => s.id === subjId);
   if (!subj) return;
 
-  // Build a search detail: use the currently-loaded deed if it matches, otherwise
-  // synthesize one from the adjoiner name so /find-plat can do name-based cabinet search.
-  let searchDetail = state.selectedDetail || {};
-  const adjLast = subj.name.split(',')[0].trim().toLowerCase();
-  const loadedGrantor = (searchDetail['Grantor'] || '').toLowerCase();
-  if (!loadedGrantor.includes(adjLast)) {
-    // Use adjoiner name as Grantor so /find-plat does name-based cabinet search
-    searchDetail = { 'Grantor': subj.name, 'Grantee': '' };
-  }
+  const clientName = rs.client_name;
+  const adjName    = subj.name;
+  const lastName   = adjName.split(',')[0].trim();
 
-  showToast(`Searching plats for "${subj.name.split(',')[0]}"...`, 'info');
+  // Synthesize a minimal deed detail using the adjoiner name
+  const searchDetail = { 'Grantor': adjName, 'Grantee': '' };
+
+  showToast(`🔍 Searching all sources for "${lastName}" plat…`, 'info');
+
+  // Run the same 3-way parallel search as Step 3
   try {
-    const res = await apiFetch('/find-plat', 'POST', { detail: searchDetail, grantor: subj.name });
-    if (!res.success) { showToast('Plat search error: ' + res.error, 'error'); return; }
+    // 1. Fast deed parse (cabinet refs from synthesized deed)
+    let cabRefs = [];
+    try {
+      const fastRes = await apiFetch('/find-plat', 'POST', { detail: searchDetail });
+      cabRefs = (fastRes && fastRes.cabinet_refs) || [];
+    } catch(e) {}
 
-    // Try to auto-save — first check direct cabinet hits, then KML-linked local files
-    const _localHits = res.local || res.cabinet_hits || [];
-    if (_localHits.length) {
-      const f = _localHits[0];
-      const saveRes = await apiFetch('/save-plat', 'POST', {
-        source: 'local', file_path: f.path, filename: f.file,
-        job_number: rs.job_number, client_name: rs.client_name,
-        job_type: rs.job_type, subject_id: subjId, is_adjoiner: true, adjoiner_name: subj.name
-      });
-      if (saveRes.success) {
-        subj.plat_saved = true;
-        if (saveRes.saved_to) subj.plat_path = saveRes.saved_to;
-        await persistSession();
-        showToast(`Plat saved for ${subj.name}: ${saveRes.filename}`, 'success');
-        renderResearchBoard();
-        return;
-      }
-    }
-    // Also try KML-matched local cabinet files
-    for (const km of (res.kml_matches || [])) {
-      if (km.local_files && km.local_files.length) {
-        const f = km.local_files[0];
-        const saveRes = await apiFetch('/save-plat', 'POST', {
-          source: 'local', file_path: f.path, filename: f.file,
-          job_number: rs.job_number, client_name: rs.client_name,
-          job_type: rs.job_type, subject_id: subjId, is_adjoiner: true, adjoiner_name: subj.name
-        });
-        if (saveRes.success) {
-          subj.plat_saved = true;
-          if (saveRes.saved_to) subj.plat_path = saveRes.saved_to;
-          await persistSession();
-          showToast(`Plat saved for ${subj.name} (KML match): ${saveRes.filename}`, 'success');
-          renderResearchBoard();
-          return;
-        }
-      }
-    }
-    // Nothing auto-saved — show what was found so user can pick
-    const allLocal = [..._localHits, ...(res.kml_matches || []).flatMap(km => km.local_files || [])];
-    if (allLocal.length) {
-      showToast(`Found ${allLocal.length} plat candidate(s) — see board. Auto-save failed.`, 'warn');
+    // 2. KML lookup (by name)
+    const kmlRes = await apiFetch('/find-plat-kml', 'POST', { detail: searchDetail, client_name: adjName });
+    const kmlHits = (kmlRes && kmlRes.kml_matches) || [];
+
+    // 3. Local cabinet scan (fires after KML so we pass kml_matches)
+    const localRes = await apiFetch('/find-plat-local', 'POST', {
+      detail: searchDetail,
+      cabinet_refs: cabRefs,
+      kml_matches:  kmlHits,
+      client_name:  adjName,
+      grantor:      adjName,
+      grantee:      '',
+    });
+    const localHits = (localRes && localRes.local) || [];
+
+    // Collect all candidates in priority order
+    const allCandidates = [
+      ...localHits,
+      ...(kmlHits.flatMap(k => (k.local_files || []).map(lf => ({...lf, strategy: 'kml_local'})))),
+    ];
+
+    if (allCandidates.length) {
+      // Show a quick pick modal with all candidates
+      _showAdjPlatPickModal(subjId, subj, allCandidates);
     } else {
-      showToast(`No local plat found for "${subj.name.split(',')[0]}". Try Step 3 for manual search.`, 'warn');
+      // 4. Fall back: online search
+      const onlineRes = await apiFetch('/find-plat-online', 'POST', {
+        detail: searchDetail, client_name: adjName, grantee: '', grantor: adjName
+      });
+      const onlineHits = (onlineRes && onlineRes.online) || [];
+      if (onlineHits.length) {
+        _showAdjPlatPickModal(subjId, subj, [], onlineHits);
+      } else {
+        showToast(`No plat found for "${lastName}" in cabinet, KML, or online records.`, 'warn');
+      }
     }
   } catch(e) {
-    showToast('Error: ' + e.message, 'error');
+    showToast('Plat search error: ' + e.message, 'error');
   }
+}
+
+/** Show a compact modal to pick the best adjoiner plat candidate */
+function _showAdjPlatPickModal(subjId, subj, localHits, onlineHits = []) {
+  const rs = state.researchSession;
+  let overlay = document.getElementById('adjPlatPickOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'adjPlatPickOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;display:flex;align-items:center;justify-content:center';
+    document.body.appendChild(overlay);
+  }
+
+  const localRows = localHits.map((f, i) => `
+    <tr style="cursor:pointer" onclick="_pickAdjPlat('${subjId}', 'local', ${i})">
+      <td style="padding:7px 10px;font-size:12px;font-weight:600">${escHtml(f.display_name || f.file)}</td>
+      <td style="padding:7px 10px;font-size:11px;color:var(--text3)">Cabinet ${escHtml(f.cabinet || '')}</td>
+      <td style="padding:7px 10px"><span class="badge badge-local">${escHtml(f.strategy || 'Cabinet')}</span></td>
+    </tr>`);
+
+  const onlineRows = onlineHits.map((r, i) => `
+    <tr style="cursor:pointer" onclick="_pickAdjPlatOnline('${subjId}', ${i})">
+      <td style="padding:7px 10px;font-size:12px;font-weight:600">${escHtml((r.grantor || '').split(',')[0] || r.grantor || r.doc_no)}</td>
+      <td style="padding:7px 10px;font-size:11px;color:var(--text3)">${escHtml(r.recorded_date || '')}</td>
+      <td style="padding:7px 10px"><span class="badge badge-online">Online Doc ${escHtml(r.doc_no || '')}</span></td>
+    </tr>`);
+
+  state._adjPlatSubjId    = subjId;
+  state._adjPlatLocalHits = localHits;
+  state._adjPlatOnlineHits = onlineHits;
+
+  overlay.innerHTML = `
+    <div class="glass-card" style="width:min(760px,95vw);max-height:75vh;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--text3)">Select plat for adjoiner</div>
+          <div style="font-size:17px;font-weight:700;color:var(--accent2)">${escHtml(subj.name)}</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('adjPlatPickOverlay').remove()">✕ Cancel</button>
+      </div>
+      <div style="overflow-y:auto;flex:1">
+        <table class="data-table" style="width:100%">
+          <thead><tr>
+            <th style="padding:6px 10px;font-size:10px">File / Name</th>
+            <th style="padding:6px 10px;font-size:10px">Location</th>
+            <th style="padding:6px 10px;font-size:10px">Source</th>
+          </tr></thead>
+          <tbody>${localRows.join('') || onlineRows.join('') || '<tr><td colspan="3" class="empty-cell">No candidates found</td></tr>'}
+          ${localRows.length && onlineRows.length ? '<tr><td colspan="3" style="padding:4px 10px;background:var(--bg3);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase">Online Records</td></tr>' + onlineRows.join('') : ''}
+          </tbody>
+        </table>
+      </div>
+      <div style="padding:10px 20px;border-top:1px solid var(--border);font-size:11px;color:var(--text3);text-align:center">
+        Click a row to save that plat for this adjoiner
+      </div>
+    </div>`;
+}
+
+async function _pickAdjPlat(subjId, type, idx) {
+  const rs = state.researchSession;
+  const subj = rs.subjects.find(s => s.id === subjId);
+  const f = state._adjPlatLocalHits && state._adjPlatLocalHits[idx];
+  if (!subj || !f) return;
+  try {
+    const res = await apiFetch('/save-plat', 'POST', {
+      source: 'local', file_path: f.path, filename: f.file,
+      job_number: rs.job_number, client_name: rs.client_name,
+      job_type: rs.job_type, subject_id: subjId, is_adjoiner: true, adjoiner_name: subj.name
+    });
+    if (res.success) {
+      subj.plat_saved = true;
+      if (res.saved_to) subj.plat_path = res.saved_to;
+      await persistSession();
+      showToast(`Plat saved for ${subj.name}`, 'success');
+      document.getElementById('adjPlatPickOverlay')?.remove();
+      renderResearchBoard();
+    } else { showToast('Save failed: ' + res.error, 'error'); }
+  } catch(e) { showToast('Error: ' + e.message, 'error'); }
+}
+
+async function _pickAdjPlatOnline(subjId, idx) {
+  const rs = state.researchSession;
+  const subj = rs.subjects.find(s => s.id === subjId);
+  const r = state._adjPlatOnlineHits && state._adjPlatOnlineHits[idx];
+  if (!subj || !r) return;
+  try {
+    const res = await apiFetch('/save-plat', 'POST', {
+      source: 'online', doc_no: r.doc_no, location: r.location || '',
+      job_number: rs.job_number, client_name: rs.client_name,
+      job_type: rs.job_type, subject_id: subjId, is_adjoiner: true, adjoiner_name: subj.name
+    });
+    if (res.success) {
+      subj.plat_saved = true;
+      if (res.saved_to) subj.plat_path = res.saved_to;
+      await persistSession();
+      showToast(`Plat downloaded for ${subj.name}`, 'success');
+      document.getElementById('adjPlatPickOverlay')?.remove();
+      renderResearchBoard();
+    } else { showToast('Download failed: ' + res.error, 'error'); }
+  } catch(e) { showToast('Error: ' + e.message, 'error'); }
 }
 
 //  Board persistence helpers 
@@ -1882,19 +2225,20 @@ function switchS6Tab(tab) {
   if (tab === "parcels") renderS6ParcelList();
 }
 
-async function reparseClientCallsFromSession() {
+async function reparseClientCallsFromSession(silent = false) {
   if (!state.selectedDetail) {
-    showToast("No deed detail loaded  search in Step 2 first", "warn");
+    if (!silent) showToast("No deed detail loaded — search in Step 2 first", "warn");
     return;
   }
   try {
     const res = await apiFetch("/parse-calls", "POST", { detail: state.selectedDetail });
-    if (!res.success) { showToast("Parse error: " + res.error, "error"); return; }
+    if (!res.success) { if (!silent) showToast("Parse error: " + res.error, "error"); return; }
     state.parsedCalls = res.calls || [];
     renderS6CallsTable(res);
-    showToast(`${res.count} call${res.count !== 1 ? "s" : ""} parsed from deed`, res.count ? "success" : "warn");
+    if (!silent) showToast(`${res.count} call${res.count !== 1 ? "s" : ""} parsed from deed`, res.count ? "success" : "warn");
+    else if (res.count) showToast(`✓ ${res.count} boundary calls imported from deed`, "success");
   } catch(e) {
-    showToast("Error: " + e.message, "error");
+    if (!silent) showToast("Error: " + e.message, "error");
   }
 }
 
@@ -2029,10 +2373,10 @@ function renderS6ParcelList() {
   wrap.innerHTML = html;
 }
 
-function autoPopulateAdjoiners() {
-  if (!state.researchSession) { showToast("Load a session first", "warn"); return; }
+function autoPopulateAdjoiners(silent = false) {
+  if (!state.researchSession) { if (!silent) showToast("Load a session first", "warn"); return; }
   const adjs = state.researchSession.subjects.filter(s => s.type === "adjoiner");
-  if (!adjs.length) { showToast("No adjoiners on the research board", "info"); return; }
+  if (!adjs.length) { if (!silent) showToast("No adjoiners on the research board", "info"); return; }
   let added = 0;
   adjs.forEach(subj => {
     if (!state.adjoinParcels.some(p => p.label.toLowerCase() === subj.name.toLowerCase())) {
@@ -2041,7 +2385,8 @@ function autoPopulateAdjoiners() {
     }
   });
   renderS6ParcelList();
-  showToast(added ? `${added} parcels added` : "All adjoiners already in list", added ? "success" : "info");
+  if (!silent) showToast(added ? `${added} parcels added` : "All adjoiners already in list", added ? "success" : "info");
+  else if (added) showToast(`✓ ${added} adjoiner parcel${added !== 1 ? 's' : ''} auto-populated`, "success");
 }
 
 function addAdjoinerParcel() {
