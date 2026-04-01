@@ -113,8 +113,8 @@ def get_cabinet_path() -> str:
 # Kick off detection at startup (non-blocking — just sets module-level cache)
 try:
     detect_survey_drive()
-except Exception:
-    pass
+except Exception as e:
+    print(f"[warn] drive detection at startup failed: {e}", flush=True)
 
 
 # CABINET_FOLDERS — imported from helpers.cabinet
@@ -646,7 +646,7 @@ def api_chain_search():
 def api_document(doc_no):
     try:
         cfg = load_config()
-        username = request.args.get("username") or cfg.get("username", "")
+        username = request.args.get("username") or cfg.get("firstnm_user", "")
 
         # Accept an optional search_result passthrough from the frontend
         # so we can merge rich search row data with scrape results.
@@ -1699,15 +1699,20 @@ def api_preview_pdf():
         return jsonify({"success": False, "error": "File not found"}), 404
 
     # Security: only allow files within the survey drive or project directories
-    drive = detect_survey_drive()
-    allowed_roots = [Path(drive + ":\\") if drive else None]
-    if allowed_roots[0] is None:
-        allowed_roots = []
-    # Also allow project directories (job folders)
     try:
         resolved = p.resolve()
     except Exception:
         return jsonify({"success": False, "error": "Invalid path"}), 400
+
+    drive = detect_survey_drive()
+    project_dir = Path(__file__).resolve().parent
+    allowed = False
+    if drive and str(resolved).upper().startswith(f"{drive}:\\"):
+        allowed = True
+    elif str(resolved).startswith(str(project_dir)):
+        allowed = True
+    if not allowed:
+        return jsonify({"success": False, "error": "Path not within allowed directories"}), 403
 
     try:
         doc = fitz.open(str(p))

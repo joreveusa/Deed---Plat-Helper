@@ -148,7 +148,7 @@
         <div class="modal glass-card" style="max-width:520px">
           <div class="modal-header">
             <h2>🗺️ KML Parcel Index</h2>
-            <button class="close-btn" onclick="closeKmlModal()">✕</button>
+            <button class="close-btn" onclick="closeKmlModal()" aria-label="Close KML modal">✕</button>
           </div>
           <div class="modal-body" id="kmlIndexBody">
             <div class="loading-state">Loading index status...</div>
@@ -447,16 +447,16 @@
     <div class="modal glass-card" id="cabinetPanel">
       <div class="modal-header">
         <h2>🗄️ Cabinet Browser</h2>
-        <button class="close-btn" onclick="closeCabinetBrowser()">✕</button>
+        <button class="close-btn" onclick="closeCabinetBrowser()" aria-label="Close cabinet browser">✕</button>
       </div>
       <div class="p-3 border-b flex gap-2" style="background:var(--bg3)">
         <div class="cab-tabs flex gap-2">
-          <button class="cab-tab active" data-cab="A" onclick="browseCabinet('A')">Cab A</button>
-          <button class="cab-tab" data-cab="B" onclick="browseCabinet('B')">Cab B</button>
-          <button class="cab-tab" data-cab="C" onclick="browseCabinet('C')">Cab C</button>
-          <button class="cab-tab" data-cab="D" onclick="browseCabinet('D')">Cab D</button>
-          <button class="cab-tab" data-cab="E" onclick="browseCabinet('E')">Cab E</button>
-          <button class="cab-tab" data-cab="F" onclick="browseCabinet('F')">Cab F</button>
+          <button class="cab-tab active" data-cab="A" onclick="browseCabinet('A')" aria-label="Cabinet A">Cab A</button>
+          <button class="cab-tab" data-cab="B" onclick="browseCabinet('B')" aria-label="Cabinet B">Cab B</button>
+          <button class="cab-tab" data-cab="C" onclick="browseCabinet('C')" aria-label="Cabinet C">Cab C</button>
+          <button class="cab-tab" data-cab="D" onclick="browseCabinet('D')" aria-label="Cabinet D">Cab D</button>
+          <button class="cab-tab" data-cab="E" onclick="browseCabinet('E')" aria-label="Cabinet E">Cab E</button>
+          <button class="cab-tab" data-cab="F" onclick="browseCabinet('F')" aria-label="Cabinet F">Cab F</button>
         </div>
         <input type="text" id="cabinetFilter" class="inp ml-auto w-48" placeholder="Filter names..." onkeyup="if(event.key==='Enter') filterCabinet()">
         <button class="btn btn-primary btn-sm" onclick="filterCabinet()">Apply</button>
@@ -490,7 +490,7 @@
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
           <button class="btn btn-outline btn-sm" onclick="propPickerResetView()" title="Reset map zoom">⟳ Reset</button>
-          <button class="close-btn" onclick="closePropPicker()">✕</button>
+          <button class="close-btn" onclick="closePropPicker()" aria-label="Close property picker">✕</button>
         </div>
       </div>
 
@@ -587,7 +587,7 @@
           </div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
-          <button class="close-btn" onclick="closeKmlMapPicker()">✕</button>
+          <button class="close-btn" onclick="closeKmlMapPicker()" aria-label="Close map picker">✕</button>
         </div>
       </div>
 
@@ -683,7 +683,7 @@
     <div class="modal glass-card">
       <div class="modal-header">
         <h2>⚙️ Connection Settings</h2>
-        <button class="close-btn" onclick="closeSettingsModal()">✕</button>
+        <button class="close-btn" onclick="closeSettingsModal()" aria-label="Close settings">✕</button>
       </div>
       <div class="modal-body">
         <!-- Drive Status -->
@@ -774,7 +774,7 @@
   <div class="plat-preview-panel" id="platPreviewPanel">
     <div class="plat-preview-header">
       <h3 id="platPreviewTitle">📄 Plat Preview</h3>
-      <button class="close-btn" onclick="closePlatPreview()">✕</button>
+      <button class="close-btn" onclick="closePlatPreview()" aria-label="Close plat preview">✕</button>
     </div>
     <div class="plat-preview-body" id="platPreviewBody">
       <div class="empty-state">

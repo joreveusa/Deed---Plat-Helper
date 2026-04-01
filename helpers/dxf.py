@@ -99,10 +99,10 @@ def generate_boundary_dxf(
 
         if opts["draw_boundary"]:
             verts = [(p[0], p[1]) for p in pts]
-            attribs = {"layer": layer, "closed": closed}
+            attribs = {"layer": layer}
             if p_color:
                 attribs["color"] = p_color
-            pline = msp.add_lwpolyline(verts, dxfattribs=attribs)
+            pline = msp.add_lwpolyline(verts, close=closed, dxfattribs=attribs)
 
         if opts["draw_endpoints"]:
             for px, py in pts:
