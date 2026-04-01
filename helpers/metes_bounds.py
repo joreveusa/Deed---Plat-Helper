@@ -307,7 +307,7 @@ def calls_to_coords(calls: list[dict], start_x: float = 0.0, start_y: float = 0.
     x, y = start_x, start_y
     for c in calls:
         if c.get("type") == "straight":
-            az = math.radians(c["azimuth_deg"])
+            az = math.radians(c.get("azimuth_deg", c.get("azimuth", 0)))
             dx = c["distance"] * math.sin(az)
             dy = c["distance"] * math.cos(az)
             x += dx

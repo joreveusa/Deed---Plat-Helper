@@ -12,6 +12,7 @@ All regex and helper references are resolved via imports from sibling modules.
 """
 
 import os, re, math
+from datetime import datetime
 
 from helpers.metes_bounds import (
     parse_metes_bounds, calls_to_coords, extract_trs,
@@ -389,7 +390,6 @@ def analyze_deed(detail: dict, pdf_path: str = "",
     deed_age_years = 0
     if rec_date_str:
         try:
-            from datetime import datetime
             for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d, %Y"):
                 try:
                     rec_date = datetime.strptime(rec_date_str.strip(), fmt)

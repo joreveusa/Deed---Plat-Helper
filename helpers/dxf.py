@@ -115,7 +115,7 @@ def generate_boundary_dxf(
                 mx = (x0 + x1) / 2.0
                 my = (y0 + y1) / 2.0
 
-                az_rad   = math.radians(c['azimuth'])
+                az_rad   = math.radians(c.get('azimuth', c.get('azimuth_deg', 0)))
                 perp_rad = az_rad + math.pi / 2
                 offset   = text_h * 1.2
                 lx = mx + offset * math.sin(perp_rad)

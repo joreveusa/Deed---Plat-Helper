@@ -363,19 +363,28 @@ def extract_parcel_polygon(survey_data_path: str, upc: str) -> Optional[list]:
 
 
 def _find_polygon_in_kml(kml_path: str, target_upc: str) -> Optional[list]:
-    """Stream through a KML looking for a specific UPC's polygon."""
+    """Stream through a KML looking for a specific UPC's polygon.
+    Auto-detects the KML namespace per file."""
+    import io as _io
     try:
-        context = ET.iterparse(kml_path, events=("end",))
+        with open(kml_path, 'rb') as f:
+            raw = f.read()
+        ns = _detect_kml_ns(_io.BytesIO(raw))
+        placemark_tag = f"{ns}Placemark"
+        ext_tag = f"{ns}ExtendedData"
+
+        context = ET.iterparse(_io.BytesIO(raw), events=("end",))
         for event, elem in context:
-            if elem.tag == f"{KML_NS}Placemark":
+            if elem.tag == placemark_tag:
                 # Check if this Placemark has the target UPC
-                ext = elem.find(f"{KML_NS}ExtendedData")
+                ext = elem.find(ext_tag)
+                if ext is None and ns:
+                    ext = elem.find("ExtendedData")
                 if ext is not None:
                     for sd in ext.iter():
                         if (sd.tag.endswith("SimpleData") or sd.tag == "SimpleData"):
                             if sd.get("name") == "UPC" and (sd.text or "").strip() == target_upc:
-                                # Found it — extract coordinates
-                                return _extract_all_coords(elem)
+                                return _extract_all_coords(elem, ns)
                 elem.clear()
     except Exception:
         pass
@@ -383,39 +392,54 @@ def _find_polygon_in_kml(kml_path: str, target_upc: str) -> Optional[list]:
 
 
 def _find_polygon_in_kmz(kmz_path: str, target_upc: str) -> Optional[list]:
-    """Search inside a KMZ for a specific UPC's polygon."""
+    """Search inside a KMZ for a specific UPC's polygon.
+    Auto-detects the KML namespace per embedded file."""
+    import io as _io
     try:
         with zipfile.ZipFile(kmz_path, 'r') as zf:
             for name in zf.namelist():
                 if name.lower().endswith('.kml'):
                     with zf.open(name) as kml_file:
-                        context = ET.iterparse(kml_file, events=("end",))
-                        for event, elem in context:
-                            if elem.tag == f"{KML_NS}Placemark":
-                                ext = elem.find(f"{KML_NS}ExtendedData")
-                                if ext is not None:
-                                    for sd in ext.iter():
-                                        if (sd.tag.endswith("SimpleData") or sd.tag == "SimpleData"):
-                                            if sd.get("name") == "UPC" and (sd.text or "").strip() == target_upc:
-                                                return _extract_all_coords(elem)
-                                elem.clear()
+                        raw = kml_file.read()
+                    ns = _detect_kml_ns(_io.BytesIO(raw))
+                    placemark_tag = f"{ns}Placemark"
+                    ext_tag = f"{ns}ExtendedData"
+
+                    context = ET.iterparse(_io.BytesIO(raw), events=("end",))
+                    for event, elem in context:
+                        if elem.tag == placemark_tag:
+                            ext = elem.find(ext_tag)
+                            if ext is None and ns:
+                                ext = elem.find("ExtendedData")
+                            if ext is not None:
+                                for sd in ext.iter():
+                                    if (sd.tag.endswith("SimpleData") or sd.tag == "SimpleData"):
+                                        if sd.get("name") == "UPC" and (sd.text or "").strip() == target_upc:
+                                            return _extract_all_coords(elem, ns)
+                            elem.clear()
     except Exception:
         pass
     return None
 
 
-def _extract_all_coords(placemark_elem) -> list:
-    """Extract all coordinate points from a Placemark's geometry."""
+def _extract_all_coords(placemark_elem, ns: str = "") -> list:
+    """Extract all coordinate points from a Placemark's geometry.
+    Searches both namespaced and plain 'coordinates' tags."""
     points = []
-    for coord_el in placemark_elem.iter(f"{KML_NS}coordinates"):
-        if coord_el.text:
-            for chunk in coord_el.text.strip().split():
-                parts = chunk.split(",")
-                if len(parts) >= 2:
-                    try:
-                        points.append([float(parts[0]), float(parts[1])])
-                    except ValueError:
-                        pass
+    tags_to_try = [f"{ns}coordinates", "coordinates"] if ns else ["coordinates"]
+    seen = set()
+    for tag in tags_to_try:
+        for coord_el in placemark_elem.iter(tag):
+            txt = (coord_el.text or "").strip()
+            if txt and txt not in seen:
+                seen.add(txt)
+                for chunk in txt.split():
+                    parts = chunk.split(",")
+                    if len(parts) >= 2:
+                        try:
+                            points.append([float(parts[0]), float(parts[1])])
+                        except ValueError:
+                            pass
     return points if points else None
 
 

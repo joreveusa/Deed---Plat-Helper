@@ -12,8 +12,27 @@ const state = {
   discoveredAdjoiners: [],
   parsedCalls: [],
   adjoinParcels: [],
-  searchResults: []
+  searchResults: [],
+  _dirty: false,           // tracks unsaved changes
 };
+
+// ── Unsaved-changes guard ─────────────────────────────────────────────────────
+window.addEventListener('beforeunload', (e) => {
+  if (state._dirty && state.researchSession) {
+    e.preventDefault();
+    // Modern browsers show a generic message; returnValue is required for compat
+    e.returnValue = 'You have unsaved research — are you sure you want to leave?';
+  }
+});
+
+// Active AbortControllers by operation key — used to cancel stale requests
+const _abortControllers = {};
+function _getAbortSignal(key) {
+  // Abort any previous request for this operation
+  if (_abortControllers[key]) _abortControllers[key].abort();
+  _abortControllers[key] = new AbortController();
+  return _abortControllers[key].signal;
+}
 
 // 
 // INIT & BOOTSTRAP
@@ -299,6 +318,7 @@ async function persistSession() {
     });
     updateGlobalProgress();
     updateFileBadges();
+    state._dirty = false;  // session saved successfully
     return true;
   } catch (e) {
     console.error("Session persist failed", e);
@@ -316,25 +336,36 @@ function _safeCloneSession(session) {
   try {
     return JSON.parse(JSON.stringify(session));
   } catch (_) {
-    // Fallback: manually pick only the known-safe keys
+    // Fallback: manually pick known-safe keys, preserving as much data as possible
     const safe = {
       job_number: session.job_number,
       client_name: session.client_name,
       job_type: session.job_type,
-      subjects: (session.subjects || []).map(s => ({
-        id: s.id,
-        type: s.type,
-        name: s.name,
-        deed_saved: !!s.deed_saved,
-        plat_saved: !!s.plat_saved,
-        status: s.status || 'pending',
-        notes: s.notes || '',
-        deed_path: s.deed_path || '',
-        plat_path: s.plat_path || '',
-      })),
+      subjects: (session.subjects || []).map(s => {
+        const subj = {
+          id: s.id,
+          type: s.type,
+          name: s.name,
+          deed_saved: !!s.deed_saved,
+          plat_saved: !!s.plat_saved,
+          status: s.status || 'pending',
+          notes: s.notes || '',
+          deed_path: s.deed_path || '',
+          plat_path: s.plat_path || '',
+        };
+        // Preserve deed detail & description if serializable
+        if (s.detail) try { subj.detail = JSON.parse(JSON.stringify(s.detail)); } catch(_) {}
+        if (s.description) subj.description = String(s.description);
+        if (s.doc_no) subj.doc_no = s.doc_no;
+        if (s.plat_refs) try { subj.plat_refs = JSON.parse(JSON.stringify(s.plat_refs)); } catch(_) {}
+        return subj;
+      }),
       client_upc: session.client_upc || '',
       progress: session.progress || {},
     };
+    // Preserve chain-of-title data
+    if (session.chain) try { safe.chain = JSON.parse(JSON.stringify(session.chain)); } catch(_) {}
+    if (session.client_detail) try { safe.client_detail = JSON.parse(JSON.stringify(session.client_detail)); } catch(_) {}
     console.warn('[persistSession] Used fallback safe clone — session had non-serializable data');
     return safe;
   }
@@ -361,7 +392,8 @@ async function doStep2Search() {
   document.getElementById("s2ResultCount").textContent = "0";
 
   try {
-    const res = await apiFetch("/search", "POST", { name, operator: op });
+    const signal = _getAbortSignal('step2search');
+    const res = await apiFetch("/search", "POST", { name, operator: op }, { signal });
     if (!res.success) {
       tbody.innerHTML = `<tr><td colspan="5" class="empty-cell text-danger">Error: ${res.error}</td></tr>`;
       return;
@@ -394,6 +426,7 @@ async function doStep2Search() {
     }
 
   } catch (e) {
+    if (e.name === 'AbortError') return;  // cancelled by newer search
     tbody.innerHTML = `<tr><td colspan="5" class="text-danger p-3">Search error: ${e.message}</td></tr>`;
   } finally {
     btn.disabled = false;
@@ -2141,19 +2174,21 @@ async function runAdjoinerDiscovery(autoMode = false) {
       state._prefetchedAdjoiners = null;  // consume once
       if (autoMode) showToast('✓ Adjoiner scan ready (pre-fetched)', 'success');
     } else {
+      const signal = _getAbortSignal('adjoiners');
       res = await apiFetch("/find-adjoiners", "POST", {
         detail: state.selectedDetail || {},
         deed_path: clientSubj.deed_path || "",
         job_number: rs.job_number,
         client_name: rs.client_name,
         job_type: rs.job_type,
-      });
+      }, { signal });
     }
 
     if (!res.success) throw new Error(res.error);
 
     state.discoveredAdjoiners = res.adjoiners || [];
     state.ocrRawText = res.ocr_text || "";
+    state._dirty = true;
 
     const count = state.discoveredAdjoiners.length;
     if (countEl) countEl.textContent = count;
@@ -2178,6 +2213,7 @@ async function runAdjoinerDiscovery(autoMode = false) {
     }
 
   } catch (e) {
+    if (e.name === 'AbortError') return;  // cancelled by newer scan
     if (grid) grid.innerHTML = `<div class="text-danger col-span-full p-4">Discovery failed: ${e.message}</div>`;
     if (!autoMode) showToast("Discovery failed: " + e.message, "error");
   } finally {
@@ -4885,9 +4921,10 @@ function getTypeClass(type) {
   return "badge-other";
 }
 
-async function apiFetch(path, method = "GET", body = null) {
+async function apiFetch(path, method = "GET", body = null, { signal } = {}) {
   const opts = { method, headers: { "Content-Type": "application/json" } };
   if (body) opts.body = JSON.stringify(body);
+  if (signal) opts.signal = signal;
   const res = await fetch(API + path, opts);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();

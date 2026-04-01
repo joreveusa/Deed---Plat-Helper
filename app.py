@@ -1,7 +1,8 @@
 from flask import Flask, request, jsonify, send_from_directory, Response, make_response
 import requests as req_lib
 from bs4 import BeautifulSoup
-import os, re, json, traceback, subprocess, gzip, math
+import os, re, json, traceback, subprocess, gzip, math, shutil
+from collections import Counter
 from pathlib import Path
 import fitz          # PyMuPDF  — PDF → image
 import pytesseract
@@ -106,7 +107,7 @@ def get_cabinet_path() -> str:
     drive = detect_survey_drive()
     if drive:
         return str(Path(f"{drive}:\\") / _CABINET_RELATIVE)
-    return r"F:\AI DATA CENTER\Survey Data\00 COUNTY CLERK SCANS Cabs A-B- C-D - E"
+    return ""  # drive not found — caller should check for empty string
 
 
 # Kick off detection at startup (non-blocking — just sets module-level cache)
@@ -316,18 +317,19 @@ def api_config():
     cfg = load_config()
     if "firstnm_user" in data:
         cfg["firstnm_user"] = data["firstnm_user"]
-        cfg["username"]     = data["firstnm_user"]
+    elif "username" in data:
+        cfg["firstnm_user"] = data["username"]
     if "firstnm_pass" in data:
         cfg["firstnm_pass"] = data["firstnm_pass"]
-        cfg["password"]     = data["firstnm_pass"]
+    elif "password" in data:
+        cfg["firstnm_pass"] = data["password"]
     if "firstnm_url" in data:
         cfg["firstnm_url"] = data["firstnm_url"]
-    if "username" in data:
-        cfg["username"] = data["username"]
-    if "password" in data:
-        cfg["password"] = data["password"]
     if "last_session" in data:
         cfg["last_session"] = data["last_session"]
+    # Clean up legacy duplicate keys
+    cfg.pop("username", None)
+    cfg.pop("password", None)
     save_config(cfg)
     return jsonify({"success": True})
 
@@ -394,8 +396,10 @@ def api_login():
         if success:
             if remember:
                 cfg = load_config()
-                cfg["username"] = username
-                cfg["password"] = password
+                cfg["firstnm_user"] = username
+                cfg["firstnm_pass"] = password
+                cfg.pop("username", None)  # clean up legacy keys
+                cfg.pop("password", None)
                 save_config(cfg)
             return jsonify({"success": True, "username": username})
         else:
@@ -444,20 +448,10 @@ def api_search():
         # Action is set via JS; we know it's always hflook.asp
         action = BASE_URL + "/scripts/hflook.asp"
 
-        form = soup.find("form")
-        if not form:
-            return jsonify({"success": False, "error": "Search form not found"})
 
-        form_data = {}
-        for inp in form.find_all("input"):
-            nm = inp.get("name")
-            if nm:
-                form_data[nm] = inp.get("value", "")
-        for sel in form.find_all("select"):
-            nm = sel.get("name")
-            if nm:
-                opt = sel.find("option", selected=True) or sel.find("option")
-                form_data[nm] = opt["value"] if opt and opt.get("value") else ""
+        form_data = _scrape_form_data(soup)
+        if not form_data:
+            return jsonify({"success": False, "error": "Search form not found"})
 
         # Apply search criteria
         if name:
@@ -552,22 +546,12 @@ def api_chain_search():
                 stop_reason = "Session expired — could not continue chain search"
                 break
 
+
             soup = BeautifulSoup(resp.text, "html.parser")
-            form = soup.find("form")
-            if not form:
+            form_data = _scrape_form_data(soup)
+            if not form_data:
                 stop_reason = "Search form not found"
                 break
-
-            form_data = {}
-            for inp in form.find_all("input"):
-                nm = inp.get("name")
-                if nm:
-                    form_data[nm] = inp.get("value", "")
-            for sel in form.find_all("select"):
-                nm = sel.get("name")
-                if nm:
-                    opt = sel.find("option", selected=True) or sel.find("option")
-                    form_data[nm] = opt["value"] if opt and opt.get("value") else ""
 
             # Search as grantee
             form_data["CROSSNAMEFIELD"] = current_name
@@ -772,20 +756,11 @@ def find_adjoiners_online(location: str, grantor: str) -> list[dict]:
         if "FIELD14" not in resp.text and "CROSSNAMEFIELD" not in resp.text:
             return results  # not logged in
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        form = soup.find("form")
-        if not form:
-            return results
 
-        fd = {}
-        for inp in form.find_all("input"):
-            nm = inp.get("name")
-            if nm: fd[nm] = inp.get("value", "")
-        for sel in form.find_all("select"):
-            nm = sel.get("name")
-            if nm:
-                opt = sel.find("option", selected=True) or sel.find("option")
-                fd[nm] = opt["value"] if opt and opt.get("value") else ""
+        soup = BeautifulSoup(resp.text, "html.parser")
+        fd = _scrape_form_data(soup)
+        if not fd:
+            return results
 
         # Search by location book prefix
         # FIELD14 is typically the "Location" search field on this site
@@ -1094,7 +1069,6 @@ def api_find_adjoiners():
             results = results[:MAX_ADJOINERS]
 
         # Log breakdown by source for debugging
-        from collections import Counter
         src_counts = Counter(r.get("source", "?") for r in results)
         print(f"[adjoiners] total: {len(results)}  breakdown: {dict(src_counts)}", flush=True)
 
@@ -1560,19 +1534,9 @@ def api_find_plat_online():
                 if "CROSSNAMEFIELD" not in resp.text and "FIELD14" not in resp.text:
                     return  # not logged in
                 soup = BeautifulSoup(resp.text, "html.parser")
-                form = soup.find("form")
-                if not form:
+                fd = _scrape_form_data(soup)
+                if not fd:
                     return
-                fd = {}
-                for inp in form.find_all("input"):
-                    nm = inp.get("name")
-                    if nm:
-                        fd[nm] = inp.get("value", "")
-                for sel in form.find_all("select"):
-                    nm = sel.get("name")
-                    if nm:
-                        opt = sel.find("option", selected=True) or sel.find("option")
-                        fd[nm] = opt["value"] if opt and opt.get("value") else ""
                 fd["CROSSNAMEFIELD"] = name_last
                 fd["CROSSNAMETYPE"]  = "begin"
                 # NOTE: Do NOT set FIELD7="SUR" here — it conflicts with the form
@@ -1640,7 +1604,7 @@ def api_find_plat_online():
 @app.route("/api/save-plat", methods=["POST"])
 def api_save_plat():
     """Copy a local cabinet file OR download an online plat PDF into the project's B Plats folder."""
-    import shutil
+    # shutil imported at module top level
     try:
         data        = request.get_json()
         source      = data.get("source")         # "local" or "online"
@@ -1759,6 +1723,7 @@ def api_preview_pdf():
             page_num = min(int(request.args.get("page", 0)), doc.page_count - 1)
 
         page = doc[page_num]
+        total_pages = doc.page_count  # capture before closing
         # Render at 200 DPI for good quality without being too slow
         pix = page.get_pixmap(dpi=200)
         img_bytes = pix.tobytes("jpeg", jpg_quality=85)
@@ -1767,7 +1732,7 @@ def api_preview_pdf():
         response = make_response(img_bytes)
         response.headers["Content-Type"] = "image/jpeg"
         response.headers["Cache-Control"] = "public, max-age=3600"
-        response.headers["X-Page-Count"] = str(doc.page_count if hasattr(doc, 'page_count') else 1)
+        response.headers["X-Page-Count"] = str(total_pages)
         return response
 
     except Exception as e:
@@ -1978,11 +1943,32 @@ def api_research_post():
 
 # ── open folder in Explorer ────────────────────────────────────────────────────
 
+def _is_safe_path(path: str) -> bool:
+    """Validate that a path is within the survey drive or project directory."""
+    if not path:
+        return False
+    try:
+        resolved = Path(path).resolve()
+        # Allow paths on the survey drive
+        drive = detect_survey_drive()
+        if drive and str(resolved).upper().startswith(f"{drive}:\\"):
+            return True
+        # Allow paths within the project directory itself
+        project_dir = Path(__file__).resolve().parent
+        if str(resolved).startswith(str(project_dir)):
+            return True
+        return False
+    except Exception:
+        return False
+
+
 @app.route("/api/open-folder", methods=["POST"])
 def api_open_folder():
     try:
         path = request.get_json().get("path", "")
-        if path and os.path.exists(path):
+        if not _is_safe_path(path):
+            return jsonify({"success": False, "error": "Path not within allowed directories"})
+        if os.path.exists(path):
             subprocess.Popen(["explorer", path])
         return jsonify({"success": True})
     except Exception as e:
@@ -1994,7 +1980,9 @@ def api_open_file():
     """Open a specific file with the default Windows application."""
     try:
         path = request.get_json().get("path", "")
-        if path and os.path.exists(path):
+        if not _is_safe_path(path):
+            return jsonify({"success": False, "error": "Path not within allowed directories"})
+        if os.path.exists(path):
             os.startfile(path)
             return jsonify({"success": True})
         return jsonify({"success": False, "error": "File not found"})
@@ -2718,7 +2706,7 @@ def _nominatim_reverse(lat: float, lon: float) -> dict:
         return result
 
     except Exception as e:
-        _nominatim_last_call = _time.monotonic() if '_time' in dir() else 0
+        _nominatim_last_call = _time.monotonic()
         print(f"[address] Nominatim error for {lat},{lon}: {e}", flush=True)
         return {"success": False, "source": "nominatim", "error": str(e)}
 
