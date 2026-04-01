@@ -20,9 +20,51 @@ _ADJ_PATTERNS = [
         r'\bproperty\s+of\s+([A-Z][A-Z\s,\.\'-]{2,50}?)(?=\s*[,;]|\s+(?:on|bounded|thence)|$)',
         re.I | re.MULTILINE
     ),
-    # "ADJOINS GARCIA, JUAN"
+    # "ADJOINS GARCIA, JUAN"  /  "ADJOINING THE PROPERTY OF TORRES"
     re.compile(
-        r'\badjoins?\s+([A-Z][A-Z\s,\.\'-]{2,40}?)(?=\s*[,;]|\s+(?:on|bounded|thence)|$)',
+        r'\badjoins?\s+(?:the\s+(?:property|lands?)\s+of\s+)?([A-Z][A-Z\s,\.\'-]{2,40}?)(?=\s*[,;]|\s+(?:on|bounded|thence)|$)',
+        re.I | re.MULTILINE
+    ),
+    # "BOUNDED BY GARCIA"  /  "BOUNDED ON THE NORTH BY LANDS OF RAEL"
+    re.compile(
+        r'\bbounded\s+(?:on\s+the\s+(?:north|south|east|west)\w*\s+)?by\s+(?:(?:the\s+)?(?:lands?|property)\s+of\s+)?'
+        r'([A-Z][A-Z\s,\.\'-]{2,50}?)(?=\s*[,;]|\s+(?:on|bounded|thence|and)|$)',
+        re.I | re.MULTILINE
+    ),
+    # Directional: "ON THE NORTH BY LANDS OF RAEL"  /  "NORTHERLY BY GARCIA"
+    re.compile(
+        r'\b(?:on\s+the\s+)?(?:north|south|east|west)\w*\s+(?:by\s+)?(?:(?:the\s+)?(?:lands?|property)\s+of\s+)?'
+        r'([A-Z][A-Z\s,\.\'-]{2,50}?)(?=\s*[,;]|\s+(?:on|bounded|thence|and\s+on|to\s+a)|$)',
+        re.I | re.MULTILINE
+    ),
+    # "FORMERLY OF MARTINEZ"  /  "NOW OR FORMERLY GARCIA"
+    re.compile(
+        r'\b(?:now\s+or\s+)?formerly\s+(?:of\s+)?(?:the\s+)?'
+        r'([A-Z][A-Z\s,\.\'-]{2,50}?)(?=\s*[,;]|\s+(?:on|bounded|thence|and)|$)',
+        re.I | re.MULTILINE
+    ),
+    # "ESTATE OF MARTINEZ, CARLOS"
+    re.compile(
+        r'\bestate\s+of\s+(?:the\s+)?'
+        r'([A-Z][A-Z\s,\.\'-]{2,50}?)(?=\s*[,;]|\s+(?:on|bounded|thence|and)|$)',
+        re.I | re.MULTILINE
+    ),
+    # "ALONG THE [direction] LINE OF GARCIA"  /  "ALONG THE RAEL PROPERTY"
+    re.compile(
+        r'\balong\s+(?:the\s+)?(?:(?:north|south|east|west)\w*\s+)?'
+        r'(?:line|boundary|fence)\s+of\s+(?:the\s+)?'
+        r'([A-Z][A-Z\s,\.\'-]{2,50}?)(?=\s*[,;]|\s+(?:on|bounded|thence|and|to\s+a)|$)',
+        re.I | re.MULTILINE
+    ),
+    # "THENCE ALONG [NAME] PROPERTY"  /  "ALONG THE [NAME] TRACT"
+    re.compile(
+        r'\balong\s+(?:the\s+)?([A-Z][A-Z\s,\.\'-]{2,40}?)\s+(?:property|tract|land|parcel|line|fence)',
+        re.I | re.MULTILINE
+    ),
+    # "CORNER COMMON TO [NAME]"  /  "CORNER WITH [NAME]"
+    re.compile(
+        r'\bcorner\s+(?:common\s+to|with|of)\s+(?:the\s+)?(?:(?:lands?|property)\s+of\s+)?'
+        r'([A-Z][A-Z\s,\.\'-]{2,50}?)(?=\s*[,;]|\s+(?:on|bounded|thence|and)|$)',
         re.I | re.MULTILINE
     ),
 ]
@@ -32,6 +74,14 @@ _NOISE_WORDS = {
     'new', 'mexico', 'united', 'states', 'government', 'public', 'road',
     'street', 'acequia', 'ditch', 'right', 'way', 'river', 'creek', 'arroyo',
     'unknown', 'parties', 'record', 'described', 'following', 'certain',
+    # Directional / legal filler that gets captured as names
+    'north', 'south', 'east', 'west', 'northerly', 'southerly', 'easterly',
+    'westerly', 'northeast', 'northwest', 'southeast', 'southwest',
+    'tract', 'parcel', 'lot', 'block', 'section', 'survey', 'plat',
+    'beginning', 'thence', 'along', 'point', 'corner', 'line', 'boundary',
+    'thereof', 'therein', 'portion', 'remainder', 'being', 'lying',
+    'taos', 'santa', 'bernalillo',  # common county false positives
+    'subdivision', 'addition', 'unit', 'phase',
 }
 
 

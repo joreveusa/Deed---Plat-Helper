@@ -73,7 +73,31 @@ if errorlevel 1 (
     echo  [OK] Dependencies installed
 )
 
-:: ── Check if server is already running on port 5000 ───────────────────────
+:: ── Check for pywebview — if available, launch desktop mode ───────────────
+%PY% -c "import webview" >nul 2>&1
+if %errorlevel%==0 (
+    echo  [OK] pywebview found — launching desktop app mode
+    echo.
+
+    :: Check if server is already running on port 5000
+    netstat -ano 2>nul | findstr /C:":5000" >nul
+    if %errorlevel%==0 (
+        echo  [OK] Server already running — opening window...
+        start "" %PY% client_launcher.py
+        goto :done
+    )
+
+    :: Launch desktop app (server + native window)
+    start "Deed & Plat Helper" /d "%~dp0" %PY% desktop_app.py
+    goto :done
+)
+
+:: ── Fallback: browser mode ────────────────────────────────────────────────
+echo  [info] pywebview not installed — using browser mode
+echo         (Run: pip install pywebview pystray  for desktop app mode)
+echo.
+
+:: Check if server is already running on port 5000
 netstat -ano 2>nul | findstr /C:":5000" >nul
 if %errorlevel%==0 (
     echo  [OK] Server already running - opening browser...

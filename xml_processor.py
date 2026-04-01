@@ -765,8 +765,158 @@ def cross_reference_deed(survey_data_path: str, deed_detail: dict) -> list[dict]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GEOJSON MAP EXPORT
+# GEOMETRY-BASED ADJACENCY
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _bounding_box(polygon: list) -> tuple:
+    """Compute (min_lng, min_lat, max_lng, max_lat) for a polygon ring."""
+    lngs = [p[0] for p in polygon]
+    lats = [p[1] for p in polygon]
+    return (min(lngs), min(lats), max(lngs), max(lats))
+
+
+def _boxes_overlap(a: tuple, b: tuple, margin: float = 0.001) -> bool:
+    """Check if two bounding boxes overlap (with optional margin in degrees)."""
+    return not (
+        a[2] + margin < b[0] or   # a.max_lng < b.min_lng
+        b[2] + margin < a[0] or   # b.max_lng < a.min_lng
+        a[3] + margin < b[1] or   # a.max_lat < b.min_lat
+        b[3] + margin < a[1]      # b.max_lat < a.min_lat
+    )
+
+
+def _min_edge_distance_sq(poly_a: list, poly_b: list) -> float:
+    """Estimate minimum squared distance between two polygon edges.
+
+    Uses point-to-edge distance for a fast approximation.
+    Returns distance in degrees^2 (caller converts as needed).
+    """
+    min_dist_sq = float('inf')
+
+    # Sample: check every vertex of A against every edge of B, and vice versa
+    def _point_to_segment_dist_sq(px, py, ax, ay, bx, by):
+        """Squared distance from point (px,py) to segment (ax,ay)-(bx,by)."""
+        dx, dy = bx - ax, by - ay
+        len_sq = dx * dx + dy * dy
+        if len_sq == 0:
+            return (px - ax) ** 2 + (py - ay) ** 2
+        t = max(0, min(1, ((px - ax) * dx + (py - ay) * dy) / len_sq))
+        proj_x = ax + t * dx
+        proj_y = ay + t * dy
+        return (px - proj_x) ** 2 + (py - proj_y) ** 2
+
+    # For performance, stride through vertices (check every 3rd for large polys)
+    stride_a = max(1, len(poly_a) // 30)
+    stride_b = max(1, len(poly_b) // 30)
+
+    for i in range(0, len(poly_a), stride_a):
+        px, py = poly_a[i]
+        for j in range(0, len(poly_b) - 1, stride_b):
+            d = _point_to_segment_dist_sq(px, py, poly_b[j][0], poly_b[j][1],
+                                           poly_b[j + 1][0], poly_b[j + 1][1])
+            if d < min_dist_sq:
+                min_dist_sq = d
+                if d < 1e-10:  # effectively touching
+                    return d
+
+    for i in range(0, len(poly_b), stride_b):
+        px, py = poly_b[i]
+        for j in range(0, len(poly_a) - 1, stride_a):
+            d = _point_to_segment_dist_sq(px, py, poly_a[j][0], poly_a[j][1],
+                                           poly_a[j + 1][0], poly_a[j + 1][1])
+            if d < min_dist_sq:
+                min_dist_sq = d
+                if d < 1e-10:
+                    return d
+
+    return min_dist_sq
+
+
+def find_adjacent_parcels(
+    survey_data_path: str,
+    client_upc: str,
+    max_results: int = 20,
+    edge_threshold_deg: float = 0.0003,   # ~33m — parcels within this edge distance
+) -> list[dict]:
+    """Find parcels geometrically adjacent to a given parcel.
+
+    Uses polygon edge proximity rather than centroid distance, which is far
+    more accurate for irregularly shaped parcels.
+
+    Returns list of parcel dicts with an added '_adjacency_dist' field.
+    """
+    idx = load_index(survey_data_path)
+    if not idx:
+        return []
+
+    parcels = idx.get("parcels", [])
+    if not parcels:
+        return []
+
+    # Find the client parcel
+    client = None
+    for p in parcels:
+        if p.get("upc") == client_upc:
+            client = p
+            break
+    if not client:
+        return []
+
+    client_poly = client.get("polygon")
+    client_centroid = client.get("centroid")
+    if not client_poly or len(client_poly) < 3:
+        # Fall back to centroid proximity if no polygon
+        if not client_centroid:
+            return []
+        # Simple centroid-based fallback with wider radius
+        results = []
+        clng, clat = client_centroid
+        RADIUS = 0.002  # ~222m
+        for p in parcels:
+            if p.get("upc") == client_upc:
+                continue
+            pc = p.get("centroid")
+            if not pc:
+                continue
+            if abs(pc[0] - clng) < RADIUS and abs(pc[1] - clat) < RADIUS:
+                p_copy = dict(p)
+                p_copy["_adjacency_dist"] = ((pc[0] - clng) ** 2 + (pc[1] - clat) ** 2) ** 0.5
+                p_copy["_adjacency_type"] = "centroid"
+                results.append(p_copy)
+                if len(results) >= max_results:
+                    break
+        results.sort(key=lambda r: r["_adjacency_dist"])
+        return results[:max_results]
+
+    # Bounding box of client parcel (with margin for edge threshold)
+    client_bbox = _bounding_box(client_poly)
+    threshold_sq = edge_threshold_deg ** 2
+
+    results = []
+    for p in parcels:
+        if p.get("upc") == client_upc:
+            continue
+        p_poly = p.get("polygon")
+        if not p_poly or len(p_poly) < 3:
+            continue
+
+        # Fast reject: bounding boxes don't overlap
+        p_bbox = _bounding_box(p_poly)
+        if not _boxes_overlap(client_bbox, p_bbox, margin=edge_threshold_deg * 2):
+            continue
+
+        # Detailed check: minimum edge distance
+        dist_sq = _min_edge_distance_sq(client_poly, p_poly)
+        if dist_sq <= threshold_sq:
+            p_copy = dict(p)
+            p_copy["_adjacency_dist"] = dist_sq ** 0.5
+            p_copy["_adjacency_type"] = "edge"
+            results.append(p_copy)
+
+    # Sort by distance (closest first)
+    results.sort(key=lambda r: r["_adjacency_dist"])
+    return results[:max_results]
+
 
 def _simplify_ring(ring: list, max_pts: int = 50) -> list:
     """

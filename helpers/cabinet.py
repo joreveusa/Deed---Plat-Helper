@@ -138,6 +138,94 @@ def extract_cabinet_doc_number(filename: str) -> str:
 # Per-cabinet file listing cache: { "C": (mtime, file_list), ... }
 _cab_scan_cache = {}
 
+# Common NM name prefixes to handle as single tokens
+_NAME_PREFIXES = {'de', 'la', 'los', 'las', 'del', 'da', 'di'}
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize a name for matching: lowercase, strip accents, collapse whitespace."""
+    import unicodedata
+    # Decompose unicode, strip combining marks (accents), recompose
+    nfkd = unicodedata.normalize('NFKD', name)
+    stripped = ''.join(c for c in nfkd if unicodedata.category(c) != 'Mn')
+    return re.sub(r'\s+', ' ', stripped.lower().strip())
+
+
+def _build_name_variants(person: str) -> list[str]:
+    """Build all reasonable name variants for matching against filenames.
+
+    Given "Rael, Adela":
+      → ["rael, adela", "rael adela", "adela rael", "rael", "adela"]
+    Given "ADELA RAEL":
+      → ["adela rael", "rael adela", "adela", "rael"]
+    """
+    if not person or not person.strip():
+        return []
+    norm = _normalize_name(person)
+    variants = [norm]
+    seen = {norm}
+
+    def _add(v):
+        v = v.strip()
+        if v and v not in seen and len(v) >= 3:
+            seen.add(v)
+            variants.append(v)
+
+    # Remove commas for a natural form
+    no_comma = norm.replace(',', ' ').strip()
+    no_comma = re.sub(r'\s+', ' ', no_comma)
+    _add(no_comma)
+
+    # If "Last, First" format → swap to "First Last"
+    if ',' in norm:
+        parts = [p.strip() for p in norm.split(',', 1)]
+        if len(parts) == 2 and parts[0] and parts[1]:
+            _add(f"{parts[1]} {parts[0]}")
+            _add(parts[0])  # last name only
+            _add(parts[1])  # first name only
+    else:
+        # Try splitting on spaces and swapping first/last
+        words = norm.split()
+        if len(words) >= 2:
+            _add(' '.join(words[1:]) + ' ' + words[0])
+            for w in words:
+                if len(w) >= 3 and w not in _NAME_PREFIXES:
+                    _add(w)
+
+    # Individual words ≥ 4 chars (catch any we missed)
+    for w in re.split(r'[\s,]+', norm):
+        if len(w) >= 4 and w not in _NAME_PREFIXES:
+            _add(w)
+
+    return variants
+
+
+def _token_overlap_score(name_tokens: list[str], fname_norm: str) -> int:
+    """Score how well a set of name tokens match a filename.
+
+    Returns a score 0-100 based on how many tokens appear in the filename.
+    Higher = better match.  0 = no match at all.
+    """
+    if not name_tokens:
+        return 0
+    fname_words = set(re.split(r'[\s,._\-]+', fname_norm))
+    # Count exact word matches (higher quality) and substring matches
+    word_hits = 0
+    substr_hits = 0
+    for tok in name_tokens:
+        if tok in fname_words:
+            word_hits += 1
+        elif tok in fname_norm:
+            substr_hits += 1
+
+    if word_hits == 0 and substr_hits == 0:
+        return 0
+
+    # Score: word matches are worth more than substring matches
+    total_possible = len(name_tokens)
+    score = int(((word_hits * 1.0 + substr_hits * 0.5) / max(total_possible, 1)) * 100)
+    return min(score, 100)
+
 
 def search_local_cabinet(cabinet: str, doc_num: str,
                           cabinet_path: str,
@@ -155,7 +243,7 @@ def search_local_cabinet(cabinet: str, doc_num: str,
 
     Match strategies (highest to lowest priority):
       doc_number — doc_num matches the file's leading numeric prefix exactly.
-      name_match — name token appears in the filename.
+      name_match — name token appears in the filename (with order-swap matching).
       page_ref   — cabinet letter + doc_num found anywhere in filename.
 
     ``cabinet_path`` is the base path to the cabinets directory.
@@ -179,22 +267,22 @@ def search_local_cabinet(cabinet: str, doc_num: str,
         re.I
     ) if doc_clean else None
 
-    # Name tokens — accept either "last" from "Last, First" format OR full raw token
-    name_tokens = []
+    # Build name variants with order-swap, normalization, individual words
+    all_name_variants = []
+    all_name_words = set()  # individual word tokens for scoring
     for person in [grantor, grantee]:
         if not person:
             continue
-        person = person.strip()
-        if len(person) >= 3 and person.lower() not in [t.lower() for t in name_tokens]:
-            name_tokens.append(person)
-        last = person.split(',')[0].strip()
-        if last and last != person and len(last) >= 3 and last.lower() not in [t.lower() for t in name_tokens]:
-            name_tokens.append(last)
-        for w in re.split(r'[\s,]+', person):
-            if len(w) >= 4 and w.lower() not in [t.lower() for t in name_tokens]:
-                name_tokens.append(w)
+        variants = _build_name_variants(person)
+        for v in variants:
+            if v not in all_name_variants:
+                all_name_variants.append(v)
+        # Collect individual words for overlap scoring
+        for w in re.split(r'[\s,]+', _normalize_name(person)):
+            if len(w) >= 3 and w not in _NAME_PREFIXES:
+                all_name_words.add(w)
 
-    if not doc_clean and not name_tokens:
+    if not doc_clean and not all_name_variants:
         return []
 
     # ── Per-cabinet file listing cache (keyed on folder mtime) ───────────────
@@ -216,8 +304,8 @@ def search_local_cabinet(cabinet: str, doc_num: str,
         _cab_scan_cache[cabinet] = (cur_mtime, all_files)
 
     for fname, display_name, file_doc_num, fpath, size_kb in all_files:
-        fname_lower  = fname.lower()
-        name_lower   = display_name.lower()
+        fname_norm   = _normalize_name(fname)
+        name_norm    = _normalize_name(display_name)
 
         match_strategy = ""
         tok_len        = 0
@@ -228,14 +316,17 @@ def search_local_cabinet(cabinet: str, doc_num: str,
                 match_strategy = "doc_number"
                 tok_len = 1000
 
-        # SECONDARY: name token appears anywhere in filename
+        # SECONDARY: name variant matching (handles order swaps, normalization)
         if not match_strategy:
-            for tok in name_tokens:
-                tok_l = tok.lower()
-                if tok_l in fname_lower or tok_l in name_lower:
+            best_score = 0
+            for variant in all_name_variants:
+                if variant in fname_norm or variant in name_norm:
+                    # Compute overlap score for this match
+                    score = _token_overlap_score(list(all_name_words), name_norm)
+                    if score > best_score:
+                        best_score = score
                     match_strategy = "name_match"
-                    tok_len = len(tok)
-                    break
+                    tok_len = max(tok_len, len(variant) + best_score)
 
         # TERTIARY: cabinet page-ref like "C-191A" embedded anywhere in filename
         if not match_strategy and page_ref_pat and page_ref_pat.search(fname):
@@ -261,3 +352,4 @@ def search_local_cabinet(cabinet: str, doc_num: str,
         -r.get('_tok_len', 0)
     ))
     return results
+

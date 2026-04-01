@@ -11,6 +11,12 @@ import io
 import xml_processor
 import ezdxf
 
+# ── Profile support (multi-user) ──────────────────────────────────────────────
+from helpers.profiles import (
+    list_profiles, get_profile, save_profile, create_profile,
+    delete_profile, update_profile_field, migrate_from_config,
+)
+
 # ── Helper modules (extracted from this file for maintainability) ─────────────
 from helpers.metes_bounds import (
     parse_metes_bounds, calls_to_coords, _bearing_to_azimuth,
@@ -58,6 +64,19 @@ _SURVEY_RELATIVE   = os.path.join("AI DATA CENTER", "Survey Data")
 _CABINET_RELATIVE  = os.path.join("AI DATA CENTER", "Survey Data",
                                    "00 COUNTY CLERK SCANS Cabs A-B- C-D - E")
 _detected_drive: str | None = None   # e.g. "F"
+
+# ── Helpers (defined early so drive detection can use load_config) ──────────
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_config(data):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
 
 def detect_survey_drive(force: bool = False) -> str | None:
@@ -118,29 +137,36 @@ except Exception as e:
 
 
 # CABINET_FOLDERS — imported from helpers.cabinet
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+# CONFIG_FILE, load_config, save_config — defined above (before drive detection)
 
 # Must match the <select> options in index.html
 JOB_TYPES = ["BDY", "ILR", "SE", "SUB", "TIE", "TOPO", "ELEV", "ALTA", "CONS", "OTHER"]
 
-# One persistent session per server run
-web_session = req_lib.Session()
-web_session.headers.update({
+# ── Per-user web sessions (multi-user support) ──────────────────────────────
+# Each profile gets its own requests.Session so login cookies don't collide.
+import threading
+_user_sessions: dict[str, req_lib.Session] = {}   # profile_id -> Session
+_user_sessions_lock = threading.Lock()
+
+_DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-})
+}
 
-# ── helpers ────────────────────────────────────────────────────────────────────
+def _get_web_session(profile_id: str | None = None) -> req_lib.Session:
+    """Return a per-user requests.Session.  Falls back to a shared one."""
+    key = profile_id or "__default__"
+    with _user_sessions_lock:
+        if key not in _user_sessions:
+            s = req_lib.Session()
+            s.headers.update(_DEFAULT_HEADERS)
+            _user_sessions[key] = s
+        return _user_sessions[key]
 
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+# Backward-compat: callers that still reference `web_session` get the default
+web_session = _get_web_session()
 
-def save_config(data):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+# ── helpers (load_config / save_config defined above, before drive detection) ──
 
 def next_job_info():
     """Scan Survey Data to find the next job number and its range folder."""
@@ -298,39 +324,128 @@ def add_no_cache(response):
     response.headers["Expires"] = "0"
     return response
 
+# ── profiles ───────────────────────────────────────────────────────────────────
+
+@app.route("/api/profiles", methods=["GET"])
+def api_profiles_list():
+    """Return all user profiles."""
+    profiles = list_profiles()
+    # If no profiles exist, auto-migrate from config.json
+    if not profiles:
+        cfg = load_config()
+        p = migrate_from_config(cfg)
+        profiles = [p]
+    return jsonify({"success": True, "profiles": profiles})
+
+
+@app.route("/api/profiles", methods=["POST"])
+def api_profiles_create():
+    """Create a new user profile.  Body: { display_name }"""
+    data = request.get_json(silent=True) or {}
+    name = data.get("display_name", "").strip()
+    if not name:
+        return jsonify({"success": False, "error": "display_name is required"})
+    p = create_profile(name)
+    # Optionally copy shared credentials into the new profile
+    cfg = load_config()
+    if cfg.get("firstnm_user"):
+        p["firstnm_user"] = cfg["firstnm_user"]
+        p["firstnm_pass"] = cfg.get("firstnm_pass", "")
+        save_profile(p)
+    return jsonify({"success": True, "profile": p})
+
+
+@app.route("/api/profiles/<profile_id>", methods=["GET"])
+def api_profile_get(profile_id):
+    p = get_profile(profile_id)
+    if p is None:
+        return jsonify({"success": False, "error": "Profile not found"}), 404
+    return jsonify({"success": True, "profile": p})
+
+
+@app.route("/api/profiles/<profile_id>", methods=["PUT"])
+def api_profile_update(profile_id):
+    """Update fields on a profile.  Body: { field: value, ... }"""
+    p = get_profile(profile_id)
+    if p is None:
+        return jsonify({"success": False, "error": "Profile not found"}), 404
+    data = request.get_json(silent=True) or {}
+    for k, v in data.items():
+        if k != "id":  # id is immutable
+            p[k] = v
+    save_profile(p)
+    return jsonify({"success": True, "profile": p})
+
+
+@app.route("/api/profiles/<profile_id>", methods=["DELETE"])
+def api_profile_delete(profile_id):
+    ok = delete_profile(profile_id)
+    return jsonify({"success": ok})
+
+
+def _get_request_profile_id() -> str | None:
+    """Extract profile_id from request cookie or query param."""
+    return request.cookies.get("profile_id") or request.args.get("profile_id")
+
+
+def _get_request_session() -> req_lib.Session:
+    """Return the web session for the current request's profile."""
+    return _get_web_session(_get_request_profile_id())
+
 # ── config ─────────────────────────────────────────────────────────────────────
 
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
+    profile_id = _get_request_profile_id()
+    profile = get_profile(profile_id) if profile_id else None
+
     if request.method == "GET":
         cfg = load_config()
+        # Prefer profile-level credentials, fall back to server config
+        if profile:
+            user = profile.get("firstnm_user") or cfg.get("firstnm_user", "")
+            pwd  = profile.get("firstnm_pass") or cfg.get("firstnm_pass", "")
+            sess = profile.get("last_session") or cfg.get("last_session")
+        else:
+            user = cfg.get("firstnm_user") or cfg.get("username", "")
+            pwd  = cfg.get("firstnm_pass") or cfg.get("password", "")
+            sess = cfg.get("last_session")
         return jsonify({
             "success": True,
             "config": {
-                "firstnm_user": cfg.get("firstnm_user") or cfg.get("username", ""),
-                "firstnm_pass": cfg.get("firstnm_pass") or cfg.get("password", ""),
+                "firstnm_user": user,
+                "firstnm_pass": pwd,
                 "firstnm_url":  cfg.get("firstnm_url", ""),
-                "last_session": cfg.get("last_session"),
+                "last_session": sess,
             }
         })
     data = request.get_json()
-    cfg = load_config()
-    if "firstnm_user" in data:
-        cfg["firstnm_user"] = data["firstnm_user"]
-    elif "username" in data:
-        cfg["firstnm_user"] = data["username"]
-    if "firstnm_pass" in data:
-        cfg["firstnm_pass"] = data["firstnm_pass"]
-    elif "password" in data:
-        cfg["firstnm_pass"] = data["password"]
-    if "firstnm_url" in data:
-        cfg["firstnm_url"] = data["firstnm_url"]
-    if "last_session" in data:
-        cfg["last_session"] = data["last_session"]
-    # Clean up legacy duplicate keys
-    cfg.pop("username", None)
-    cfg.pop("password", None)
-    save_config(cfg)
+    # Save user-specific fields to profile if available, otherwise config
+    if profile:
+        if "firstnm_user" in data or "username" in data:
+            profile["firstnm_user"] = data.get("firstnm_user", data.get("username", ""))
+        if "firstnm_pass" in data or "password" in data:
+            profile["firstnm_pass"] = data.get("firstnm_pass", data.get("password", ""))
+        if "last_session" in data:
+            profile["last_session"] = data["last_session"]
+        save_profile(profile)
+    else:
+        cfg = load_config()
+        if "firstnm_user" in data:
+            cfg["firstnm_user"] = data["firstnm_user"]
+        elif "username" in data:
+            cfg["firstnm_user"] = data["username"]
+        if "firstnm_pass" in data:
+            cfg["firstnm_pass"] = data["firstnm_pass"]
+        elif "password" in data:
+            cfg["firstnm_pass"] = data["password"]
+        if "firstnm_url" in data:
+            cfg["firstnm_url"] = data["firstnm_url"]
+        if "last_session" in data:
+            cfg["last_session"] = data["last_session"]
+        cfg.pop("username", None)
+        cfg.pop("password", None)
+        save_config(cfg)
     return jsonify({"success": True})
 
 # ── login ──────────────────────────────────────────────────────────────────────
@@ -911,10 +1026,11 @@ def api_find_adjoiners():
 
 
         # ── Strategy 3: KML/XML parcel index — neighboring parcels ─────────────
-        #   TUNING: A typical property has 6-8 adjoiners at most (sides + across road).
-        #   We tighten thresholds and cap each sub-strategy to avoid returning 30+ parcels.
-        MAX_KML_PER_SUBSTRATEGY = 10  # cap UPC + proximity each
+        #   Uses geometry-based adjacency (polygon edge proximity) as primary,
+        #   with UPC-prefix and centroid-distance fallbacks.
+        MAX_KML_PER_SUBSTRATEGY = 12  # cap each sub-strategy
         kml_upc_count = 0
+        kml_geom_count = 0
         kml_prox_count = 0
         # Filter out non-person owner names (roads, easements, government, numeric-only)
         _SKIP_OWNER_PATS = re.compile(
@@ -960,8 +1076,40 @@ def api_find_adjoiners():
                     client_upc     = client_parcel.get("upc", "")
                     client_centroid = client_parcel.get("centroid")  # [lng, lat]
 
-                    # Step B: UPC-prefix neighbors (same parcel group, adjacent numbers)
-                    #   Tightened from ±20 → ±5 — only immediate neighboring lot numbers
+                    # Step B: Geometry-based adjacency (most accurate)
+                    #   Uses polygon edge proximity — finds parcels that actually share
+                    #   a boundary or are within ~33m of the client parcel's edges.
+                    if client_upc:
+                        try:
+                            adj_parcels = xml_processor.find_adjacent_parcels(
+                                survey_path, client_upc,
+                                max_results=MAX_KML_PER_SUBSTRATEGY,
+                                edge_threshold_deg=0.0003  # ~33m
+                            )
+                            for p in adj_parcels:
+                                if kml_geom_count >= MAX_KML_PER_SUBSTRATEGY:
+                                    break
+                                name = p.get("owner", "").title()
+                                if not _is_valid_owner(name):
+                                    continue
+                                key = name.lower()
+                                if key not in seen_names:
+                                    seen_names.add(key)
+                                    adj_type = p.get("_adjacency_type", "edge")
+                                    results.append({
+                                        "name":   name,
+                                        "raw":    f"edge dist: {p.get('_adjacency_dist', 0):.5f}°",
+                                        "field":  f"KML {adj_type} adjacency",
+                                        "source": "kml_geometry",
+                                        "upc":    p.get("upc", ""),
+                                        "plat":   p.get("plat", ""),
+                                    })
+                                    kml_geom_count += 1
+                            print(f"[adjoiners][kml] geometry adjacency: {kml_geom_count} found", flush=True)
+                        except Exception as geom_err:
+                            print(f"[adjoiners][kml] geometry adjacency error: {geom_err}", flush=True)
+
+                    # Step C: UPC-prefix neighbors (same parcel group, adjacent numbers)
                     if client_upc:
                         upc_prefix = client_upc[:10]
                         try:
@@ -976,7 +1124,7 @@ def api_find_adjoiners():
                                     continue
                                 try:
                                     diff = abs(int(p_upc) - upc_num)
-                                    if diff <= 5:   # within 5 UPC steps = immediate neighbors
+                                    if diff <= 8:   # within 8 UPC steps = nearby lots
                                         name = p.get("owner", "").title()
                                         if not _is_valid_owner(name):
                                             continue
@@ -997,13 +1145,12 @@ def api_find_adjoiners():
                         except ValueError:
                             pass
 
-                    # Step C: centroid proximity — only touching parcels
-                    #   Tightened from 0.0015° (~167m) → 0.0008° (~89m)
-                    #   A typical rural NM lot is ~60-80m across, so 89m catches
-                    #   immediate neighbors but not parcels 2+ lots away.
+                    # Step D: centroid proximity — fallback for parcels without polygons
+                    #   Widened from 0.0008° (~89m) → 0.002° (~222m) to catch
+                    #   irregularly shaped parcels whose centroids are far apart.
                     if client_centroid:
                         clng, clat = client_centroid
-                        RADIUS_DEG = 0.0008   # ~89 m — touching parcels only
+                        RADIUS_DEG = 0.002   # ~222m — wider to catch more neighbors
                         BOX = RADIUS_DEG * 1.5
                         for p in parcels:
                             if kml_prox_count >= MAX_KML_PER_SUBSTRATEGY:
@@ -1063,7 +1210,7 @@ def api_find_adjoiners():
         if len(results) > MAX_ADJOINERS:
             SOURCE_PRIORITY = {
                 "legal_desc": 0, "deed_text": 1, "plat_ocr": 2,
-                "kml_upc": 3, "kml_proximity": 4, "online_range": 5,
+                "kml_geometry": 3, "kml_upc": 4, "kml_proximity": 5, "online_range": 6,
             }
             results.sort(key=lambda r: SOURCE_PRIORITY.get(r.get("source", ""), 9))
             results = results[:MAX_ADJOINERS]
@@ -1286,7 +1433,16 @@ def api_find_plat_local():
             targeting_reason = f"Manual selection: Cabinet{'s' if len(forced_cabinets) > 1 else ''} {', '.join(forced_cabinets)}"
         else:
             target_cabs, targeting_reason = _extract_target_cabinets(detail, kml_matches)
-        print(f"[local] {targeting_reason}", flush=True)
+
+        # Detect whether we have real deed detail (Location/book-page) or just a name.
+        # Name-only mode = adjoiner plat search from Step 5 where no deed has been
+        # looked up yet. In this mode we need to be MORE restrictive with matches.
+        has_deed_detail = bool(
+            detail.get("Location") or detail.get("Reference") or
+            detail.get("_cab_refs")
+        )
+
+        print(f"[local] {targeting_reason}  (deed_detail={'yes' if has_deed_detail else 'NO — name-only mode'})", flush=True)
 
 
         local_hits       = []
@@ -1343,6 +1499,20 @@ def api_find_plat_local():
             for w in re.split(r'[\s,]+', raw):
                 if len(w) >= 4 and w.lower() not in [t.lower() for t in client_tokens]:
                     client_tokens.append(w)
+
+        # ── In name-only mode (no deed detail), restrict tokens to multi-word ─────
+        # Single words like "Rael" (4 chars) would match "Israel", "Rafael", etc.
+        # and cause hundreds of false positives across all cabinets.
+        # Require at least "first last" (multi-word) or "last, first" (comma) tokens.
+        if not has_deed_detail and client_tokens:
+            multi_word_tokens = [t for t in client_tokens if ' ' in t or ',' in t]
+            if multi_word_tokens:
+                client_tokens = multi_word_tokens
+                print(f"[local] name-only mode: restricted to multi-word tokens: {client_tokens}", flush=True)
+            else:
+                # If we only have single-word tokens (e.g. just a last name), keep them
+                # but log a warning — results may be broad.
+                print(f"[local] name-only mode: only single-word tokens available: {client_tokens}", flush=True)
 
         print(f"[local] client_tokens for cabinet search: {client_tokens}", flush=True)
 
@@ -1486,6 +1656,36 @@ def api_find_plat_local():
                 except Exception:
                     pass
 
+        # ── Auto-broaden: if 0 results and we targeted specific cabinets, retry ALL ──
+        # DISABLED in name-only mode (no deed detail) to prevent flooding with
+        # hundreds of false-positive name matches across all 6 cabinets.
+        all_cabs = list(CABINET_FOLDERS.keys())
+        if (not local_hits and set(target_cabs) != set(all_cabs) and client_tokens
+                and has_deed_detail):   # ← name-only mode skips broadening
+            print(f"[local] 0 results in target cabinet(s) {target_cabs} — broadening to all cabinets", flush=True)
+            broadened_reason = f"Broadened search: no results in {', '.join(target_cabs)} — scanning all cabinets"
+            for cab_letter in all_cabs:
+                if cab_letter in target_cabs:
+                    continue  # already searched
+                if not CABINET_FOLDERS.get(cab_letter):
+                    continue
+                for tok in client_tokens:
+                    try:
+                        for h in search_local_cabinet(cab_letter, "", tok, ""):
+                            if h["path"] not in seen_local_paths:
+                                seen_local_paths.add(h["path"])
+                                h["source"]   = "local"
+                                h["ref"]      = "broadened_search"
+                                h["strategy"] = "client_name"
+                                h["_tok_len"] = len(tok) + 50  # lower than direct matches
+                                local_hits.append(h)
+                    except Exception:
+                        pass
+            if local_hits:
+                targeting_reason = broadened_reason
+        elif not local_hits and not has_deed_detail:
+            print(f"[local] 0 results (name-only mode — auto-broaden disabled)", flush=True)
+
         # ── Sort: doc_number → kml_cab_ref → deed_cab_ref → client_name → prior_owner → name_match ─
         # doc_number = exact plat doc number match from file's leading number (highest confidence)
         strategy_order = {"doc_number": 0, "kml_cab_ref": 1, "deed_cab_ref": 2,
@@ -1494,6 +1694,12 @@ def api_find_plat_local():
             strategy_order.get(r.get("strategy", ""), 9),
             -(r.get("_tok_len") or 0)
         ))
+
+        # ── Cap total results to prevent UI flooding ──────────────────────────────
+        MAX_LOCAL_HITS = 25
+        if len(local_hits) > MAX_LOCAL_HITS:
+            print(f"[local] Capping {len(local_hits)} results to {MAX_LOCAL_HITS}", flush=True)
+            local_hits = local_hits[:MAX_LOCAL_HITS]
 
         return jsonify({
             "success":          True,
@@ -1505,6 +1711,7 @@ def api_find_plat_local():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e), "local": [], "kml_matches": []})
+
 
 
 
@@ -1861,6 +2068,68 @@ def api_download():
             "job_number": job_number,
             "subject_id": subject_id,
         })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ── extract deed info (lightweight — for Step 5 adjoiner plat targeting) ────────
+
+@app.route("/api/extract-deed-info", methods=["POST"])
+def api_extract_deed_info():
+    """
+    Extract basic deed metadata from a saved PDF for plat search targeting.
+
+    This is a lightweight alternative to full deed analysis — it extracts
+    Grantor, Grantee, Location (book/page) from the filename pattern, and
+    cabinet references from the PDF text.
+
+    Filename pattern:  {book-page} {Grantor} to {Grantee}.pdf
+    Example:           568-482 Martinez to Rael.pdf
+
+    Body:  { pdf_path: str }
+    Returns: { success, detail: { Grantor, Grantee, Location, ... } }
+    """
+    try:
+        data     = request.get_json() or {}
+        pdf_path = data.get("pdf_path", "").strip()
+        if not pdf_path or not os.path.isfile(pdf_path):
+            return jsonify({"success": False, "error": "File not found"})
+
+        fname = Path(pdf_path).stem  #  e.g. "568-482 Martinez to Rael"
+        detail: dict = {}
+
+        # ── Parse filename for Location / Grantor / Grantee ──────────────────
+        # Pattern:  "{book-page} {Grantor} to {Grantee}"
+        m = re.match(
+            r'^(\d+-\d+)\s+(.+?)\s+to\s+(.+)$', fname, re.I
+        )
+        if m:
+            detail["Location"] = m.group(1).strip()
+            detail["Grantor"]  = m.group(2).strip()
+            detail["Grantee"]  = m.group(3).strip()
+        else:
+            # Fall back: just split on " to " if present
+            if " to " in fname.lower():
+                parts = re.split(r'\s+to\s+', fname, maxsplit=1, flags=re.I)
+                if len(parts) == 2:
+                    detail["Grantor"] = parts[0].strip()
+                    detail["Grantee"] = parts[1].strip()
+
+        # ── Scan PDF text for cabinet references (first 2 pages) ─────────────
+        try:
+            text, _ = _extract_pdf_text(pdf_path)
+            if text:
+                cab_refs = parse_cabinet_refs({"text": text[:5000]})
+                if cab_refs:
+                    detail["_cab_refs"] = cab_refs
+                    # Also inject as text so parse_cabinet_refs works downstream
+                    detail["Reference"] = " ".join(r["raw"] for r in cab_refs)
+        except Exception:
+            pass
+
+        print(f"[extract-deed-info] {Path(pdf_path).name} → {detail}", flush=True)
+        return jsonify({"success": True, "detail": detail})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
@@ -2483,6 +2752,8 @@ def api_xml_map_geojson():
     Return a GeoJSON FeatureCollection for Leaflet rendering.
     Body: { highlight_upcs: [str], max_features: int }
     Response is gzip-compressed when the client accepts it (browsers always do).
+
+    Auto-builds the index if KML/KMZ files exist but the index hasn't been created yet.
     """
     try:
         data           = request.get_json() or {}
@@ -2491,6 +2762,18 @@ def api_xml_map_geojson():
         source_filter  = data.get("source_filter", "")
 
         survey  = get_survey_data_path()
+
+        # Auto-build index if it doesn't exist but KML/KMZ files are available
+        idx = xml_processor.load_index(survey)
+        if not idx:
+            xml_files = xml_processor.discover_xml_files(survey)
+            if xml_files:
+                print(f"[map-geojson] No index found — auto-building from {len(xml_files)} XML/KML/KMZ files...", flush=True)
+                build_result = xml_processor.build_index(survey)
+                print(f"[map-geojson] Auto-build complete: {build_result.get('total', 0)} parcels in {build_result.get('elapsed_sec', '?')}s", flush=True)
+            else:
+                print("[map-geojson] No index and no KML/KMZ files found in XML folder", flush=True)
+
         geojson = xml_processor.get_map_geojson(
             survey, highlight_upcs, max_features, source_filter=source_filter
         )
@@ -2999,7 +3282,20 @@ def api_analyze_deed():
 # ── run ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import socket as _sock
+    def _get_lan_ip():
+        try:
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+    _lan = _get_lan_ip()
     print("=" * 60)
-    print("  Deed & Plat Helper  —  http://localhost:5000")
+    print("  Deed & Plat Helper")
+    print(f"  Local:   http://localhost:5000")
+    print(f"  Network: http://{_lan}:5000")
     print("=" * 60)
-    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

@@ -14,7 +14,214 @@ const state = {
   adjoinParcels: [],
   searchResults: [],
   _dirty: false,           // tracks unsaved changes
+  // ── Profile state ──
+  activeProfile: null,     // currently active profile object
+  profiles: [],            // all available profiles
 };
+
+// ── Profile System ────────────────────────────────────────────────────────────
+
+/** Cookie helpers */
+function _setCookie(name, value, days = 365) {
+  const d = new Date();
+  d.setTime(d.getTime() + days * 86400000);
+  document.cookie = `${name}=${encodeURIComponent(value)};expires=${d.toUTCString()};path=/;SameSite=Lax`;
+}
+function _getCookie(name) {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+function _deleteCookie(name) {
+  document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;SameSite=Lax`;
+}
+
+/** Generate initials from a display name (up to 2 characters) */
+function _profileInitials(name) {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+/** Pick a deterministic gradient color for a profile based on its id */
+const _AVATAR_GRADIENTS = [
+  ['#2d8a6e', '#1f6b54'],  // green (default)
+  ['#7a4f9a', '#5c3876'],  // purple
+  ['#c9a227', '#9a7c1e'],  // gold
+  ['#3b5e99', '#2a4470'],  // blue
+  ['#da3633', '#a02a28'],  // red
+  ['#2ea043', '#1d7a32'],  // emerald
+  ['#e08050', '#bb5a30'],  // rust
+  ['#5ba8c8', '#3d7a9a'],  // teal
+];
+function _avatarGradient(profileId) {
+  let hash = 0;
+  for (let i = 0; i < (profileId || '').length; i++) hash = (hash * 31 + profileId.charCodeAt(i)) | 0;
+  const idx = Math.abs(hash) % _AVATAR_GRADIENTS.length;
+  return _AVATAR_GRADIENTS[idx];
+}
+
+/** Update the topbar badge with the current profile */
+function _updateProfileBadge() {
+  const avatarEl = document.getElementById('profileAvatar');
+  const nameEl = document.getElementById('profileName');
+  if (!avatarEl || !nameEl) return;
+
+  if (state.activeProfile) {
+    const p = state.activeProfile;
+    const [c1, c2] = _avatarGradient(p.id);
+    avatarEl.textContent = _profileInitials(p.display_name);
+    avatarEl.style.background = `linear-gradient(135deg, ${c1}, ${c2})`;
+    nameEl.textContent = p.display_name;
+  } else {
+    avatarEl.textContent = '?';
+    avatarEl.style.background = '';
+    nameEl.textContent = 'Select Profile';
+  }
+}
+
+/** Fetch all profiles from backend and populate state.profiles */
+async function _loadProfiles() {
+  try {
+    const res = await apiFetch('/profiles');
+    if (res.success) {
+      state.profiles = res.profiles || [];
+    }
+  } catch (e) {
+    console.error('Failed to load profiles:', e);
+  }
+  return state.profiles;
+}
+
+/** Activate a profile: set cookie, update state, refresh UI */
+async function switchProfile(profileId) {
+  const profile = state.profiles.find(p => p.id === profileId);
+  if (!profile) {
+    showToast('Profile not found', 'error');
+    return;
+  }
+
+  // Set cookie so backend can identify the user
+  _setCookie('profile_id', profileId);
+  state.activeProfile = profile;
+  _updateProfileBadge();
+  closeProfileSelector();
+
+  // Load this profile's credentials into the config form
+  try {
+    const res = await apiFetch('/config');
+    if (res.success && res.config) {
+      const cfgUser = document.getElementById('cfgUser');
+      const cfgPass = document.getElementById('cfgPass');
+      if (cfgUser) cfgUser.value = res.config.firstnm_user || '';
+      if (cfgPass) cfgPass.value = res.config.firstnm_pass || '';
+    }
+  } catch (_) {}
+
+  // Restore this profile's last session if present
+  state.lastSession = profile.last_session || null;
+  if (state.lastSession) {
+    const jobNum = document.getElementById('setupJobNum');
+    const client = document.getElementById('setupClient');
+    const jobType = document.getElementById('setupJobType');
+    if (jobNum) jobNum.value = state.lastSession.job_number || '';
+    if (client) client.value = state.lastSession.client_name || '';
+    if (jobType) jobType.value = state.lastSession.job_type || 'BDY';
+  }
+
+  // Reload recent jobs for context
+  loadRecentJobs();
+
+  // Re-check login with this profile's credentials
+  checkLogin();
+
+  showToast(`Switched to ${profile.display_name}`, 'success');
+}
+
+/** Show the profile selector modal */
+async function showProfileSelector() {
+  const overlay = document.getElementById('profileOverlay');
+  const grid = document.getElementById('profileGrid');
+  if (!overlay || !grid) return;
+
+  overlay.classList.remove('hidden');
+
+  // Refresh profiles from server
+  await _loadProfiles();
+
+  const activeId = state.activeProfile?.id || _getCookie('profile_id') || '';
+
+  let html = '';
+  for (const p of state.profiles) {
+    const isActive = p.id === activeId;
+    const [c1, c2] = _avatarGradient(p.id);
+    html += `
+      <div class="profile-card ${isActive ? 'profile-card-active' : ''}"
+           onclick="switchProfile('${p.id}')" title="Switch to ${escHtml(p.display_name)}">
+        ${isActive ? '<div class="profile-card-current">Current</div>' : ''}
+        <div class="profile-card-avatar" style="background:linear-gradient(135deg,${c1},${c2})">
+          ${_profileInitials(p.display_name)}
+        </div>
+        <div class="profile-card-name">${escHtml(p.display_name)}</div>
+      </div>`;
+  }
+
+  // "New Profile" card
+  html += `
+    <div class="profile-card profile-card-new" onclick="createNewProfile()" title="Create a new profile">
+      <div class="profile-card-avatar" style="font-size:24px;color:var(--text3)">+</div>
+      <div class="profile-card-name" style="color:var(--text3)">New Profile</div>
+    </div>`;
+
+  grid.innerHTML = html;
+}
+
+function closeProfileSelector() {
+  const overlay = document.getElementById('profileOverlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+/** Prompt for a name and create a new profile */
+async function createNewProfile() {
+  const name = prompt('Enter display name for the new profile:');
+  if (!name || !name.trim()) return;
+
+  try {
+    const res = await apiFetch('/profiles', 'POST', { display_name: name.trim() });
+    if (res.success && res.profile) {
+      showToast(`Profile "${name.trim()}" created!`, 'success');
+      state.profiles.push(res.profile);
+      await switchProfile(res.profile.id);
+    } else {
+      showToast('Failed to create profile: ' + (res.error || 'Unknown error'), 'error');
+    }
+  } catch (e) {
+    showToast('Error creating profile: ' + e.message, 'error');
+  }
+}
+
+/** Initialize profiles on page load — restore last active or prompt */
+async function _initProfiles() {
+  await _loadProfiles();
+
+  const savedId = _getCookie('profile_id');
+  if (savedId) {
+    const match = state.profiles.find(p => p.id === savedId);
+    if (match) {
+      state.activeProfile = match;
+      _updateProfileBadge();
+      return; // profile restored successfully
+    }
+  }
+
+  // No saved profile — if profiles exist, auto-show the selector
+  if (state.profiles.length > 0) {
+    _updateProfileBadge();
+    // Brief delay to let the page render first
+    setTimeout(() => showProfileSelector(), 600);
+  }
+}
+
 
 // ── Unsaved-changes guard ─────────────────────────────────────────────────────
 window.addEventListener('beforeunload', (e) => {
@@ -38,6 +245,9 @@ function _getAbortSignal(key) {
 // INIT & BOOTSTRAP
 // 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Initialize profile system — restores saved profile or prompts user
+  await _initProfiles();
+
   // Load config and recent jobs immediately  do NOT await checkLogin first
   // checkLogin hits 1stnmtitle.com which can block for up to 30s
   await loadConfig();
@@ -2566,11 +2776,16 @@ async function saveAdjDeed(subjId) {
   try {
     const res = await apiFetch('/search', 'POST', { name: lastName, operator: 'begins with' });
     if (!res.success) { showToast('Search error: ' + res.error, 'error'); return; }
-    if (!res.results || !res.results.length) {
-      showToast(`No deed records found for "${lastName}". Try searching manually in Step 2.`, 'warn');
+    // Filter to deed / conveyance instrument types — skip mortgages, liens, releases, etc.
+    const _DEED_TYPE_RE = /deed|warranty|quitclaim|grant|convey|patent|transfer|bargain|assign/i;
+    const deedResults = (res.results || []).filter(r =>
+      _DEED_TYPE_RE.test(r.instrument_type || '') || !r.instrument_type
+    );
+    if (!deedResults.length) {
+      showToast(`No deed-type records found for "${lastName}" (${(res.results||[]).length} non-deed records skipped). Try searching manually in Step 2.`, 'warn');
       return;
     }
-    _showAdjDeedPickModal(subjId, subj.name, res.results);
+    _showAdjDeedPickModal(subjId, subj.name, deedResults);
   } catch (e) {
     showToast('Search failed: ' + e.message, 'error');
   }
@@ -2709,8 +2924,19 @@ async function saveAdjPlat(subjId) {
   const adjName = subj.name;
   const lastName = adjName.split(',')[0].trim();
 
-  // Synthesize a minimal deed detail using the adjoiner name
-  const searchDetail = { 'Grantor': adjName, 'Grantee': '' };
+  // If the adjoiner already has a saved deed, try to extract its detail
+  // for book/page/Location — this gives us precise cabinet targeting.
+  let searchDetail = { 'Grantor': adjName, 'Grantee': '' };
+  if (subj.deed_saved && subj.deed_path) {
+    try {
+      showToast(`📄 Reading saved deed for "${lastName}" to target plat search…`, 'info');
+      const deedInfo = await apiFetch('/extract-deed-info', 'POST', { pdf_path: subj.deed_path });
+      if (deedInfo.success && deedInfo.detail) {
+        // Merge: keep adjoiner as Grantor but add Location/book/page from the pdf
+        searchDetail = { ...deedInfo.detail, 'Grantor': adjName };
+      }
+    } catch (e) { /* fall through to name-only search */ }
+  }
 
   showToast(`🔍 Searching all sources for "${lastName}" plat…`, 'info');
 
@@ -2775,14 +3001,17 @@ function _showAdjPlatPickModal(subjId, subj, localHits, onlineHits = []) {
     document.body.appendChild(overlay);
   }
 
-  const localRows = localHits.map((f, i) => `
+  // Cap displayed results to prevent UI flooding
+  const cappedLocalHits = localHits.slice(0, 20);
+  const localRows = cappedLocalHits.map((f, i) => `
     <tr style="cursor:pointer" onclick="_pickAdjPlat('${subjId}', 'local', ${i})">
       <td style="padding:7px 10px;font-size:12px;font-weight:600">${escHtml(f.display_name || f.file)}</td>
       <td style="padding:7px 10px;font-size:11px;color:var(--text3)">Cabinet ${escHtml(f.cabinet || '')}</td>
       <td style="padding:7px 10px"><span class="badge badge-local">${escHtml(f.strategy || 'Cabinet')}</span></td>
     </tr>`);
 
-  const onlineRows = onlineHits.map((r, i) => `
+  const cappedOnlineHits = onlineHits.slice(0, 15);
+  const onlineRows = cappedOnlineHits.map((r, i) => `
     <tr style="cursor:pointer" onclick="_pickAdjPlatOnline('${subjId}', ${i})">
       <td style="padding:7px 10px;font-size:12px;font-weight:600">${escHtml((r.grantor || '').split(',')[0] || r.grantor || r.doc_no)}</td>
       <td style="padding:7px 10px;font-size:11px;color:var(--text3)">${escHtml(r.recorded_date || '')}</td>
@@ -3700,7 +3929,7 @@ async function exportSession() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STEP 1: PROPERTY PICKER  (Leaflet.js — separate from Step 4 adjoiner picker)
+// UNIFIED PARCEL MAP PICKER  (Client Property + Adjoiners — single Leaflet map)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _propPicker = {
@@ -3712,9 +3941,12 @@ const _propPicker = {
   searchTimer: null,
   // Stores the chosen parcel so startSession can read it
   confirmedParcel: null,
-  // Source layer filter — default to the KML with better linework
-  sourceFilter: 'TC_Parcels_2024_og.kml',
+  // Source layer filter — default to '' (all layers)
+  sourceFilter: '',
   availableSources: [],
+  // ── Adjoiner picking (merged from old _kmlMap) ──
+  highlightUpcs: [],     // UPCs to mark as "client" (gold)
+  mapAddedNames: [],     // adjoiner names added this session via the picker
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -3740,6 +3972,23 @@ function clearPropertySelection() {
 
 async function showPropertyPicker() {
   document.getElementById('propPickerOverlay').classList.remove('hidden');
+
+  // Gather UPCs already matched to the client (from KML hits in step 3)
+  const clientUpcs = (state._kmlHits || []).map(h => h.upc).filter(Boolean);
+  if (_propPicker.confirmedParcel && _propPicker.confirmedParcel.upc) {
+    if (!clientUpcs.includes(_propPicker.confirmedParcel.upc)) {
+      clientUpcs.push(_propPicker.confirmedParcel.upc);
+    }
+  }
+  _propPicker.highlightUpcs = clientUpcs;
+
+  // Update action hint based on whether session is active
+  const hintEl = document.getElementById('pickerActionHint');
+  if (hintEl) {
+    hintEl.textContent = state.researchSession
+      ? 'Select your property or add neighboring parcels as adjoiners.'
+      : 'Click a parcel, then choose an action.';
+  }
 
   if (!_propPicker.map) {
     _initPropPickerMap();
@@ -3785,7 +4034,7 @@ async function _loadPropPickerMapData() {
   if (loaderEl) loaderEl.classList.remove('hidden');
   try {
     const res = await apiFetch('/xml/map-geojson', 'POST', {
-      highlight_upcs: [],
+      highlight_upcs: _propPicker.highlightUpcs || [],
       max_features: 100000,
       source_filter: _propPicker.sourceFilter || '',
     });
@@ -3845,32 +4094,35 @@ function _renderPropPickerLayer() {
     _propPicker.parcelLayer = null;
   }
 
+  // Board-aware styling (merged from old KML picker)
+  const boardNames = new Set(
+    (state.researchSession?.subjects || []).map(s => s.name.toLowerCase())
+  );
+
   _propPicker.parcelLayer = L.geoJSON(_propPicker.geojsonData, {
     renderer: _propPicker.renderer,
-    style: () => ({
-      fillColor: '#1a7fd4',
-      fillOpacity: 0.12,        // low fill — lets street labels show through
-      color: '#2196f3',   // vivid blue stroke stays crisp on light basemap
-      weight: 1.5,
-    }),
-    pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
-      radius: 5,
-      fillColor: 'rgba(79,172,254,0.55)',
-      color: '#4facfe',
-      weight: 1.5,
-      fillOpacity: 0.75,
-    }),
+    style: feature => _pickerParcelStyle(feature, boardNames),
+    pointToLayer: (feature, latlng) => {
+      const fill = _pickerParcelFill(feature, boardNames);
+      return L.circleMarker(latlng, {
+        radius: 6,
+        fillColor: fill,
+        color: fill,
+        weight: 1.5,
+        fillOpacity: 0.75,
+      });
+    },
     onEachFeature: (feature, layer) => {
       layer.on({
         click: e => { L.DomEvent.stopPropagation(e); _onPropParcelClick(feature, layer); },
         mouseover: () => {
           if (layer !== _propPicker.selectedLayer) {
-            layer.setStyle && layer.setStyle({ fillOpacity: 0.30, weight: 2.5, color: '#79c8f8' });
+            layer.setStyle && layer.setStyle({ fillOpacity: 0.80, weight: 2.5 });
           }
         },
         mouseout: () => {
           if (layer !== _propPicker.selectedLayer) {
-            layer.setStyle && layer.setStyle({ fillColor: '#1a7fd4', fillOpacity: 0.12, color: '#2196f3', weight: 1.5 });
+            layer.setStyle && layer.setStyle(_pickerParcelStyle(feature, boardNames));
           }
         },
       });
@@ -3891,14 +4143,40 @@ function _renderPropPickerLayer() {
   setTimeout(() => _propPicker.map && _propPicker.map.invalidateSize(), 200);
 }
 
+// ── Styling helpers (board-aware coloring) ──────────────────────────────────
+function _pickerParcelFill(feature, boardNames) {
+  const p = feature.properties;
+  if (p.highlight) return '#e3c55a';                                      // client / highlighted → gold
+  if (boardNames.has((p.owner || '').toLowerCase())) return '#b080e0';   // on research board → purple
+  return '#4facfe';                                                        // regular parcel → blue
+}
+
+function _pickerParcelStyle(feature, boardNames) {
+  const fill = _pickerParcelFill(feature, boardNames);
+  const highlight = feature.properties.highlight;
+  const onBoard = boardNames.has((feature.properties.owner || '').toLowerCase());
+  return {
+    fillColor: fill,
+    fillOpacity: highlight ? 0.50 : onBoard ? 0.35 : 0.12,
+    color: highlight ? '#f0c040' : onBoard ? '#b080e0' : '#2196f3',
+    weight: highlight ? 2.5 : onBoard ? 2.0 : 1.5,
+  };
+}
+
 // ── Parcel click handler ──────────────────────────────────────────────────────
 
 function _onPropParcelClick(feature, layer) {
-  // Deselect previous
+  // Deselect previous (board-aware styling)
   if (_propPicker.selectedLayer && _propPicker.selectedLayer !== layer) {
-    _propPicker.selectedLayer.setStyle && _propPicker.selectedLayer.setStyle({
-      fillColor: '#1a7fd4', fillOpacity: 0.12, color: '#2196f3', weight: 1.5,
-    });
+    const boardNames = new Set(
+      (state.researchSession?.subjects || []).map(s => s.name.toLowerCase())
+    );
+    _propPicker.selectedLayer.setStyle && _propPicker.selectedLayer.setStyle(
+      _pickerParcelStyle(
+        { properties: _propPicker.selectedLayer.feature?.properties || {} },
+        boardNames
+      )
+    );
   }
 
   layer.setStyle && layer.setStyle({
@@ -3922,6 +4200,10 @@ function _onPropParcelClick(feature, layer) {
 
   document.getElementById('propPickerDetails').innerHTML = details;
   document.getElementById('btnConfirmProperty').disabled = false;
+
+  // Enable adjoiner button
+  const adjBtn = document.getElementById('btnPickerAddAdjoiner');
+  if (adjBtn) adjBtn.disabled = false;
 
   // Also highlight this item in the side list (if visible from search)
   document.querySelectorAll('.prop-picker-result-item').forEach(el => {
@@ -4063,9 +4345,13 @@ function propPickerResetView() {
   if (!_propPicker.parcelLayer || !_propPicker.map) return;
   document.getElementById('propPickerSearch').value = '';
   // Restore all polygon styles to default before calling search reset
+  const boardNames = new Set(
+    (state.researchSession?.subjects || []).map(s => s.name.toLowerCase())
+  );
   _propPicker.parcelLayer.eachLayer(layer => {
     if (layer !== _propPicker.selectedLayer && layer.setStyle) {
-      layer.setStyle({ fillColor: '#1a7fd4', fillOpacity: 0.12, color: '#2196f3', weight: 1.5 });
+      const f = layer.feature;
+      if (f) layer.setStyle(_pickerParcelStyle(f, boardNames));
     }
   });
   onPropPickerSearch('');
@@ -4106,18 +4392,66 @@ function confirmPropertySelection() {
   document.getElementById('selectedParcelMeta').textContent = meta;
   document.getElementById('selectedParcelCard').classList.remove('hidden');
 
-  // Auto-zoom: briefly fly to the selected parcel so user sees it confirmed
-  if (_propPicker.selectedLayer && _propPicker.map) {
-    try {
-      const b = _propPicker.selectedLayer.getBounds ? _propPicker.selectedLayer.getBounds() : null;
-      if (b && b.isValid()) {
-        _propPicker.map.flyToBounds(b, { padding: [80, 80], maxZoom: 18, duration: 0.6 });
-      }
-    } catch (_) { }
+  // Add UPC to highlight set so it renders gold
+  if (p.upc && !_propPicker.highlightUpcs.includes(p.upc)) {
+    _propPicker.highlightUpcs.push(p.upc);
+  }
+  if (p) p.highlight = true;
+
+  // Colour the selected polygon gold (client)
+  _propPicker.selectedLayer && _propPicker.selectedLayer.setStyle && _propPicker.selectedLayer.setStyle({
+    fillColor: '#e3c55a', fillOpacity: 0.55, color: '#f0c040', weight: 2.5,
+  });
+
+  // Disable the "Select as Client" button (already selected)
+  document.getElementById('btnConfirmProperty').disabled = true;
+  document.getElementById('btnConfirmProperty').innerHTML = '✓ Client Selected';
+
+  // Update action hint — now they can pick adjoiners
+  const hintEl = document.getElementById('pickerActionHint');
+  if (hintEl) hintEl.textContent = 'Now click neighboring parcels to add as adjoiners.';
+
+  // Stay open so user can keep picking adjoiners
+  showToast(`✓ Property selected: ${clientName} — now pick adjoiners!`, 'success');
+}
+
+// ── Add selected parcel as adjoiner (unified picker) ─────────────────────────
+
+async function pickerAddSelectedAsAdjoiner() {
+  if (!_propPicker.selectedProps) return;
+  const name = (_propPicker.selectedProps.owner || '').trim();
+  if (!name) { showToast('No owner name for this parcel', 'warn'); return; }
+
+  if (!state.researchSession) {
+    showToast('Start a research session first to add adjoiners', 'warn');
+    return;
   }
 
-  closePropPicker();
-  showToast(`✓ Property selected: ${clientName}`, 'success');
+  const ok = await addFoundAdjoiner(name);
+
+  if (ok) {
+    if (!_propPicker.mapAddedNames.includes(name)) {
+      _propPicker.mapAddedNames.push(name);
+      _updatePickerAddedList();
+    }
+    _propPicker.selectedLayer && _propPicker.selectedLayer.setStyle &&
+      _propPicker.selectedLayer.setStyle({
+        fillColor: '#b080e0', fillOpacity: 0.55, color: '#b080e0', weight: 2,
+      });
+  }
+}
+
+// ── "Adjoiners Added" sidebar list ──────────────────────────────────────────
+function _updatePickerAddedList() {
+  const el = document.getElementById('pickerAddedList');
+  if (!el) return;
+  if (!_propPicker.mapAddedNames.length) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--text3);font-style:italic">None yet</div>';
+    return;
+  }
+  el.innerHTML = _propPicker.mapAddedNames.map(n =>
+    `<div style="font-size:11px;padding:4px 8px;background:rgba(176,128,224,.12);border:1px solid rgba(176,128,224,.25);border-radius:6px;color:#b080e0">${escHtml(n)}</div>`
+  ).join('');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4189,441 +4523,26 @@ async function _lookupKmlCardAddress(pi) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KML PARCEL MAP PICKER  (Leaflet.js)
+// OLD KML MAP PICKER — REMOVED (merged into unified _propPicker above)
+// Backward-compat aliases for any leftover references:
 // ─────────────────────────────────────────────────────────────────────────────
-
-const _kmlMap = {
-  map: null,   // Leaflet map instance
-  parcelLayer: null,   // GeoJSON layer for all parcels
-  selectedLayer: null,   // currently selected polygon layer
-  selectedProps: null,   // properties of selected feature
-  geojsonData: null,   // cached GeoJSON FeatureCollection
-  highlightUpcs: [],     // UPCs to mark as "client"
-  mapAddedNames: [],     // names added this session via the picker
-  // Source layer filter — default to the KML with better linework
-  sourceFilter: 'TC_Parcels_2024_og.kml',
-  availableSources: [],
-};
-
-// ── Open modal ──────────────────────────────────────────────────────────────
-async function showKmlMapPicker() {
-  document.getElementById('kmlMapPickerOverlay').classList.remove('hidden');
-
-  // Gather UPCs already matched to the client deed (from KML hits in step 3)
-  const clientUpcs = (state._kmlHits || []).map(h => h.upc).filter(Boolean);
-  _kmlMap.highlightUpcs = clientUpcs;
-
-  // Init map only once
-  if (!_kmlMap.map) {
-    _initKmlLeafletMap();
-  } else {
-    // Re-size in case the modal was resized or re-opened
-    setTimeout(() => _kmlMap.map && _kmlMap.map.invalidateSize(), 120);
-  }
-
-  // Load / reload map data
-  await _loadKmlMapData();
-}
-
-function closeKmlMapPicker() {
-  document.getElementById('kmlMapPickerOverlay').classList.add('hidden');
-}
-
-// ── Initialise Leaflet ───────────────────────────────────────────────────────
-function _initKmlLeafletMap() {
-  const container = document.getElementById('kmlLeafletMap');
-
-  // Canvas renderer — MUCH faster than default SVG for 60k+ polygons
-  const canvasRenderer = L.canvas({ padding: 0.5 });
-
-  _kmlMap.map = L.map(container, {
-    center: [36.6, -105.5],   // Taos County, NM
-    zoom: 11,
-    zoomControl: true,
-    attributionControl: true,
-    preferCanvas: true,
-  });
-  _kmlMap.renderer = canvasRenderer;
-
-  // Voyager — clear road labels, neutral basemap
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_labels_under/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 20,
-  }).addTo(_kmlMap.map);
-}
-
-// ── Load GeoJSON from backend ────────────────────────────────────────────────
-async function _loadKmlMapData() {
-  const statusEl = document.getElementById('kmlMapStatus');
-  const loaderEl = document.getElementById('kmlMapLoader');
-  const countEl = document.getElementById('kmlMapSearchCount');
-  statusEl.textContent = 'Loading parcels…';
-  if (loaderEl) loaderEl.classList.remove('hidden');
-  if (countEl) countEl.textContent = '';
-
-  try {
-    const res = await apiFetch('/xml/map-geojson', 'POST', {
-      highlight_upcs: _kmlMap.highlightUpcs,
-      max_features: 100000,
-      source_filter: _kmlMap.sourceFilter || '',
-    });
-
-    if (!res.success) {
-      statusEl.textContent = 'Error: ' + (res.error || 'Unknown');
-      return;
-    }
-
-    if (!res.total) {
-      statusEl.textContent = 'No parcels in index. Build KML index first.';
-      return;
-    }
-
-    _kmlMap.geojsonData = res.geojson;
-    statusEl.textContent = `${res.total.toLocaleString()} parcels loaded`;
-    if (countEl) countEl.textContent = res.total.toLocaleString() + ' parcels';
-
-    // Populate source layer dropdown
-    if (res.sources && res.sources.length) {
-      _kmlMap.availableSources = res.sources;
-      _populateSourceDropdown('kmlMapSourceFilter', res.sources, _kmlMap.sourceFilter);
-    }
-
-    _renderKmlParcelLayer();
-  } catch (e) {
-    statusEl.textContent = 'Load failed: ' + e.message;
-  } finally {
-    if (loaderEl) loaderEl.classList.add('hidden');
-  }
-}
-
-/** Called when the user changes the Layer dropdown in the KML Map Picker */
-function onKmlMapSourceChange(value) {
-  _kmlMap.sourceFilter = value;
-  _loadKmlMapData();
-}
-
-// ── Build / replace Leaflet GeoJSON layer ────────────────────────────────────
-function _renderKmlParcelLayer() {
-  if (_kmlMap.parcelLayer) {
-    _kmlMap.map.removeLayer(_kmlMap.parcelLayer);
-    _kmlMap.parcelLayer = null;
-  }
-
-  // Names already on the research board (for colouring)
-  const boardNames = new Set(
-    (state.researchSession?.subjects || []).map(s => s.name.toLowerCase())
-  );
-
-  _kmlMap.parcelLayer = L.geoJSON(_kmlMap.geojsonData, {
-    renderer: _kmlMap.renderer,
-    style: feature => _kmlParcelStyle(feature, boardNames),
-    pointToLayer: (feature, latlng) => {
-      const fill = _kmlParcelFill(feature, boardNames);
-      return L.circleMarker(latlng, {
-        radius: 6,
-        fillColor: fill,
-        color: fill,
-        weight: 1.5,
-        fillOpacity: 0.75,
-      });
-    },
-    onEachFeature: (feature, layer) => {
-      layer.on({
-        click: e => { L.DomEvent.stopPropagation(e); _onKmlParcelClick(feature, layer); },
-        mouseover: e => {
-          if (layer !== _kmlMap.selectedLayer) {
-            layer.setStyle && layer.setStyle({ fillOpacity: 0.80, weight: 2.5 });
-          }
-        },
-        mouseout: e => {
-          if (layer !== _kmlMap.selectedLayer) {
-            layer.setStyle && layer.setStyle(_kmlParcelStyle(feature, boardNames));
-          }
-        },
-      });
-
-      // Enriched tooltip with owner, UPC, book/page, cabinet
-      const p = feature.properties;
-      const ttLines2 = [`<b>${p.owner || '(no name)'}</b>`];
-      if (p.upc) ttLines2.push(`<span style="font-size:10px;opacity:.7">UPC: ${p.upc}</span>`);
-      if (p.book || p.page) ttLines2.push(`<span style="font-size:10px;opacity:.65">Bk ${p.book || ''}/${p.page || ''}</span>`);
-      if (p.cab_refs_str) ttLines2.push(`<span style="font-size:10px;opacity:.65">Cab: ${p.cab_refs_str}</span>`);
-      layer.bindTooltip(ttLines2.join('<br>'), { sticky: true, className: 'kml-tooltip', opacity: 0.97 });
-    },
-  }).addTo(_kmlMap.map);
-
-  // Fit map to data bounds
-  try {
-    const bounds = _kmlMap.parcelLayer.getBounds();
-    if (bounds.isValid()) _kmlMap.map.fitBounds(bounds, { padding: [20, 20] });
-  } catch (_) { }
-
-  // Invalidate size now that modal is fully displayed
-  setTimeout(() => _kmlMap.map && _kmlMap.map.invalidateSize(), 150);
-
-  // Add pulse rings for any client / highlighted parcels
-  setTimeout(_addClientPulseRings, 400);
-}
-
-// ── Styling helpers ──────────────────────────────────────────────────────────
-function _kmlParcelFill(feature, boardNames) {
-  const p = feature.properties;
-  if (p.highlight) return '#e3c55a';                                      // client / highlighted → gold
-  if (boardNames.has((p.owner || '').toLowerCase())) return '#b080e0';   // on research board → purple
-  return '#4facfe';                                                        // regular parcel → blue
-}
-
-function _kmlParcelStyle(feature, boardNames) {
-  const fill = _kmlParcelFill(feature, boardNames);
-  const highlight = feature.properties.highlight;
-  const onBoard = boardNames.has((feature.properties.owner || '').toLowerCase());
-  return {
-    fillColor: fill,
-    fillOpacity: highlight ? 0.50 : onBoard ? 0.35 : 0.12,  // low fill lets labels show through
-    color: highlight ? '#f0c040' : onBoard ? '#b080e0' : '#2196f3',  // vivid strokes on light basemap
-    weight: highlight ? 2.5 : onBoard ? 2.0 : 1.5,
-  };
-}
-
-// ── Add a DOM pulse ring over the centroid of highlighted (client) parcels ───
-function _addClientPulseRings() {
-  // Remove any old rings first
-  document.querySelectorAll('.parcel-pulse-ring').forEach(el => el.remove());
-  if (!_kmlMap.parcelLayer || !_kmlMap.map) return;
-
-  _kmlMap.parcelLayer.eachLayer(layer => {
-    if (!layer.feature || !layer.feature.properties.highlight) return;
-    try {
-      let latlng;
-      if (layer.getLatLng) {
-        latlng = layer.getLatLng();
-      } else if (layer.getBounds) {
-        latlng = layer.getBounds().getCenter();
-      } else return;
-
-      const pt = _kmlMap.map.latLngToContainerPoint(latlng);
-      const ring = document.createElement('div');
-      ring.className = 'parcel-pulse-ring';
-      ring.style.left = pt.x + 'px';
-      ring.style.top = pt.y + 'px';
-      // Find the map container element
-      const pane = _kmlMap.map.getPanes().overlayPane;
-      pane.appendChild(ring);
-    } catch (_) { }
-  });
-}
-
-// ── Click handler ────────────────────────────────────────────────────────────
-function _onKmlParcelClick(feature, layer) {
-  // Deselect previous
-  if (_kmlMap.selectedLayer && _kmlMap.selectedLayer !== layer) {
-    const boardNames = new Set(
-      (state.researchSession?.subjects || []).map(s => s.name.toLowerCase())
-    );
-    _kmlMap.selectedLayer.setStyle &&
-      _kmlMap.selectedLayer.setStyle(_kmlParcelStyle(
-        { properties: _kmlMap.selectedLayer.feature?.properties || {} },
-        boardNames
-      ));
-  }
-
-  // Highlight selected
-  layer.setStyle && layer.setStyle({
-    fillColor: '#56d3a0',
-    fillOpacity: 0.65,
-    color: '#56d3a0',
-    weight: 2.5,
-  });
-
-  _kmlMap.selectedLayer = layer;
-  _kmlMap.selectedProps = feature.properties;
-
-  // Update info panel
-  const p = feature.properties;
-  document.getElementById('kmlInfoOwner').textContent = p.owner || '(No Name)';
-
-  let details = '';
-  if (p.upc) details += `<b>UPC:</b> ${escHtml(p.upc)}<br>`;
-  if (p.book || p.page) details += `<b>Book/Page:</b> ${escHtml(p.book)}/${escHtml(p.page)}<br>`;
-  if (p.cab_refs_str) details += `<b>Cabinet:</b> ${escHtml(p.cab_refs_str)}<br>`;
-  if (p.plat) details += `<b>Plat:</b> ${escHtml(p.plat.substring(0, 80))}${p.plat.length > 80 ? '…' : ''}<br>`;
-  // Address placeholder — will be filled async
-  details += `<div id="kmlInfoAddress" style="margin-top:4px"><span style="color:var(--text3);font-size:11px">📍 Looking up address…</span></div>`;
-  if (!details) details = '<span style="color:var(--text3);font-style:italic">No extended data.</span>';
-
-  document.getElementById('kmlInfoDetails').innerHTML = details;
-
-  // Enable action buttons
-  document.getElementById('btnKmlAddAdjoiner').disabled = false;
-  document.getElementById('btnKmlMarkClient').disabled = false;
-
-  // ── Async address lookup ───────────────────────────────────────────────
-  const centroid = p._centroid || (feature.geometry && feature.geometry.type === 'Point'
-    ? feature.geometry.coordinates : null);
-  const addrLat = centroid ? centroid[1] : 0;
-  const addrLon = centroid ? centroid[0] : 0;
-  lookupPropertyAddress({ upc: p.upc || '', lat: addrLat, lon: addrLon }).then(res => {
-    const el = document.getElementById('kmlInfoAddress');
-    if (!el) return;
-    if (res && res.success) {
-      const srcIcon = res.source === 'arcgis' ? '🏛️' : '📍';
-      const srcLabel = res.source === 'arcgis' ? 'Assessor' : 'OSM';
-      let html = `<span style="font-size:11px;color:#4ecdc4">${srcIcon} ${escHtml(res.short_address)}</span>`;
-      if (res.legal_description) {
-        html += `<br><span style="font-size:10px;color:var(--text3)" title="${escHtml(res.legal_description)}">📋 ${escHtml(res.legal_description.substring(0, 70))}${res.legal_description.length > 70 ? '…' : ''}</span>`;
-      }
-      if (res.owner_official) {
-        html += `<br><span style="font-size:10px;color:var(--text3)">👤 ${escHtml(res.owner_official)} <span style="opacity:.5">(assessor)</span></span>`;
-      }
-      if (res.zipcode) {
-        html += ` <span style="font-size:10px;color:var(--text3)">· ${escHtml(res.zipcode)}</span>`;
-      }
-      el.innerHTML = html;
-    } else {
-      el.innerHTML = `<span style="font-size:10px;color:var(--text3);opacity:.5">📍 Address unavailable</span>`;
-    }
-  });
-}
-
-// ── Action: Add as Adjoiner ──────────────────────────────────────────────────
-async function kmlAddSelectedAsAdjoiner() {
-  if (!_kmlMap.selectedProps) return;
-  const name = (_kmlMap.selectedProps.owner || '').trim();
-  if (!name) { showToast('No owner name for this parcel', 'warn'); return; }
-
-  const ok = await addFoundAdjoiner(name);
-
-  // Only update the visual list and re-colour if the add actually succeeded
-  if (ok) {
-    // Track in picker's added list
-    if (!_kmlMap.mapAddedNames.includes(name)) {
-      _kmlMap.mapAddedNames.push(name);
-      _updateKmlAddedList();
-    }
-
-    // Re-colour the selected polygon to board colour
-    _kmlMap.selectedLayer && _kmlMap.selectedLayer.setStyle &&
-      _kmlMap.selectedLayer.setStyle({
-        fillColor: '#b080e0',
-        fillOpacity: 0.55,
-        color: '#b080e0',
-        weight: 2,
-      });
-  }
-}
-
-// ── Action: Mark as Client Parcel ────────────────────────────────────────────
-function kmlMarkSelectedAsClient() {
-  if (!_kmlMap.selectedProps) return;
-  const upc = _kmlMap.selectedProps.upc || '';
-
-  // Add UPC to highlight set
-  if (upc && !_kmlMap.highlightUpcs.includes(upc)) {
-    _kmlMap.highlightUpcs.push(upc);
-  }
-
-  // Re-colour just this selected layer
-  _kmlMap.selectedLayer && _kmlMap.selectedLayer.setStyle && _kmlMap.selectedLayer.setStyle({
-    fillColor: '#e3c55a',
-    fillOpacity: 0.55,
-    color: '#e3c55a',
-    weight: 2.5,
-  });
-
-  // Patch the feature properties so future re-renders respect it
-  if (_kmlMap.selectedProps) _kmlMap.selectedProps.highlight = true;
-
-  showToast(`Marked "${_kmlMap.selectedProps.owner}" as client parcel`, 'success');
-  document.getElementById('btnKmlMarkClient').disabled = true;
-}
-
-// ── Owner name search / filter ───────────────────────────────────────────────
-let _kmlSearchTimer = null;
-function kmlMapOwnerSearch(query) {
-  clearTimeout(_kmlSearchTimer);
-  _kmlSearchTimer = setTimeout(() => _doKmlOwnerSearch(query.trim().toLowerCase()), 280);
-}
-
-function _doKmlOwnerSearch(q) {
-  if (!_kmlMap.parcelLayer) return;
-  const statusEl = document.getElementById('kmlMapStatus');
-  const countEl = document.getElementById('kmlMapSearchCount');
-
-  if (!q) {
-    // Reset all styles
-    const boardNames = new Set(
-      (state.researchSession?.subjects || []).map(s => s.name.toLowerCase())
-    );
-    _kmlMap.parcelLayer.eachLayer(layer => {
-      const f = layer.feature;
-      if (f && layer.setStyle) layer.setStyle(_kmlParcelStyle(f, boardNames));
-    });
-    const total = (_kmlMap.geojsonData?.features?.length || 0).toLocaleString();
-    statusEl.textContent = `${total} parcels`;
-    if (countEl) countEl.textContent = '';
-    return;
-  }
-
-  let hits = 0;
-  const firstHitBounds = [];
-
-  _kmlMap.parcelLayer.eachLayer(layer => {
-    const f = layer.feature;
-    if (!f || !layer.setStyle) return;
-    const owner = (f.properties?.owner || '').toLowerCase();
-    const match = owner.includes(q);
-    if (match) {
-      hits++;
-      layer.setStyle({ fillColor: '#56d3a0', fillOpacity: 0.75, color: '#56d3a0', weight: 2 });
-      try {
-        const b = layer.getBounds?.();
-        if (b && firstHitBounds.length < 5) firstHitBounds.push(b);
-      } catch (_) { }
-    } else {
-      // Dim-out style — visible outline on dark tiles, very low fill
-      layer.setStyle({ fillColor: '#4facfe', fillOpacity: 0.04, color: 'rgba(79,172,254,0.15)', weight: 0.8 });
-    }
-  });
-
-  const matchLabel = `${hits} match${hits !== 1 ? 'es' : ''}`;
-  statusEl.textContent = `${matchLabel} for "${q}"`;
-  if (countEl) countEl.textContent = matchLabel;
-
-  // Pan to first match
-  if (firstHitBounds.length) {
-    try {
-      let combined = firstHitBounds[0];
-      firstHitBounds.slice(1).forEach(b => { combined = combined.extend(b); });
-      _kmlMap.map.fitBounds(combined, { padding: [40, 40], maxZoom: 16 });
-    } catch (_) { }
-  }
-}
-
-// ── Reset map view ───────────────────────────────────────────────────────────
-function kmlMapResetView() {
-  if (!_kmlMap.parcelLayer || !_kmlMap.map) return;
-  document.getElementById('kmlMapSearch').value = '';
-  const countEl = document.getElementById('kmlMapSearchCount');
-  if (countEl) countEl.textContent = '';
-  kmlMapOwnerSearch('');
-  try {
-    const bounds = _kmlMap.parcelLayer.getBounds();
-    if (bounds.isValid()) _kmlMap.map.fitBounds(bounds, { padding: [20, 20] });
-  } catch (_) { }
-}
-
-// ── "Added this session" sidebar list ───────────────────────────────────────
-function _updateKmlAddedList() {
-  const el = document.getElementById('kmlMapAddedList');
-  if (!_kmlMap.mapAddedNames.length) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--text3);font-style:italic">None yet</div>';
-    return;
-  }
-  el.innerHTML = _kmlMap.mapAddedNames.map(n =>
-    `<div style="font-size:11px;padding:4px 8px;background:rgba(176,128,224,.12);border:1px solid rgba(176,128,224,.25);border-radius:6px;color:#b080e0">${escHtml(n)}</div>`
-  ).join('');
-}
+const _kmlMap = _propPicker;  // alias so any stray _kmlMap.xxx access works
+function showKmlMapPicker() { showPropertyPicker(); }
+function closeKmlMapPicker() { closePropPicker(); }
+function kmlAddSelectedAsAdjoiner() { pickerAddSelectedAsAdjoiner(); }
+function kmlMarkSelectedAsClient() { confirmPropertySelection(); }
+function kmlMapOwnerSearch(q) { onPropPickerSearch(q); }
+function kmlMapResetView() { propPickerResetView(); }
+function onKmlMapSourceChange(val) { onPropPickerSourceChange(val); }
+function _updateKmlAddedList() { _updatePickerAddedList(); }
+function _kmlParcelFill(f, b) { return _pickerParcelFill(f, b); }
+function _kmlParcelStyle(f, b) { return _pickerParcelStyle(f, b); }
+function _initKmlLeafletMap() { _initPropPickerMap(); }
+function _loadKmlMapData() { return _loadPropPickerMapData(); }
+function _renderKmlParcelLayer() { _renderPropPickerLayer(); }
+function _onKmlParcelClick(f, l) { _onPropParcelClick(f, l); }
+function _doKmlOwnerSearch(q) { _doPropPickerSearch(q); }
+function _addClientPulseRings() { /* pulse rings removed */ }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PLAT PREVIEW PANEL (Feature #1)
@@ -4852,7 +4771,7 @@ function _handleGlobalKeyboard(e) {
 
   // ── Escape: close any open modal ─────────────────────────────────────────
   if (e.key === 'Escape') {
-    const modals = ['settingsOverlay', 'cabinetOverlay', 'kmlIndexOverlay', 'propPickerOverlay', 'kmlMapPickerOverlay'];
+    const modals = ['settingsOverlay', 'cabinetOverlay', 'kmlIndexOverlay', 'propPickerOverlay'];
     for (const id of modals) {
       const el = document.getElementById(id);
       if (el && !el.classList.contains('hidden')) {

@@ -1,11 +1,13 @@
 {
-  "survey_drive": "E",
+  "id": "e1273b1f3791",
+  "display_name": "Tina",
   "firstnm_user": "redtail",
   "firstnm_pass": "301Awing",
-  "firstnm_url": "",
   "last_session": {
     "job_number": 3001,
     "client_name": "Garza, Veronica",
     "job_type": "BDY"
-  }
+  },
+  "theme": "dark",
+  "created": "2026-04-01T11:11:03.252130"
 }
