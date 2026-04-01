@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory, Response, make_response
 import requests as req_lib
 from bs4 import BeautifulSoup
-import os, re, json, traceback, subprocess, gzip, math, shutil
+import os, re, json, traceback, subprocess, gzip, math, shutil, tempfile
 from collections import Counter
 from pathlib import Path
 import fitz          # PyMuPDF  — PDF → image
@@ -165,6 +165,17 @@ def _get_web_session(profile_id: str | None = None) -> req_lib.Session:
 
 # Backward-compat: callers that still reference `web_session` get the default
 web_session = _get_web_session()
+
+def _session() -> req_lib.Session:
+    """Return the web session for the current request's profile.
+    Reads the profile_id cookie set by the frontend and dispatches to
+    the correct per-user requests.Session.  Falls back to the shared
+    default session if no cookie is present."""
+    try:
+        pid = request.cookies.get('profile_id')
+    except RuntimeError:
+        pid = None  # called outside request context
+    return _get_web_session(pid)
 
 # ── helpers (load_config / save_config defined above, before drive detection) ──
 
@@ -459,7 +470,8 @@ def api_login():
         remember = data.get("remember", False)
 
         # Fetch login page to discover form
-        resp = web_session.get(BASE_URL + "/", timeout=8)
+        sess = _session()
+        resp = sess.get(BASE_URL + "/", timeout=8)
         soup = BeautifulSoup(resp.text, "lxml")
         form = soup.find("form")
         if not form:
@@ -502,7 +514,7 @@ def api_login():
                 elif itype == 'text' and ('user' in iname or 'login' in iname):
                     form_data[inp['name']] = username
 
-        post_resp = web_session.post(action, data=form_data, timeout=8)
+        post_resp = sess.post(action, data=form_data, timeout=8)
         # Success = we landed on the search/welcome page, NOT back on login
         landed_url = post_resp.url.lower()
         success = ('hfweb' in landed_url or 'new search' in post_resp.text.lower() or
@@ -526,7 +538,7 @@ def api_login():
 
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
-    web_session.cookies.clear()
+    _session().cookies.clear()
     return jsonify({"success": True})
 
 # extract_trs — imported from helpers.metes_bounds
@@ -546,7 +558,8 @@ def api_search():
         operator = op_map.get(data.get("operator", "contains"), "contains")
 
         search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
-        resp = web_session.get(search_url, timeout=15)
+        sess = _session()
+        resp = sess.get(search_url, timeout=15)
 
         # Detect redirect back to login page
         landed = resp.url.lower().rstrip('/')
@@ -583,7 +596,7 @@ def api_search():
             form_data["FIELD19"] = address
             form_data["SEARCHTYPE19"] = operator
 
-        post_resp = web_session.post(action, data=form_data, timeout=20)
+        post_resp = sess.post(action, data=form_data, timeout=20)
         soup2 = BeautifulSoup(post_resp.text, "html.parser")
 
         # Parse results table
@@ -652,7 +665,7 @@ def api_chain_search():
             # Search for current_name as GRANTEE (find deed where they received property)
             search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
             try:
-                resp = web_session.get(search_url, timeout=15)
+                resp = sess.get(search_url, timeout=15)
             except Exception:
                 stop_reason = "Network error during search"
                 break
@@ -675,7 +688,7 @@ def api_chain_search():
 
             action = BASE_URL + "/scripts/hflook.asp"
             try:
-                post_resp = web_session.post(action, data=form_data, timeout=20)
+                post_resp = sess.post(action, data=form_data, timeout=20)
             except Exception:
                 stop_reason = f"Network error searching for {current_name}"
                 break
@@ -771,7 +784,7 @@ def api_document(doc_no):
             search_row = body.get("search_result", {})
 
         url = f"{BASE_URL}/scripts/hfpage.asp?Appl=FNM&Doctype=TP&DocNo={doc_no}&FormUser={username}"
-        resp = web_session.get(url, timeout=15)
+        resp = _session().get(url, timeout=15)
         soup = BeautifulSoup(resp.text, "lxml")
 
         detail = {"doc_no": doc_no}
@@ -848,7 +861,7 @@ def parse_adjoiner_names(detail: dict) -> list[dict]:
 
 
 
-def find_adjoiners_online(location: str, grantor: str) -> list[dict]:
+def find_adjoiners_online(location: str, grantor: str, sess: req_lib.Session | None = None) -> list[dict]:
     """
     Search online records for deeds in the same location book/page range.
     Location format: M568-482 → book 568, search 5 pages around 482.
@@ -867,7 +880,8 @@ def find_adjoiners_online(location: str, grantor: str) -> list[dict]:
     # Search online by location prefix (book number)
     try:
         search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
-        resp = web_session.get(search_url, timeout=12)
+        _s = sess or _session()
+        resp = _s.get(search_url, timeout=12)
         if "FIELD14" not in resp.text and "CROSSNAMEFIELD" not in resp.text:
             return results  # not logged in
 
@@ -882,7 +896,7 @@ def find_adjoiners_online(location: str, grantor: str) -> list[dict]:
         fd["FIELD14"]    = book + "-"
         fd["FIELD14TYPE"] = "begin"
 
-        post = web_session.post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=20)
+        post = _s.post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=20)
         soup2 = BeautifulSoup(post.text, "html.parser")
 
         # Collect unique grantors/grantees from nearby records (skip our own grantor)
@@ -1193,7 +1207,7 @@ def api_find_adjoiners():
         online_count = 0
         if len(results) < 10:
             print(f"[adjoiners] online search: location={location!r} grantor={grantor!r}", flush=True)
-            online = find_adjoiners_online(location, grantor)
+            online = find_adjoiners_online(location, grantor, sess=_session())
             for om in online:
                 if online_count >= MAX_ONLINE:
                     break
@@ -1737,7 +1751,7 @@ def api_find_plat_online():
                 return
             try:
                 search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
-                resp = web_session.get(search_url, timeout=8)
+                resp = _session().get(search_url, timeout=8)
                 if "CROSSNAMEFIELD" not in resp.text and "FIELD14" not in resp.text:
                     return  # not logged in
                 soup = BeautifulSoup(resp.text, "html.parser")
@@ -1749,7 +1763,7 @@ def api_find_plat_online():
                 # NOTE: Do NOT set FIELD7="SUR" here — it conflicts with the form
                 # and may suppress all results. Instrument-type filtering is done
                 # by the regex below after results are returned.
-                post  = web_session.post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=10)
+                post  = _session().post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=10)
                 soup2 = BeautifulSoup(post.text, "html.parser")
                 for row in soup2.find_all("tr"):
                     cells = row.find_all("td")
@@ -1857,7 +1871,7 @@ def api_save_plat():
             shutil.copy2(file_path, dest)
         elif source == "online":
             pdf_url  = data.get("pdf_url", f"{BASE_URL}/WebTemp/{doc_no}.pdf")
-            pdf_resp = web_session.get(pdf_url, stream=True, timeout=30)
+            pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
             if pdf_resp.status_code != 200:
                 return jsonify({"success": False, "error": f"PDF fetch failed: {pdf_resp.status_code}"})
             with open(dest, "wb") as f:
@@ -2039,7 +2053,7 @@ def api_download():
 
         # Download
         pdf_url  = f"{BASE_URL}/WebTemp/{doc_no}.pdf"
-        pdf_resp = web_session.get(pdf_url, stream=True, timeout=30)
+        pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
         if pdf_resp.status_code != 200:
             return jsonify({"success": False, "error": f"PDF fetch failed: {pdf_resp.status_code}"})
 
@@ -3141,9 +3155,8 @@ def api_extract_deed_description():
             # Try to download the PDF from the online source into a temp file
             try:
                 pdf_url  = f"{BASE_URL}/WebTemp/{doc_no}.pdf"
-                pdf_resp = web_session.get(pdf_url, stream=True, timeout=20)
+                pdf_resp = _session().get(pdf_url, stream=True, timeout=20)
                 if pdf_resp.status_code == 200:
-                    import tempfile
                     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
                         for chunk in pdf_resp.iter_content(8192):
                             tf.write(chunk)
