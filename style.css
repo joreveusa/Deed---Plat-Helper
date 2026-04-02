@@ -503,6 +503,27 @@ select.inp option { background: var(--bg2); color: var(--text); }
 .data-pill.pill-date .data-pill-value { color: #b080e0; }
 .data-pill.pill-money .data-pill-value { color: #56d3a0; }
 .data-pill.pill-person .data-pill-value { color: var(--text); font-family: 'Inter', sans-serif; font-size: 12px; }
+/* GLO Records link pills — amber/parchment theme */
+.data-pill.pill-glo,
+.data-pill.pill-glo-patent {
+  cursor: pointer;
+  text-decoration: none;
+  border-color: rgba(212,164,74,0.3);
+  background: rgba(212,164,74,0.06);
+  transition: all 0.2s;
+}
+.data-pill.pill-glo:hover,
+.data-pill.pill-glo-patent:hover {
+  border-color: rgba(212,164,74,0.6);
+  background: rgba(212,164,74,0.12);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(212,164,74,0.15);
+}
+.data-pill.pill-glo .data-pill-label { color: #d4a44a; }
+.data-pill.pill-glo .data-pill-value { color: #e3c55a; font-size: 11px; }
+.data-pill.pill-glo-patent .data-pill-label { color: #b08840; }
+.data-pill.pill-glo-patent .data-pill-value { color: #c9a050; font-size: 11px; }
+a.data-pill { text-decoration: none; }
 
 /* Full detail grid for "All Fields" tab */
 .detail-grid { display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; }
@@ -1348,6 +1369,83 @@ select.inp option { background: var(--bg2); color: var(--text); }
 }
 .leaflet-control-attribution a {
   color: rgba(64, 194, 159, 0.8) !important;
+}
+
+/* ── Leaflet Layer Control (basemap/overlay switcher) ─────────────────────── */
+.leaflet-control-layers {
+  background: rgba(16, 20, 26, 0.95) !important;
+  border: 1px solid rgba(64, 194, 159, 0.18) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.03) !important;
+  color: #c9d1d9 !important;
+  backdrop-filter: blur(12px);
+}
+.leaflet-control-layers-toggle {
+  background-color: rgba(16, 20, 26, 0.95) !important;
+  border: 1px solid rgba(64, 194, 159, 0.18) !important;
+  border-radius: 8px !important;
+  width: 36px !important;
+  height: 36px !important;
+  background-size: 22px 22px !important;
+  filter: invert(1) brightness(1.5);
+}
+.leaflet-control-layers-expanded {
+  padding: 8px 12px 8px 8px !important;
+  min-width: 180px;
+}
+.leaflet-control-layers-separator {
+  border-top-color: rgba(100,110,120,0.25) !important;
+  margin: 6px 0 !important;
+}
+.leaflet-control-layers label {
+  color: #c9d1d9 !important;
+  font-size: 13px !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
+  padding: 3px 0;
+  cursor: pointer;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px;
+}
+.leaflet-control-layers label:hover {
+  color: #ffffff !important;
+}
+.leaflet-control-layers-base label {
+  font-weight: 600;
+}
+.leaflet-control-layers-overlays label {
+  font-weight: 400;
+  opacity: 0.85;
+}
+.leaflet-control-layers input[type="radio"],
+.leaflet-control-layers input[type="checkbox"] {
+  accent-color: #40c29f;
+  margin-right: 4px;
+}
+
+/* ── Leaflet Scale Bar (dark theme) ──────────────────────────────────────── */
+.leaflet-control-scale-line {
+  background: rgba(13, 17, 23, 0.8) !important;
+  color: #a8d8c4 !important;
+  border-color: rgba(64, 194, 159, 0.45) !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  padding: 2px 6px !important;
+  line-height: 1.3 !important;
+  backdrop-filter: blur(4px);
+}
+
+/* ── Fullscreen toggle button ────────────────────────────────────────────── */
+.leaflet-control.leaflet-bar a[title="Toggle fullscreen"] {
+  background: rgba(16, 20, 26, 0.95) !important;
+  color: #a8d8c4 !important;
+  border-color: rgba(64, 194, 159, 0.18) !important;
+  transition: background 0.18s, color 0.18s !important;
+}
+.leaflet-control.leaflet-bar a[title="Toggle fullscreen"]:hover {
+  background: rgba(45, 138, 110, 0.5) !important;
+  color: #fff !important;
 }
 
 /* ─── KML Search Count badge ─────────────────────────────────────────────────── */

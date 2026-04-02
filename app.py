@@ -329,10 +329,12 @@ def serve_favicon():
 
 @app.after_request
 def add_no_cache(response):
-    """Prevent browser from caching any local dev files."""
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
+    """Prevent browser from caching any local dev files.
+    Skips responses that already have explicit cache-control set (e.g. PDF preview)."""
+    if "max-age" not in response.headers.get("Cache-Control", ""):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 # ── profiles ───────────────────────────────────────────────────────────────────
@@ -665,7 +667,7 @@ def api_chain_search():
             # Search for current_name as GRANTEE (find deed where they received property)
             search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
             try:
-                resp = sess.get(search_url, timeout=15)
+                resp = _session().get(search_url, timeout=15)
             except Exception:
                 stop_reason = "Network error during search"
                 break
@@ -688,7 +690,7 @@ def api_chain_search():
 
             action = BASE_URL + "/scripts/hflook.asp"
             try:
-                post_resp = sess.post(action, data=form_data, timeout=20)
+                post_resp = _session().post(action, data=form_data, timeout=20)
             except Exception:
                 stop_reason = f"Network error searching for {current_name}"
                 break
@@ -2836,7 +2838,15 @@ ARCGIS_TAOS_QUERY_URL = (
 ARCGIS_OUT_FIELDS = (
     "UPC,OwnerAll,SitusAddressAll,SitusAddress1,SitusAddress2,"
     "SitusStreetNumber,SitusStreetName,SitusCity,SitusZipCode,"
-    "LegalDescription,LandArea"
+    "LegalDescription,LandArea,Subdivision,ZoningDescription,"
+    "Township,TownshipDirection,Range,RangeDirection,Section,"
+    "StructureCount,StructureType,OwnerType,MailAddressAll,LandUseDescription"
+)
+
+# Fields returned for spatial adjoiner queries (lighter payload)
+ARCGIS_ADJOINER_FIELDS = (
+    "UPC,OwnerAll,LandArea,Subdivision,LegalDescription,"
+    "SitusAddressAll,Township,TownshipDirection,Range,RangeDirection,Section"
 )
 
 # ── Nominatim (fallback) ─────────────────────────────────────────────────────
@@ -2905,6 +2915,18 @@ def _arcgis_lookup_upc(upc: str) -> dict:
         else:
             short_addr = ""   # no usable street address
 
+        # Build TRS string from component fields
+        twp = (attrs.get("Township") or "").strip()
+        twp_dir = (attrs.get("TownshipDirection") or "").strip()
+        rng = (attrs.get("Range") or "").strip()
+        rng_dir = (attrs.get("RangeDirection") or "").strip()
+        sec = (attrs.get("Section") or "").strip()
+        trs_str = ""
+        if twp and rng:
+            trs_str = f"T{twp}{twp_dir} R{rng}{rng_dir}"
+            if sec:
+                trs_str += f" Sec {sec}"
+
         result = {
             "success":          True,
             "source":           "arcgis",
@@ -2920,6 +2942,15 @@ def _arcgis_lookup_upc(upc: str) -> dict:
             "land_area":        (attrs.get("LandArea") or ""),
             "upc":              upc,
             "has_street_address": bool(situs1 or (street_no and street_nm)),
+            # Enriched fields
+            "subdivision":      (attrs.get("Subdivision") or "").strip(),
+            "zoning":           (attrs.get("ZoningDescription") or "").strip(),
+            "land_use":         (attrs.get("LandUseDescription") or "").strip(),
+            "trs":              trs_str,
+            "structure_count":  attrs.get("StructureCount") or 0,
+            "structure_type":   (attrs.get("StructureType") or "").strip(),
+            "owner_type":       (attrs.get("OwnerType") or "").strip(),
+            "mail_address":     (attrs.get("MailAddressAll") or "").strip(),
         }
 
         _address_cache[cache_key] = result
@@ -3031,15 +3062,27 @@ def api_property_address():
         lon  = float(data.get("lon", 0))
 
         # Strategy 1: ArcGIS by UPC (preferred — official govt data, no rate limit)
+        arcgis_result = None
         if upc:
-            result = _arcgis_lookup_upc(upc)
-            if result and result.get("success"):
-                return jsonify(result)
+            arcgis_result = _arcgis_lookup_upc(upc)
+            if arcgis_result and arcgis_result.get("success") and arcgis_result.get("has_street_address"):
+                # ArcGIS has a real situs address — use it directly
+                return jsonify(arcgis_result)
 
         # Strategy 2: Nominatim reverse geocode from coordinates (fallback)
+        # Also triggers when ArcGIS returned data but no street address
         if lat != 0 or lon != 0:
             result = _nominatim_reverse(lat, lon)
+            # Merge supplemental ArcGIS data (owner, legal desc) into Nominatim result
+            if arcgis_result and arcgis_result.get("success"):
+                for key in ("owner_official", "legal_description", "land_area", "upc"):
+                    if arcgis_result.get(key) and not result.get(key):
+                        result[key] = arcgis_result[key]
             return jsonify(result)
+
+        # No coordinates either — return ArcGIS result as-is (even without street addr)
+        if arcgis_result and arcgis_result.get("success"):
+            return jsonify(arcgis_result)
 
         return jsonify({"success": False, "error": "No UPC or coordinates provided"})
 
@@ -3083,6 +3126,181 @@ def api_batch_property_address():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ARCGIS SPATIAL ADJOINER DISCOVERY
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _arcgis_get_parcel_geometry(upc: str) -> dict | None:
+    """Fetch the polygon geometry for a parcel from ArcGIS by UPC.
+
+    Returns { "rings": [...], "spatialReference": {...} } or None.
+    """
+    if not upc:
+        return None
+    try:
+        resp = req_lib.get(
+            ARCGIS_TAOS_QUERY_URL,
+            params={
+                "where":          f"UPC='{upc}'",
+                "outFields":      "UPC,OwnerAll",
+                "returnGeometry": "true",
+                "outSR":          "4326",
+                "f":              "json",
+            },
+            headers={"User-Agent": "DeedPlatHelper/1.0"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return None
+        features = resp.json().get("features", [])
+        if not features:
+            return None
+        return features[0].get("geometry")
+    except Exception as e:
+        print(f"[arcgis-adj] Geometry fetch error for UPC {upc}: {e}", flush=True)
+        return None
+
+
+def _arcgis_find_touching_parcels(geometry: dict) -> list:
+    """Query ArcGIS for all parcels that spatially touch the given polygon.
+
+    Uses esriSpatialRelTouches — returns parcels sharing a boundary edge/vertex.
+    Falls back to esriSpatialRelIntersects with a tiny buffer if touches returns nothing.
+
+    Returns a list of dicts: [{ upc, owner, land_area, subdivision, ... }]
+    """
+    results = []
+    for spatial_rel in ("esriSpatialRelTouches", "esriSpatialRelIntersects"):
+        try:
+            resp = req_lib.get(
+                ARCGIS_TAOS_QUERY_URL,
+                params={
+                    "geometry":       json.dumps(geometry),
+                    "geometryType":   "esriGeometryPolygon",
+                    "spatialRel":     spatial_rel,
+                    "inSR":           "4326",
+                    "outSR":          "4326",
+                    "outFields":      ARCGIS_ADJOINER_FIELDS,
+                    "returnGeometry": "false",
+                    "resultRecordCount": "100",
+                    "f":              "json",
+                },
+                headers={"User-Agent": "DeedPlatHelper/1.0"},
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                continue
+            features = resp.json().get("features", [])
+            if features:
+                for feat in features:
+                    a = feat.get("attributes", {})
+                    # Build TRS
+                    twp = (a.get("Township") or "").strip()
+                    twp_dir = (a.get("TownshipDirection") or "").strip()
+                    rng = (a.get("Range") or "").strip()
+                    rng_dir = (a.get("RangeDirection") or "").strip()
+                    sec = (a.get("Section") or "").strip()
+                    trs = f"T{twp}{twp_dir} R{rng}{rng_dir}" if twp and rng else ""
+                    if trs and sec:
+                        trs += f" Sec {sec}"
+                    results.append({
+                        "upc":           (a.get("UPC") or "").strip(),
+                        "owner":         (a.get("OwnerAll") or "").strip(),
+                        "land_area":     a.get("LandArea") or 0,
+                        "subdivision":   (a.get("Subdivision") or "").strip(),
+                        "legal":         (a.get("LegalDescription") or "").strip()[:200],
+                        "address":       (a.get("SitusAddressAll") or "").strip(),
+                        "trs":           trs,
+                        "source":        "arcgis_spatial",
+                        "spatial_rel":   spatial_rel,
+                    })
+                break  # Got results, don't fall through to intersects
+        except Exception as e:
+            print(f"[arcgis-adj] Spatial query error ({spatial_rel}): {e}", flush=True)
+            continue
+    return results
+
+
+@app.route("/api/arcgis-adjoiners", methods=["POST"])
+def api_arcgis_adjoiners():
+    """Find adjacent parcels using ArcGIS spatial queries.
+
+    Strategy:
+      1. If UPC provided → fetch parcel geometry from ArcGIS
+      2. If geometry provided directly (from KML index) → use that
+      3. Query ArcGIS for all parcels touching that geometry
+      4. Filter out the client's own parcel
+
+    Body: { "upc": str, "geometry": { "rings": [...] } (optional),
+            "client_name": str (optional, for filtering) }
+    Returns: { success, adjoiners: [...], count, source }
+    """
+    try:
+        data = request.get_json() or {}
+        upc = (data.get("upc") or "").strip()
+        geometry = data.get("geometry")  # Optional pre-supplied geometry
+        client_name = (data.get("client_name") or "").strip().lower()
+
+        # Step 1: Get geometry
+        if not geometry and upc:
+            print(f"[arcgis-adj] Fetching geometry for UPC {upc}...", flush=True)
+            geometry = _arcgis_get_parcel_geometry(upc)
+
+        if not geometry:
+            # Try from local KML index as fallback
+            survey = get_survey_data_path()
+            if upc:
+                polygon = xml_processor.extract_parcel_polygon(survey, upc)
+                if polygon and polygon.get("coordinates"):
+                    # Convert KML coords [[lng,lat], ...] to ArcGIS rings format
+                    coords = polygon["coordinates"]
+                    geometry = {
+                        "rings": [[[c[0], c[1]] for c in coords]],
+                        "spatialReference": {"wkid": 4326}
+                    }
+                    print(f"[arcgis-adj] Using KML geometry for UPC {upc}", flush=True)
+
+        if not geometry:
+            return jsonify({
+                "success": False,
+                "error": "Could not find parcel geometry. Try selecting the parcel on the map first.",
+                "adjoiners": [], "count": 0,
+            })
+
+        # Step 2: Spatial query
+        print(f"[arcgis-adj] Running spatial query for touching parcels...", flush=True)
+        raw = _arcgis_find_touching_parcels(geometry)
+
+        # Step 3: Filter out the client's own parcel
+        adjoiners = []
+        seen_upcs = set()
+        for adj in raw:
+            # Skip client's own parcel
+            if upc and adj["upc"] == upc:
+                continue
+            if client_name and adj["owner"].lower() == client_name:
+                continue
+            # Deduplicate by UPC
+            if adj["upc"] in seen_upcs:
+                continue
+            seen_upcs.add(adj["upc"])
+            adjoiners.append(adj)
+
+        print(f"[arcgis-adj] Found {len(adjoiners)} adjacent parcels", flush=True)
+
+        return jsonify({
+            "success":   True,
+            "adjoiners": adjoiners,
+            "count":     len(adjoiners),
+            "source":    "arcgis_spatial",
+            "client_upc": upc,
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e), "adjoiners": [], "count": 0})
 
 
 # ══════════════════════════════════════════════════════════════════════════════

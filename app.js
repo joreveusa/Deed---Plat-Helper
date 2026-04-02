@@ -448,6 +448,31 @@ async function startSession() {
         await persistSession();
       }
 
+      // ── Flush any adjoiners that were queued from the map picker ────────
+      // The user may have picked adjoiners on the map BEFORE starting
+      // the session. Now that the session exists, add them as subjects.
+      if (_propPicker.mapAddedNames.length) {
+        let flushed = 0;
+        for (const name of _propPicker.mapAddedNames) {
+          const exists = state.researchSession.subjects.some(
+            s => s.type === 'adjoiner' && s.name.toLowerCase() === name.toLowerCase()
+          );
+          if (!exists) {
+            state.researchSession.subjects.push({
+              id: 'adj_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+              type: 'adjoiner',
+              name: name,
+              deed_saved: false, plat_saved: false, status: 'pending', notes: ''
+            });
+            flushed++;
+          }
+        }
+        if (flushed > 0) {
+          await persistSession();
+          showToast(`✓ ${flushed} map-picked adjoiner${flushed > 1 ? 's' : ''} added to board`, 'success');
+        }
+      }
+
       updateJobContext();
       showToast(`Session loaded for Job #${num}`, "success");
 
@@ -948,6 +973,12 @@ function extractDeedData(d, docNo, searchRow) {
   if (searchRow) { addDate('Recorded', searchRow.recorded_date); addDate('Instrument', searchRow.instrument_date); }
 
   const trsRefs = (d._trs || []).map(t => ({ label: 'TRS', value: t.trs, type: 'trs' }));
+  // Build GLO link pills for each TRS reference
+  const gloPills = (d._trs || []).map(t => {
+    const url = buildGloUrl(t);
+    const patentUrl = buildGloPatentUrl(t);
+    return url ? { label: '📜 GLO Plat', value: t.trs, type: 'glo', url, patentUrl } : null;
+  }).filter(Boolean);
 
   const money = [];
   ['Consideration', 'Amount', 'Sale Price', 'Value'].forEach(k => {
@@ -960,7 +991,7 @@ function extractDeedData(d, docNo, searchRow) {
   const instrumentType = searchRow?.instrument_type || d['Document Type'] || d['Type'] || d['Instrument Type'] || 'Deed';
   const recordedDate = searchRow?.recorded_date || d['Recorded Date'] || d['Record Date'] || d['Instrument Date'] || '';
 
-  return { docNumbers, locationSources, parties, dates, trsRefs, money, legalText, instrumentType, recordedDate };
+  return { docNumbers, locationSources, parties, dates, trsRefs, gloPills, money, legalText, instrumentType, recordedDate };
 }
 
 function deedPill(item) {
@@ -995,6 +1026,16 @@ function buildDeedSummaryTab(ex, d) {
   if (ex.trsRefs.length) html += `<div class="extracted-section">
     <div class="extracted-section-title">&#128506; Township / Range / Section</div>
     <div class="data-pills">${ex.trsRefs.map(deedPill).join('')}</div>
+    ${ex.gloPills && ex.gloPills.length ? `<div class="data-pills" style="margin-top:6px">${ex.gloPills.map(p =>
+      `<a href="${p.url}" target="_blank" rel="noopener" class="data-pill pill-glo" title="View original GLO survey plat for ${escHtml(p.value)}">
+        <div class="data-pill-label">📜 Survey Plat</div>
+        <div class="data-pill-value">${escHtml(p.value)} →</div>
+      </a>
+      <a href="${p.patentUrl}" target="_blank" rel="noopener" class="data-pill pill-glo-patent" title="Search GLO land patents for ${escHtml(p.value)}">
+        <div class="data-pill-label">📰 Patents</div>
+        <div class="data-pill-value">${escHtml(p.value)} →</div>
+      </a>`
+    ).join('')}</div>` : ''}
   </div>`;
 
   if (ex.money.length) html += `<div class="extracted-section">
@@ -1019,8 +1060,14 @@ function buildDeedAllFieldsTab(d) {
     html += `<div class="detail-label">${escHtml(k)}</div>
       <div class="detail-val" style="${isLoc ? 'color:var(--accent2);font-family:monospace' : ''}">${escHtml(String(v))}</div>`;
   });
-  if (d._trs && d._trs.length) html += `<div class="detail-label">TRS Refs</div>
-    <div class="detail-val" style="color:#79a8e0;font-family:monospace">${d._trs.map(t => escHtml(t.trs)).join(' | ')}</div>`;
+  if (d._trs && d._trs.length) {
+    const gloLinks = d._trs.map(t => {
+      const url = buildGloUrl(t);
+      return url ? ` <a href="${url}" target="_blank" rel="noopener" style="color:#d4a44a;font-size:10px;text-decoration:none" title="View GLO survey plat">📜 Plat→</a>` : '';
+    });
+    html += `<div class="detail-label">TRS Refs</div>
+      <div class="detail-val" style="color:#79a8e0;font-family:monospace">${d._trs.map((t, i) => escHtml(t.trs) + (gloLinks[i] || '')).join(' | ')}</div>`;
+  }
   html += `</div>`;
   return html;
 }
@@ -1283,6 +1330,27 @@ function renderPropertyDescriptionCard(desc) {
         </span>`
     ).join('')}</div>
     </div>`;
+  }
+
+  // GLO Records button (when TRS refs are available)
+  if (desc.trs_refs?.length) {
+    const trsStr = desc.trs_refs[0];  // Use first TRS ref
+    const gloUrl = buildGloUrl(trsStr);
+    const gloPatentUrl = buildGloPatentUrl(trsStr);
+    if (gloUrl) {
+      html += `<div class="prop-desc-glo-section" style="margin-top:10px;padding:10px 12px;background:rgba(212,164,74,.08);border:1px solid rgba(212,164,74,.25);border-radius:8px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#d4a44a;margin-bottom:6px">📜 BLM General Land Office Records</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <a href="${gloUrl}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" style="font-size:11px;border-color:rgba(212,164,74,.4);color:#d4a44a;text-decoration:none">
+            🗺️ View Original Survey Plat
+          </a>
+          <a href="${gloPatentUrl}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" style="font-size:11px;border-color:rgba(212,164,74,.4);color:#d4a44a;text-decoration:none">
+            📰 Search Land Patents
+          </a>
+        </div>
+        <div style="font-size:10px;color:var(--text3);margin-top:4px">Original government survey records for ${escHtml(trsStr)} — Township plats, field notes, and land patents.</div>
+      </div>`;
+    }
   }
 
   // Calls table (collapsed by default)
@@ -2428,6 +2496,107 @@ async function runAdjoinerDiscovery(autoMode = false) {
     if (!autoMode) showToast("Discovery failed: " + e.message, "error");
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = `⚡ Re-run Scan`; }
+  }
+}
+
+// ── ArcGIS Spatial Adjoiner Discovery ─────────────────────────────────────────
+/**
+ * Uses ArcGIS spatial queries to find all parcels physically touching the
+ * client's property. Far more reliable than text-based discovery because it
+ * uses actual geometry (polygon intersection via esriSpatialRelTouches).
+ */
+async function runArcgisSpatialDiscovery() {
+  const rs = state.researchSession;
+  if (!rs) { showToast("Start a session first", "warn"); return; }
+
+  const upc = rs.client_upc || (rs.client_parcel && rs.client_parcel.upc) || '';
+  if (!upc) {
+    showToast("No client UPC found — select a property on the map first (Step 1)", "warn");
+    return;
+  }
+
+  const btn = document.getElementById("btnArcgisSpatial");
+  const grid = document.getElementById("s4AdjoinerGrid");
+  const resultsPanel = document.getElementById("s4DiscoveryResults");
+  const countEl = document.getElementById("s4CountText");
+
+  if (btn) { btn.disabled = true; btn.innerHTML = '🛰️ Searching…'; }
+  if (resultsPanel) resultsPanel.classList.remove("hidden");
+  if (grid) grid.innerHTML = '<div class="col-span-full text-center p-4"><div class="spinner" style="margin:0 auto"></div><p class="text-text3 mt-2">Querying ArcGIS for adjacent parcels…</p></div>';
+
+  try {
+    const res = await apiFetch('/arcgis-adjoiners', 'POST', {
+      upc: upc,
+      client_name: rs.client_name || '',
+    });
+
+    if (!res || !res.success) {
+      const err = (res && res.error) || 'Unknown error';
+      if (grid) grid.innerHTML = `<div class="text-danger col-span-full p-4">ArcGIS query failed: ${err}</div>`;
+      showToast("ArcGIS spatial search failed: " + err, "error");
+      return;
+    }
+
+    const adjoiners = res.adjoiners || [];
+    const count = adjoiners.length;
+
+    if (countEl) countEl.textContent = count;
+
+    if (!count) {
+      if (grid) grid.innerHTML = '<div class="empty-state col-span-full">No adjacent parcels found via ArcGIS. Try the map picker or manual entry.</div>';
+      showToast("No adjacent parcels found", "info");
+      return;
+    }
+
+    // Merge with existing discoveredAdjoiners (avoid duplicates)
+    if (!state.discoveredAdjoiners) state.discoveredAdjoiners = [];
+    for (const adj of adjoiners) {
+      const exists = state.discoveredAdjoiners.some(
+        d => d.name.toLowerCase() === adj.owner.toLowerCase()
+      );
+      if (!exists) {
+        state.discoveredAdjoiners.push({
+          name: adj.owner,
+          source: '🛰️ ArcGIS Spatial',
+          upc: adj.upc,
+          land_area: adj.land_area,
+          subdivision: adj.subdivision,
+          address: adj.address,
+          trs: adj.trs,
+          legal: adj.legal,
+        });
+      }
+    }
+
+    // Render enhanced cards with metadata
+    let html = adjoiners.map(j => {
+      const safeName = (j.owner || '').replace(/'/g, "\\'");
+      const chips = [];
+      if (j.land_area) chips.push(`<span class="kml-chip chip-upc">${j.land_area} ac</span>`);
+      if (j.subdivision) chips.push(`<span class="kml-chip chip-cab">${escHtml(j.subdivision)}</span>`);
+      if (j.address) chips.push(`<span class="kml-chip chip-book">📍 ${escHtml(j.address)}</span>`);
+      if (j.trs) chips.push(`<span class="kml-chip chip-upc">📐 ${escHtml(j.trs)}</span>`);
+
+      return `
+        <div class="adjoiner-chip arcgis-spatial-chip">
+          <div class="flex-col gap-1">
+            <span class="adjoiner-chip-name">${escHtml(j.owner)}</span>
+            <span class="source-tag text-text3">🛰️ ArcGIS Spatial · UPC ${escHtml(j.upc)}</span>
+            ${chips.length ? `<div class="kml-meta-row">${chips.join('')}</div>` : ''}
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="addFoundAdjoiner('${safeName}')">+ Add</button>
+        </div>
+      `;
+    }).join('');
+    if (grid) grid.innerHTML = html;
+
+    showToast(`🛰️ Found ${count} adjacent parcels via ArcGIS`, "success");
+
+  } catch (e) {
+    if (grid) grid.innerHTML = `<div class="text-danger col-span-full p-4">ArcGIS error: ${e.message}</div>`;
+    showToast("ArcGIS spatial search error: " + e.message, "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🛰️ ArcGIS Spatial'; }
   }
 }
 
@@ -3800,6 +3969,11 @@ async function exportSession() {
     const trsRefs = detail._trs || clientSubj.trs_refs || [];
     if (trsRefs.length) {
       lines.push(pad('TRS Reference(s)', trsRefs.map(t => typeof t === 'string' ? t : t.trs).join('; ')));
+      // GLO Records links
+      trsRefs.forEach(t => {
+        const gloUrl = buildGloUrl(t);
+        if (gloUrl) lines.push(pad('GLO Survey Plat', gloUrl));
+      });
     }
 
     // Acreage
@@ -3982,12 +4156,25 @@ async function showPropertyPicker() {
   }
   _propPicker.highlightUpcs = clientUpcs;
 
+  // Sync the "Adjoiners Added" sidebar list from the session's existing
+  // subjects so the visual list is accurate when re-opening the picker.
+  if (state.researchSession) {
+    const boardAdj = state.researchSession.subjects
+      .filter(s => s.type === 'adjoiner')
+      .map(s => s.name);
+    // Merge: keep any queued-but-not-yet-flushed names, add board names
+    boardAdj.forEach(n => {
+      if (!_propPicker.mapAddedNames.includes(n)) _propPicker.mapAddedNames.push(n);
+    });
+    _updatePickerAddedList();
+  }
+
   // Update action hint based on whether session is active
   const hintEl = document.getElementById('pickerActionHint');
   if (hintEl) {
     hintEl.textContent = state.researchSession
       ? 'Select your property or add neighboring parcels as adjoiners.'
-      : 'Click a parcel, then choose an action.';
+      : 'Pick your property first, then click "Start Research Session". Adjoiners picked here will be added automatically.';
   }
 
   if (!_propPicker.map) {
@@ -4009,20 +4196,175 @@ function _initPropPickerMap() {
   const container = document.getElementById('propPickerLeafletMap');
   const canvasRenderer = L.canvas({ padding: 0.5 });
 
+  // ── ArcGIS Basemap Tile Layers (free, no API key required) ────────────
+  const arcgisAttr = '&copy; <a href="https://www.esri.com">Esri</a>, Maxar, Earthstar Geographics';
+
+  const imagery = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    { attribution: arcgisAttr, maxZoom: 19 }
+  );
+
+  const topo = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    { attribution: '&copy; Esri, HERE, Garmin, USGS', maxZoom: 19 }
+  );
+
+  const streets = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+    { attribution: '&copy; Esri, HERE, Garmin', maxZoom: 19 }
+  );
+
+  // Reference label overlay — road/place names on top of satellite imagery
+  const referenceLabels = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 19, pane: 'overlayPane', opacity: 0.85 }
+  );
+
+  // Transportation lines overlay (roads visible on imagery)
+  const transportOverlay = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 19, pane: 'overlayPane', opacity: 0.65 }
+  );
+
   _propPicker.map = L.map(container, {
     center: [36.6, -105.5],
     zoom: 11,
     preferCanvas: true,
     zoomControl: true,
+    layers: [imagery, referenceLabels, transportOverlay],  // default: satellite + labels + roads
   });
   _propPicker.renderer = canvasRenderer;
 
-  // Voyager — clear road labels, neutral basemap, no API key needed
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_labels_under/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 20,
+  // ── BLM PLSS Grid Overlay (Township/Range/Section boundaries) ─────────
+  // The BLM CadNSDI MapServer is DYNAMIC (singleFusedMapCache: false),
+  // so regular L.tileLayer with /tile/ URLs won't work.
+  // Instead we use L.TileLayer with a custom getTileUrl that calls /export
+  // for each tile's bounding box — this gives us proper dynamic rendering.
+  const _PLSS_BASE = 'https://gis.blm.gov/arcgis/rest/services/Cadastral/BLM_Natl_PLSS_CadNSDI/MapServer';
+
+  /**
+   * Create a dynamic PLSS layer that renders via ArcGIS MapServer /export.
+   * @param {string} layerIds - comma-separated layer IDs to show (e.g. "1" or "1,2")
+   * @param {number} opacity  - layer opacity (0–1)
+   * @param {number} minZoom  - don't render below this zoom
+   */
+  function _createPlssDynamicLayer(layerIds, opacity, minZoom) {
+    const PlssDynamic = L.GridLayer.extend({
+      createTile: function(coords) {
+        const tile = document.createElement('img');
+        tile.setAttribute('role', 'presentation');
+        tile.style.width = this.getTileSize().x + 'px';
+        tile.style.height = this.getTileSize().y + 'px';
+
+        if (coords.z < minZoom) { return tile; }
+
+        // Convert tile coords to lat/lng bounds
+        const nw = this._map.unproject([coords.x * 256, coords.y * 256], coords.z);
+        const se = this._map.unproject([(coords.x + 1) * 256, (coords.y + 1) * 256], coords.z);
+
+        // ArcGIS export expects xmin,ymin,xmax,ymax in Web Mercator (3857)
+        // But we can use 4326 with bboxSR=4326
+        const bbox = `${se.lng},${se.lat},${nw.lng},${nw.lat}`;
+        const url = `${_PLSS_BASE}/export?` +
+          `bbox=${bbox}&bboxSR=4326&imageSR=4326` +
+          `&size=256,256&dpi=96` +
+          `&format=png32&transparent=true` +
+          `&layers=show:${layerIds}` +
+          `&f=image`;
+
+        tile.src = url;
+        tile.onerror = () => { tile.src = ''; };  // graceful fail
+        return tile;
+      }
+    });
+    return new PlssDynamic({
+      opacity: opacity,
+      pane: 'overlayPane',
+      maxZoom: 19,
+      minZoom: minZoom,
+      attribution: '© <a href="https://www.blm.gov">BLM</a> Cadastral Survey',
+    });
+  }
+
+  // Layer 1: PLSS Townships (visible zoom ≥ 9)
+  const plssTownships = _createPlssDynamicLayer('1', 0.55, 9);
+  // Layer 2: PLSS Sections (visible zoom ≥ 11)
+  const plssSections = _createPlssDynamicLayer('2', 0.50, 11);
+  // Layer 3: PLSS Quarter Sections / Intersected (visible zoom ≥ 14)
+  const plssQuarters = _createPlssDynamicLayer('3', 0.45, 14);
+
+  // Layer control — basemaps + overlays
+  const baseMaps = {
+    '🛰️ Satellite': imagery,
+    '🗺️ Topographic': topo,
+    '🏙️ Streets': streets,
+  };
+  const overlays = {
+    '🏷️ Place Names': referenceLabels,
+    '🛣️ Roads': transportOverlay,
+    '📐 Townships (PLSS)': plssTownships,
+    '📐 Sections (PLSS)': plssSections,
+    '📐 Quarter Sec (PLSS)': plssQuarters,
+  };
+  L.control.layers(baseMaps, overlays, {
+    position: 'topright',
+    collapsed: true,
   }).addTo(_propPicker.map);
+
+  // Move zoom control to bottom-right so it doesn't overlap layer control
+  _propPicker.map.zoomControl.setPosition('bottomright');
+
+  // ── Scale bar (imperial — feet/miles, essential for surveying) ────────
+  L.control.scale({
+    position: 'bottomleft',
+    imperial: true,
+    metric: false,
+    maxWidth: 180,
+  }).addTo(_propPicker.map);
+
+  // ── Live coordinate display on mouse move ────────────────────────────
+  const coordDiv = L.DomUtil.create('div', 'map-coord-display');
+  coordDiv.style.cssText =
+    'position:absolute;bottom:8px;left:50%;transform:translateX(-50%);z-index:800;' +
+    'background:rgba(13,17,23,0.85);color:#a8d8c4;font-family:"JetBrains Mono",monospace;' +
+    'font-size:11px;padding:4px 12px;border-radius:6px;pointer-events:none;' +
+    'border:1px solid rgba(64,194,159,0.2);backdrop-filter:blur(6px);white-space:nowrap;' +
+    'transition:opacity .15s;opacity:0;';
+  container.appendChild(coordDiv);
+
+  _propPicker.map.on('mousemove', e => {
+    const lat = e.latlng.lat.toFixed(6);
+    const lng = e.latlng.lng.toFixed(6);
+    coordDiv.textContent = `${lat}°N  ${lng}°W`;
+    coordDiv.style.opacity = '1';
+  });
+  _propPicker.map.on('mouseout', () => {
+    coordDiv.style.opacity = '0';
+  });
+
+  // ── Full-screen toggle button ────────────────────────────────────────
+  const FullscreenControl = L.Control.extend({
+    options: { position: 'topleft' },
+    onAdd: function() {
+      const btn = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+      btn.innerHTML = '<a href="#" title="Toggle fullscreen" style="font-size:18px;line-height:30px;width:30px;height:30px;display:block;text-align:center;text-decoration:none">⛶</a>';
+      btn.style.cursor = 'pointer';
+      L.DomEvent.on(btn, 'click', e => {
+        L.DomEvent.preventDefault(e);
+        const panel = document.getElementById('propPickerPanel');
+        if (!panel) return;
+        const isFs = panel.style.top === '0px';
+        if (isFs) {
+          panel.style.cssText = 'position:fixed;top:4vh;left:3vw;right:3vw;bottom:4vh;display:flex;flex-direction:column;z-index:1200;border-radius:16px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.8)';
+        } else {
+          panel.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;z-index:1200;border-radius:0;overflow:hidden;box-shadow:none';
+        }
+        setTimeout(() => _propPicker.map && _propPicker.map.invalidateSize(), 200);
+      });
+      return btn;
+    }
+  });
+  new FullscreenControl().addTo(_propPicker.map);
 }
 
 // ── Load GeoJSON from backend ─────────────────────────────────────────────────
@@ -4196,6 +4538,8 @@ function _onPropParcelClick(feature, layer) {
   if (p.plat) details += `<b>Plat:</b> ${escHtml((p.plat || '').substring(0, 60))}${(p.plat || '').length > 60 ? '…' : ''}<br>`;
   // Address placeholder
   details += `<div id="propPickerAddress" style="margin-top:4px"><span style="color:var(--text3);font-size:11px">📍 Looking up address…</span></div>`;
+  // PLSS section placeholder (populated async by BLM spatial query)
+  details += `<div id="propPickerPLSS" style="margin-top:4px"><span style="color:var(--text3);font-size:11px">📐 Looking up PLSS section…</span></div>`;
   if (!details) details = '<span style="color:var(--text3);font-style:italic">No extended data.</span>';
 
   document.getElementById('propPickerDetails').innerHTML = details;
@@ -4219,12 +4563,44 @@ function _onPropParcelClick(feature, layer) {
     if (res && res.success) {
       const srcIcon = res.source === 'arcgis' ? '🏛️' : '📍';
       let html = `<span style="font-size:11px;color:#4ecdc4">${srcIcon} ${escHtml(res.short_address)}</span>`;
+
+      // Enriched ArcGIS data chips
+      const chips = [];
+      if (res.land_area) chips.push(`<span class="kml-chip chip-upc">📐 ${res.land_area} ac</span>`);
+      if (res.subdivision) chips.push(`<span class="kml-chip chip-cab">${escHtml(res.subdivision)}</span>`);
+      if (res.trs) chips.push(`<span class="kml-chip chip-upc">🧭 ${escHtml(res.trs)}</span>`);
+      if (res.zoning) chips.push(`<span class="kml-chip chip-book">${escHtml(res.zoning)}</span>`);
+      if (res.land_use) chips.push(`<span class="kml-chip chip-book">${escHtml(res.land_use)}</span>`);
+      if (res.structure_count > 0) chips.push(`<span class="kml-chip chip-upc">🏠 ${res.structure_count} struct</span>`);
+      if (res.owner_official && res.owner_official !== (p.owner || '')) {
+        chips.push(`<span class="kml-chip chip-cab" title="Official owner from assessor">👤 ${escHtml(res.owner_official)}</span>`);
+      }
+      if (chips.length) {
+        html += `<div class="kml-meta-row" style="margin-top:6px">${chips.join('')}</div>`;
+      }
+
       if (res.legal_description) {
-        html += `<br><span style="font-size:10px;color:var(--text3)" title="${escHtml(res.legal_description)}">📋 ${escHtml(res.legal_description.substring(0, 60))}${res.legal_description.length > 60 ? '…' : ''}</span>`;
+        html += `<br><span style="font-size:10px;color:var(--text3)" title="${escHtml(res.legal_description)}">📋 ${escHtml(res.legal_description.substring(0, 80))}${res.legal_description.length > 80 ? '…' : ''}</span>`;
+      }
+      if (res.mail_address) {
+        html += `<br><span style="font-size:10px;color:var(--text3)">✉️ ${escHtml(res.mail_address.substring(0, 60))}</span>`;
       }
       el.innerHTML = html;
     } else {
       el.innerHTML = `<span style="font-size:10px;color:var(--text3);opacity:.5">📍 Address unavailable</span>`;
+    }
+  });
+
+  // ── Async PLSS section lookup (BLM CadNSDI spatial query) ──────────────
+  _queryPlssSection(centroid).then(plssRes => {
+    const plssEl = document.getElementById('propPickerPLSS');
+    if (!plssEl) return;
+    if (plssRes) {
+      const gloUrl = buildGloUrl(plssRes);
+      plssEl.innerHTML = `<span style="font-size:11px;color:#e3c55a;font-family:'JetBrains Mono',monospace;font-weight:600">📐 ${escHtml(plssRes.trs)}</span>` +
+        (gloUrl ? `<br><a href="${gloUrl}" target="_blank" rel="noopener" style="font-size:10px;color:#d4a44a;text-decoration:none;display:inline-flex;align-items:center;gap:3px;margin-top:2px" title="View original GLO survey plat on BLM records">📜 GLO Survey Plat →</a>` : '');
+    } else {
+      plssEl.innerHTML = `<span style="font-size:10px;color:var(--text3);opacity:.5">📐 PLSS section unavailable</span>`;
     }
   });
 }
@@ -4422,18 +4798,27 @@ async function pickerAddSelectedAsAdjoiner() {
   const name = (_propPicker.selectedProps.owner || '').trim();
   if (!name) { showToast('No owner name for this parcel', 'warn'); return; }
 
+  // Always add to the visual queue
+  if (!_propPicker.mapAddedNames.includes(name)) {
+    _propPicker.mapAddedNames.push(name);
+    _updatePickerAddedList();
+  }
+
+  // If no session yet, queue for deferred addition when session starts
   if (!state.researchSession) {
-    showToast('Start a research session first to add adjoiners', 'warn');
+    showToast(`${name} queued — will be added when you start the session`, 'info');
+    // Style the parcel as "on board" (purple) even though session doesn't exist yet
+    _propPicker.selectedLayer && _propPicker.selectedLayer.setStyle &&
+      _propPicker.selectedLayer.setStyle({
+        fillColor: '#b080e0', fillOpacity: 0.55, color: '#b080e0', weight: 2,
+      });
     return;
   }
 
+  // Session exists — persist immediately
   const ok = await addFoundAdjoiner(name);
 
   if (ok) {
-    if (!_propPicker.mapAddedNames.includes(name)) {
-      _propPicker.mapAddedNames.push(name);
-      _updatePickerAddedList();
-    }
     _propPicker.selectedLayer && _propPicker.selectedLayer.setStyle &&
       _propPicker.selectedLayer.setStyle({
         fillColor: '#b080e0', fillOpacity: 0.55, color: '#b080e0', weight: 2,
@@ -4452,6 +4837,137 @@ function _updatePickerAddedList() {
   el.innerHTML = _propPicker.mapAddedNames.map(n =>
     `<div style="font-size:11px;padding:4px 8px;background:rgba(176,128,224,.12);border:1px solid rgba(176,128,224,.25);border-radius:6px;color:#b080e0">${escHtml(n)}</div>`
   ).join('');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GLO RECORDS URL BUILDER (BLM General Land Office original survey plats)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a URL to the BLM GLO Records site for a given TRS reference.
+ * Works with either a parsed TRS object ({township,range,section,trs})
+ * or a raw TRS string like "T25N R13E S12".
+ * @param {Object|string} trsInput - TRS data
+ * @returns {string} URL to GLO Records, or '' if invalid
+ */
+function buildGloUrl(trsInput) {
+  let twpNum = '', twpDir = '', rngNum = '', rngDir = '', sec = '';
+
+  if (typeof trsInput === 'string') {
+    // Parse from string like "T25N R13E S12" or "T25N R13E"
+    const m = trsInput.match(/T\.?\s*(\d+)\s*([NS])\b.*?R\.?\s*(\d+)\s*([EW])\b(?:.*?S(?:ec(?:tion)?)?\s*(\d+))?/i);
+    if (!m) return '';
+    twpNum = m[1]; twpDir = m[2].toUpperCase();
+    rngNum = m[3]; rngDir = m[4].toUpperCase();
+    sec = m[5] || '';
+  } else if (trsInput && typeof trsInput === 'object') {
+    // Parse from object {township: "T25N", range: "R13E", section: "12"}
+    const twpMatch = (trsInput.township || '').match(/(\d+)\s*([NS])/i);
+    const rngMatch = (trsInput.range || '').match(/(\d+)\s*([EW])/i);
+    if (!twpMatch || !rngMatch) return '';
+    twpNum = twpMatch[1]; twpDir = twpMatch[2].toUpperCase();
+    rngNum = rngMatch[1]; rngDir = rngMatch[2].toUpperCase();
+    sec = trsInput.section || '';
+  } else {
+    return '';
+  }
+
+  // Build GLO survey plat search URL
+  // This searches for original survey plats covering the specified township
+  const params = new URLSearchParams({
+    searchCriteria: `type=survey|st=NM|twp_nr=${twpNum}|twp_dir=${twpDir}|rng_nr=${rngNum}|rng_dir=${rngDir}` + (sec ? `|sec=${sec}` : ''),
+  });
+  return `https://glorecords.blm.gov/results/default.aspx?${params.toString()}`;
+}
+
+/**
+ * Build a GLO patent search URL for a TRS reference (finds land patents/deeds).
+ */
+function buildGloPatentUrl(trsInput) {
+  let twpNum = '', twpDir = '', rngNum = '', rngDir = '', sec = '';
+
+  if (typeof trsInput === 'string') {
+    const m = trsInput.match(/T\.?\s*(\d+)\s*([NS])\b.*?R\.?\s*(\d+)\s*([EW])\b(?:.*?S(?:ec(?:tion)?)?\s*(\d+))?/i);
+    if (!m) return '';
+    twpNum = m[1]; twpDir = m[2].toUpperCase();
+    rngNum = m[3]; rngDir = m[4].toUpperCase();
+    sec = m[5] || '';
+  } else if (trsInput && typeof trsInput === 'object') {
+    const twpMatch = (trsInput.township || '').match(/(\d+)\s*([NS])/i);
+    const rngMatch = (trsInput.range || '').match(/(\d+)\s*([EW])/i);
+    if (!twpMatch || !rngMatch) return '';
+    twpNum = twpMatch[1]; twpDir = twpMatch[2].toUpperCase();
+    rngNum = rngMatch[1]; rngDir = rngMatch[2].toUpperCase();
+    sec = trsInput.section || '';
+  } else {
+    return '';
+  }
+
+  const params = new URLSearchParams({
+    searchCriteria: `type=patent|st=NM|twp_nr=${twpNum}|twp_dir=${twpDir}|rng_nr=${rngNum}|rng_dir=${rngDir}` + (sec ? `|sec=${sec}` : ''),
+  });
+  return `https://glorecords.blm.gov/results/default.aspx?${params.toString()}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BLM PLSS SPATIAL QUERY (identify section from coordinates)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _plssCache = {};  // "lat,lon" -> { trs, township, range, section, ... }
+
+/**
+ * Query the BLM CadNSDI MapServer to identify which PLSS section
+ * a given coordinate falls in.
+ * @param {Array} centroid - [lon, lat] or null
+ * @returns {Promise<Object|null>} - { trs, township, range, section, plssId } or null
+ */
+async function _queryPlssSection(centroid) {
+  if (!centroid || !centroid[0] || !centroid[1]) return null;
+
+  const lon = centroid[0];
+  const lat = centroid[1];
+  const cacheKey = `${lat.toFixed(5)},${lon.toFixed(5)}`;
+  if (_plssCache[cacheKey]) return _plssCache[cacheKey];
+
+  try {
+    const params = new URLSearchParams({
+      geometry: `${lon},${lat}`,
+      geometryType: 'esriGeometryPoint',
+      spatialRel: 'esriSpatialRelIntersects',
+      outFields: 'FRSTDIVNO,TWNSHPNO,TWNSHPDIR,RANGENO,RANGEDIR,PLSSID,FRSTDIVID,FRSTDIVTXT',
+      returnGeometry: 'false',
+      f: 'json',
+      inSR: '4326',
+    });
+
+    const url = `https://gis.blm.gov/arcgis/rest/services/Cadastral/BLM_Natl_PLSS_CadNSDI/MapServer/2/query?${params.toString()}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const data = await resp.json();
+
+    if (!data.features || !data.features.length) return null;
+
+    const attrs = data.features[0].attributes;
+    const twpNum = attrs.TWNSHPNO || '';
+    const twpDir = attrs.TWNSHPDIR || '';
+    const rngNum = attrs.RANGENO || '';
+    const rngDir = attrs.RANGEDIR || '';
+    const secNum = attrs.FRSTDIVNO || '';
+
+    const result = {
+      trs: `T${twpNum}${twpDir} R${rngNum}${rngDir}` + (secNum ? ` S${secNum}` : ''),
+      township: `T${twpNum}${twpDir}`,
+      range: `R${rngNum}${rngDir}`,
+      section: String(secNum),
+      plssId: attrs.PLSSID || '',
+      frstDivId: attrs.FRSTDIVID || '',
+    };
+
+    _plssCache[cacheKey] = result;
+    return result;
+  } catch (e) {
+    console.warn('[PLSS] Section query failed:', e.message);
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
