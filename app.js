@@ -805,6 +805,8 @@ async function loadS2Detail(docNo, idx, trEl) {
           &#11015; Save Client Deed &rarr;</button>
         <button class="btn btn-outline" onclick="extractPropertyDescription('${docNo}', '')" title="Extract property description from deed PDF">
           📜 Get Description</button>
+        <button class="btn btn-outline" onclick="findSimilarDescriptions()" title="Find parcels with similar legal descriptions">
+          🔍 Find Similar</button>
         <button class="btn btn-outline" onclick="runChainOfTitle()" title="Trace deed ownership backward">
           &#128279; Chain Back</button>
       </div>
@@ -4379,6 +4381,96 @@ function _initPropPickerMap() {
   // Layer 3: PLSS Quarter Sections / Intersected (visible zoom ≥ 14)
   const plssQuarters = _createPlssDynamicLayer('3', 0.45, 14);
 
+  // ── Water Rights (NM OSE Points of Diversion) dynamic layer ─────────
+  const _waterRightsGroup = L.layerGroup();
+  let _wrFetchDebounce = null;
+
+  function _fetchWaterRights() {
+    if (!_propPicker.map.hasLayer(_waterRightsGroup)) return;
+    const bounds = _propPicker.map.getBounds();
+    const url = `/api/map-layers/water-rights?minLat=${bounds.getSouth().toFixed(4)}&maxLat=${bounds.getNorth().toFixed(4)}&minLon=${bounds.getWest().toFixed(4)}&maxLon=${bounds.getEast().toFixed(4)}`;
+    fetch(url).then(r => r.json()).then(data => {
+      _waterRightsGroup.clearLayers();
+      if (!data.features) return;
+      const statusColors = { ACT: '#0078ff', PEN: '#4ce600', PLG: '#ff3333', CAP: '#ffaa00', INC: '#999', CLW: '#e6e600', UNK: '#555' };
+      data.features.forEach(f => {
+        const color = statusColors[f.status] || '#0078ff';
+        const marker = L.circleMarker([f.lat, f.lon], {
+          radius: 5, fillColor: color, color: '#000', weight: 1, fillOpacity: 0.8
+        });
+        const useLabel = f.use || 'Unknown';
+        const ditchLine = f.ditch ? `<br><b>Ditch:</b> ${f.ditch}` : '';
+        const trsLine = f.trs ? `<br><b>TRS:</b> ${f.trs}` : '';
+        marker.bindPopup(
+          `<div style="font-size:12px;min-width:180px">` +
+          `<b style="color:${color}">💧 ${f.pod_file || 'POD'}</b>` +
+          `<br><b>Name:</b> ${f.name || '—'}` +
+          `<br><b>Owner:</b> ${f.owner || '—'}` +
+          `<br><b>Status:</b> ${f.status}` +
+          `<br><b>Use:</b> ${useLabel}` +
+          `${f.depth ? '<br><b>Depth:</b> ' + f.depth + ' ft' : ''}` +
+          `${ditchLine}${trsLine}` +
+          `</div>`, { maxWidth: 260 }
+        );
+        _waterRightsGroup.addLayer(marker);
+      });
+    }).catch(() => {});
+  }
+
+  _propPicker.map.on('moveend', () => {
+    clearTimeout(_wrFetchDebounce);
+    _wrFetchDebounce = setTimeout(_fetchWaterRights, 400);
+  });
+  _waterRightsGroup.on('add', () => { _fetchWaterRights(); });
+
+  // ── NGS Geodetic Survey Marks dynamic layer ───────────────────────────
+  const _surveyMarksGroup = L.layerGroup();
+  let _smFetchDebounce = null;
+
+  function _fetchSurveyMarks() {
+    if (!_propPicker.map.hasLayer(_surveyMarksGroup)) return;
+    const center = _propPicker.map.getCenter();
+    const zoom = _propPicker.map.getZoom();
+    const radius = zoom >= 14 ? 2 : zoom >= 12 ? 4 : zoom >= 10 ? 7 : 10;
+    const url = `/api/map-layers/survey-marks?lat=${center.lat.toFixed(5)}&lon=${center.lng.toFixed(5)}&radius=${radius}`;
+    fetch(url).then(r => r.json()).then(data => {
+      _surveyMarksGroup.clearLayers();
+      if (!data.marks) return;
+      const condColors = { GOOD: '#4ce600', MONUMENTED: '#4ce600', 'MARK NOT FOUND': '#ff7b72', 'SEE DESCRIPTION': '#ffaa00' };
+      data.marks.forEach(m => {
+        const color = condColors[m.condition] || '#79a8e0';
+        const icon = L.divIcon({
+          className: '',
+          html: `<div style="width:12px;height:12px;transform:rotate(45deg);background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5);margin:-6px 0 0 -6px"></div>`,
+          iconSize: [12, 12], iconAnchor: [6, 6]
+        });
+        const marker = L.marker([m.lat, m.lon], { icon });
+        const htLine = m.orthoHt && m.orthoHt.trim() ? `<br><b>Elev:</b> ${m.orthoHt} m (${m.vertDatum})` : '';
+        marker.bindPopup(
+          `<div style="font-size:12px;min-width:200px">` +
+          `<b style="color:${color}">🔺 ${m.pid}</b> — ${m.name}` +
+          `<br><b>Type:</b> ${m.monumentType}` +
+          `<br><b>Stamping:</b> ${m.stamping || '—'}` +
+          `<br><b>Setting:</b> ${m.setting || '—'}` +
+          `<br><b>Condition:</b> ${m.condition}` +
+          `<br><b>Last Recovered:</b> ${m.lastRecovered || '—'}` +
+          `${htLine}` +
+          `<br><b>Stability:</b> ${m.stability || '—'}` +
+          `${m.satUse ? '<br><b>GPS:</b> ✅ Satellite-observed' : ''}` +
+          `<br><a href="${m.datasheet_url}" target="_blank" style="color:#79a8e0">📄 View NGS Datasheet</a>` +
+          `</div>`, { maxWidth: 300 }
+        );
+        _surveyMarksGroup.addLayer(marker);
+      });
+    }).catch(() => {});
+  }
+
+  _propPicker.map.on('moveend', () => {
+    clearTimeout(_smFetchDebounce);
+    _smFetchDebounce = setTimeout(_fetchSurveyMarks, 500);
+  });
+  _surveyMarksGroup.on('add', () => { _fetchSurveyMarks(); });
+
   // Layer control — basemaps + overlays
   const baseMaps = {
     '🛰️ Satellite': imagery,
@@ -4391,6 +4483,8 @@ function _initPropPickerMap() {
     '📐 Townships (PLSS)': plssTownships,
     '📐 Sections (PLSS)': plssSections,
     '📐 Quarter Sec (PLSS)': plssQuarters,
+    '💧 Water Rights (POD)': _waterRightsGroup,
+    '🔺 Survey Marks (NGS)': _surveyMarksGroup,
   };
   L.control.layers(baseMaps, overlays, {
     position: 'topright',
@@ -5503,3 +5597,238 @@ _toastStyle.textContent = `
   .highlight  { color:var(--accent2) !important; }
 `;
 document.head.appendChild(_toastStyle);
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AI INSIGHTS PANEL — DASHBOARD & PREDICTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Load all AI insight data and populate the dashboard.
+ * Called on page load (after DOMContentLoaded) and on manual refresh.
+ */
+async function refreshAiInsights() {
+  // Fetch all three endpoints in parallel
+  const [healthRes, conflictsRes, analyticsRes] = await Promise.allSettled([
+    apiFetch('/index-health'),
+    apiFetch('/data-conflicts'),
+    apiFetch('/research-analytics'),
+  ]);
+
+  // ── Index Health Metrics ───────────────────────────────────────────────
+  if (healthRes.status === 'fulfilled' && healthRes.value.success) {
+    const h = healthRes.value;
+    const totalEl = document.getElementById('aiTotalParcels');
+    const arcEl = document.getElementById('aiArcgisPct');
+    const staleRow = document.getElementById('aiStaleWarning');
+    const staleText = document.getElementById('aiStaleText');
+
+    if (totalEl) {
+      totalEl.textContent = h.total_parcels ? h.total_parcels.toLocaleString() : '0';
+      // Animate the counter
+      totalEl.style.transition = 'color 0.3s';
+      totalEl.style.color = h.total_parcels > 0 ? '#56d3a0' : '#ff7b72';
+    }
+    if (arcEl) {
+      arcEl.textContent = h.total_parcels ? h.pct_with_arcgis + '%' : '—';
+      arcEl.style.color = h.pct_with_arcgis >= 50 ? '#56d3a0' : h.pct_with_arcgis >= 20 ? '#e3c55a' : '#ff7b72';
+    }
+
+    // Stale warning
+    if (staleRow && staleText) {
+      if (h.stale_warning) {
+        staleRow.classList.remove('hidden');
+        staleText.textContent = `Index is ${h.index_age_days} days old — consider rebuilding`;
+      } else if (h.newer_xml_files && h.newer_xml_files.length > 0) {
+        staleRow.classList.remove('hidden');
+        staleText.textContent = `${h.newer_xml_files.length} KML file(s) are newer than the index`;
+      } else {
+        staleRow.classList.add('hidden');
+      }
+    }
+  }
+
+  // ── Data Conflicts Count ───────────────────────────────────────────────
+  if (conflictsRes.status === 'fulfilled' && conflictsRes.value.success) {
+    const c = conflictsRes.value;
+    const el = document.getElementById('aiConflictCount');
+    if (el) {
+      const total = c.conflict_count || 0;
+      el.textContent = total;
+      el.style.color = total === 0 ? '#56d3a0' : total <= 10 ? '#e3c55a' : '#ff7b72';
+    }
+  }
+
+  // ── Research Analytics ─────────────────────────────────────────────────
+  if (analyticsRes.status === 'fulfilled' && analyticsRes.value.success) {
+    const a = analyticsRes.value;
+    const jobsEl = document.getElementById('aiJobsScanned');
+    if (jobsEl) {
+      jobsEl.textContent = a.scanned_jobs || 0;
+      jobsEl.style.color = a.scanned_jobs > 0 ? '#79a8e0' : 'var(--text3)';
+    }
+
+    // Show prediction if we have data
+    if (a.predictions) {
+      _showPrediction(a.predictions);
+    }
+  }
+}
+
+/** Show/update the complexity prediction row */
+function _showPrediction(pred) {
+  const row = document.getElementById('aiPredictionRow');
+  if (!row) return;
+
+  row.classList.remove('hidden');
+
+  const compEl = document.getElementById('aiPredComplexity');
+  const adjEl = document.getElementById('aiPredAdjoiners');
+  const rangeEl = document.getElementById('aiPredRange');
+  const cabsEl = document.getElementById('aiPredCabinets');
+  const confEl = document.getElementById('aiPredConfidence');
+  const simEl = document.getElementById('aiPredSimilar');
+
+  if (compEl) {
+    compEl.textContent = pred.predicted_complexity;
+    compEl.className = 'ai-pred-complexity pred-' + pred.predicted_complexity;
+  }
+  if (adjEl) adjEl.textContent = pred.predicted_adjoiners;
+  if (rangeEl && pred.adjoiner_range) {
+    rangeEl.textContent = `(range: ${pred.adjoiner_range.p25}–${pred.adjoiner_range.p75})`;
+  }
+  if (cabsEl) cabsEl.textContent = (pred.likely_cabinets || []).map(c => 'Cab ' + c).join(', ');
+  if (confEl) {
+    confEl.textContent = pred.confidence;
+    confEl.style.color = pred.confidence === 'high' ? '#56d3a0'
+                        : pred.confidence === 'medium' ? '#e3c55a'
+                        : '#ff7b72';
+  }
+  if (simEl) simEl.textContent = pred.similar_jobs_count || 0;
+}
+
+/** Re-predict when job type changes in Step 1 */
+async function _onJobTypeChanged() {
+  const typeEl = document.getElementById('setupJobType');
+  if (!typeEl) return;
+  try {
+    const res = await apiFetch('/research-analytics/predict', 'POST', {
+      job_type: typeEl.value,
+    });
+    if (res.success) _showPrediction(res);
+  } catch (_) {}
+}
+
+// Wire up job type dropdown to update predictions
+document.addEventListener('DOMContentLoaded', () => {
+  const typeEl = document.getElementById('setupJobType');
+  if (typeEl) typeEl.addEventListener('change', _onJobTypeChanged);
+
+  // Load AI insights after a brief delay (don't block initial render)
+  setTimeout(() => refreshAiInsights(), 800);
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LEGAL DESCRIPTION SIMILARITY SEARCH
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Search for parcels with similar legal descriptions.
+ * Uses the property description extracted from the current deed.
+ */
+async function findSimilarDescriptions() {
+  // Get the extracted description from the current session
+  const descWrap = document.getElementById('deedPropertyDescArea');
+  if (!descWrap) {
+    showToast('No property description available', 'warn');
+    return;
+  }
+
+  // Try to get the description text from the prop-desc-text element
+  const descEl = descWrap.querySelector('.prop-desc-text');
+  const text = descEl ? descEl.textContent.trim() : '';
+
+  if (!text || text.length < 20) {
+    showToast('Extract the property description first (📜 Get Description)', 'warn');
+    return;
+  }
+
+  const container = document.getElementById('deedTabAnalysis');
+  if (container) {
+    container.innerHTML = `<div class="loading-state flex-col gap-2"><div class="spinner"></div>Searching for similar descriptions…</div>`;
+    // Switch to analysis tab
+    switchDeedTab('analysis');
+  }
+
+  try {
+    const res = await apiFetch('/similar-descriptions', 'POST', {
+      text: text,
+      min_score: 15,
+      limit: 15,
+    });
+
+    if (!container) return;
+
+    if (!res.success) {
+      container.innerHTML = `<div class="empty-state text-danger">Error: ${escHtml(res.error || 'Unknown')}</div>`;
+      return;
+    }
+
+    if (res.count === 0) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><p>No similar descriptions found in the parcel index.</p></div>`;
+      return;
+    }
+
+    let html = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:rgba(121,168,224,0.05)">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#79a8e0;margin-bottom:4px">
+          🔍 Similar Descriptions Found
+        </div>
+        <div style="font-size:12px;color:var(--text2)">${res.count} parcels match this legal description</div>
+      </div>
+      <div style="padding:8px;overflow-y:auto;max-height:500px">`;
+
+    for (const r of res.results) {
+      const s = r.similarity;
+      const scoreColor = s.score >= 60 ? '#56d3a0' : s.score >= 30 ? '#e3c55a' : '#79a8e0';
+      const shared = [];
+      if (s.shared_trs.length) shared.push('TRS: ' + s.shared_trs.join(', '));
+      if (s.shared_cabs.length) shared.push('Cabs: ' + s.shared_cabs.join(', '));
+      if (s.shared_names.length) shared.push('Names: ' + s.shared_names.join(', '));
+
+      html += `
+        <div style="padding:10px 12px;margin:4px;border-radius:8px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.06);cursor:default;transition:all .15s"
+             onmouseenter="this.style.borderColor='rgba(121,168,224,0.3)'" onmouseleave="this.style.borderColor='rgba(255,255,255,0.06)'">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="font-size:13px;font-weight:700;color:var(--text)">${escHtml(r.owner || 'Unknown')}</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:800;color:${scoreColor}">${s.score}%</div>
+          </div>
+          <div style="font-size:11px;color:var(--text3);line-height:1.6">
+            ${r.upc ? `<span style="font-family:monospace;color:var(--accent2)">UPC ${escHtml(r.upc)}</span> · ` : ''}
+            ${r.plat ? `Plat: ${escHtml(r.plat)}` : ''}
+            ${r.trs ? ` · TRS: ${escHtml(r.trs)}` : ''}
+            ${r.book ? ` · Bk ${escHtml(r.book)}/${escHtml(r.page || '')}` : ''}
+          </div>
+          ${shared.length ? `
+          <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">
+            ${shared.map(s => `<span style="font-size:9px;padding:2px 6px;border-radius:6px;background:rgba(121,168,224,0.1);border:1px solid rgba(121,168,224,0.2);color:#79a8e0">${escHtml(s)}</span>`).join('')}
+          </div>` : ''}
+          <div style="display:flex;gap:8px;margin-top:6px;font-size:10px;color:var(--text3)">
+            <span title="TRS Match">🏠 ${s.components.trs_match}%</span>
+            <span title="Text Similarity">📝 ${s.components.text_similarity}%</span>
+            <span title="Cabinet Overlap">🗄️ ${s.components.cab_overlap}%</span>
+            <span title="Name Overlap">👤 ${s.components.name_overlap}%</span>
+          </div>
+        </div>`;
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+
+  } catch (e) {
+    if (container) {
+      container.innerHTML = `<div class="empty-state text-danger">Search failed: ${e.message}</div>`;
+    }
+  }
+}

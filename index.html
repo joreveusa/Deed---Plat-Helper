@@ -141,6 +141,56 @@
           </div>
         </div>
 
+        <!-- AI INSIGHTS PANEL -->
+        <div class="glass-card ai-insights-card" id="aiInsightsCard">
+          <div class="row-layout justify-between mb-2" style="align-items:center">
+            <h3 class="card-title" style="margin:0">🧠 AI Insights</h3>
+            <button class="btn btn-outline btn-sm" onclick="refreshAiInsights()" title="Refresh AI analytics" style="font-size:10px;padding:3px 10px">⟳ Refresh</button>
+          </div>
+
+          <!-- Index Health Row -->
+          <div class="ai-metrics-row" id="aiHealthMetrics">
+            <div class="ai-metric-card">
+              <div class="ai-metric-icon">📊</div>
+              <div class="ai-metric-value" id="aiTotalParcels">—</div>
+              <div class="ai-metric-label">Parcels Indexed</div>
+            </div>
+            <div class="ai-metric-card">
+              <div class="ai-metric-icon">🛰️</div>
+              <div class="ai-metric-value" id="aiArcgisPct">—</div>
+              <div class="ai-metric-label">ArcGIS Enriched</div>
+            </div>
+            <div class="ai-metric-card">
+              <div class="ai-metric-icon">⚠️</div>
+              <div class="ai-metric-value" id="aiConflictCount">—</div>
+              <div class="ai-metric-label">Data Conflicts</div>
+            </div>
+            <div class="ai-metric-card">
+              <div class="ai-metric-icon">📁</div>
+              <div class="ai-metric-value" id="aiJobsScanned">—</div>
+              <div class="ai-metric-label">Jobs Analyzed</div>
+            </div>
+          </div>
+
+          <!-- Complexity Prediction (shows after job type is selected) -->
+          <div class="ai-prediction-row hidden" id="aiPredictionRow">
+            <div class="ai-prediction-badge" id="aiPredBadge">
+              <span class="ai-pred-complexity" id="aiPredComplexity">moderate</span>
+              <span class="ai-pred-label">Predicted Complexity</span>
+            </div>
+            <div class="ai-prediction-details">
+              <div class="ai-pred-stat">📋 Expected adjoiners: <strong id="aiPredAdjoiners">—</strong> <span class="ai-pred-range" id="aiPredRange"></span></div>
+              <div class="ai-pred-stat">🗄️ Likely cabinets: <strong id="aiPredCabinets">—</strong></div>
+              <div class="ai-pred-stat" style="font-size:10px;color:var(--text3)">Confidence: <span id="aiPredConfidence">—</span> (<span id="aiPredSimilar">0</span> similar jobs)</div>
+            </div>
+          </div>
+
+          <!-- Index Freshness Warning -->
+          <div class="ai-warning-row hidden" id="aiStaleWarning">
+            <span>⏰</span> <span id="aiStaleText">Index is stale</span>
+          </div>
+        </div>
+
         <div class="glass-card recent-jobs-card">
           <h3 class="card-title">🕒 Recent &amp; Pinned Jobs</h3>
           <div id="setupRecentJobs" class="recent-jobs-list">

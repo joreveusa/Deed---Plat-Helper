@@ -47,6 +47,13 @@ from helpers.deed_analysis import (
     isolate_legal_description as _isolate_legal_description_impl,
 )
 from helpers.dxf import generate_boundary_dxf as _generate_dxf_impl
+from helpers.legal_similarity import search_similar_descriptions as _search_similar_descriptions
+from helpers.research_analytics import (
+    get_analytics as _get_research_analytics,
+    score_session_completeness as _score_session_completeness,
+    predict_job_complexity as _predict_job_complexity,
+    scan_all_research as _scan_all_research,
+)
 
 # Point pytesseract at the Tesseract binary (delegated to helpers/pdf_extract.py)
 setup_tesseract()
@@ -2508,7 +2515,103 @@ def api_research_post():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+# ── research analytics (historical patterns + predictions) ─────────────────
+
+@app.route("/api/research-analytics")
+def api_research_analytics():
+    """Return aggregate statistics from all historical research sessions.
+
+    Scans all research.json files across job folders and computes:
+      - Total jobs, subjects, deeds, plats
+      - Average/median adjoiner counts
+      - Cabinet letter distribution
+      - Job type breakdown
+      - Monthly activity (last 12 months)
+      - Default complexity prediction (BDY jobs)
+
+    Query params: refresh=1 to force re-scan (otherwise cached for 5 min)
+    """
+    try:
+        from helpers.research_analytics import get_analytics
+        survey = get_survey_data_path()
+        if not survey:
+            return jsonify({"success": False, "error": "Survey drive not connected"})
+        force = request.args.get("refresh", "0") == "1"
+        result = get_analytics(survey, force_refresh=force)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/research-analytics/predict", methods=["POST"])
+def api_research_predict():
+    """Predict complexity for a specific job based on historical patterns.
+
+    Body: { job_type: str, trs: str (optional) }
+    Returns: { predicted_adjoiners, predicted_complexity, likely_cabinets, confidence }
+    """
+    try:
+        from helpers.research_analytics import scan_all_research, predict_job_complexity
+        survey = get_survey_data_path()
+        if not survey:
+            return jsonify({"success": False, "error": "Survey drive not connected"})
+
+        data = request.get_json() or {}
+        job_type = data.get("job_type", "BDY")
+        trs = data.get("trs", "")
+
+        sessions = scan_all_research(survey)
+        prediction = predict_job_complexity(sessions, job_type=job_type, trs=trs)
+        return jsonify({"success": True, **prediction})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ── legal description similarity search ───────────────────────────────────────
+
+@app.route("/api/similar-descriptions", methods=["POST"])
+def api_similar_descriptions():
+    """Find parcels with legal descriptions similar to the given text.
+
+    Uses multi-signal similarity scoring: TRS fingerprint, text tokens,
+    cabinet refs, name overlap, and lot/block/tract matching.
+
+    Body: { text: str, min_score: float (default 20), limit: int (default 20) }
+    Returns: { success, results: [{ upc, owner, similarity: { score, ... } }], count }
+    """
+    try:
+        from helpers.legal_similarity import search_similar_descriptions
+
+        data      = request.get_json() or {}
+        text      = data.get("text", "").strip()
+        min_score = float(data.get("min_score", 20.0))
+        limit     = int(data.get("limit", 20))
+
+        if not text or len(text) < 10:
+            return jsonify({"success": True, "results": [], "count": 0,
+                            "hint": "Provide at least 10 characters of legal description text"})
+
+        survey = get_survey_data_path()
+        idx = xml_processor.load_index(survey)
+        if not idx:
+            return jsonify({"success": False, "error": "Parcel index not built yet",
+                            "results": [], "count": 0})
+
+        parcels = idx.get("parcels", [])
+        results = search_similar_descriptions(
+            text, parcels, min_score=min_score, limit=limit
+        )
+
+        return jsonify({"success": True, "results": results, "count": len(results)})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e), "results": [], "count": 0})
+
+
 # ── open folder in Explorer ────────────────────────────────────────────────────
+
 
 def _is_safe_path(path: str) -> bool:
     """Validate that a path is within the survey drive or project directory."""
@@ -2929,6 +3032,161 @@ def api_data_conflicts():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAP OVERLAY LAYERS — Water Rights & Geodetic Control
+# ══════════════════════════════════════════════════════════════════════════════
+
+_POD_BASE = (
+    "https://gis.ose.nm.gov/server_s/rest/services"
+    "/PODS/watersPods_currentFGDB/MapServer/0/query"
+)
+
+@app.route("/api/map-layers/water-rights")
+def api_water_rights():
+    """Proxy NM OSE Points of Diversion within a bounding box.
+
+    Query params: minLat, maxLat, minLon, maxLon
+    Returns GeoJSON-like array of water-right point features.
+    """
+    try:
+        min_lat = float(request.args.get("minLat", 36.3))
+        max_lat = float(request.args.get("maxLat", 36.5))
+        min_lon = float(request.args.get("minLon", -105.7))
+        max_lon = float(request.args.get("maxLon", -105.4))
+
+        # Clamp bbox to reasonable size to avoid huge queries
+        lat_span = max_lat - min_lat
+        lon_span = max_lon - min_lon
+        if lat_span > 0.3 or lon_span > 0.3:
+            return jsonify({
+                "success": True, "features": [], "count": 0,
+                "message": "Zoom in further to see water rights (max 0.3° span)"
+            })
+
+        # ArcGIS envelope query — use inSR=4326 for WGS84 input coords
+        envelope = f"{min_lon},{min_lat},{max_lon},{max_lat}"
+        params = {
+            "geometry":      envelope,
+            "geometryType":  "esriGeometryEnvelope",
+            "inSR":          "4326",
+            "spatialRel":    "esriSpatialRelIntersects",
+            "outFields":     "pod_file,pod_name,pod_status,use_of_well,"
+                             "depth_well,own_lname,own_fname,ditch_name,"
+                             "county,tws,rng,sec,pod_basin,use",
+            "outSR":         "4326",
+            "returnGeometry": "true",
+            "f":             "json",
+            "resultRecordCount": "500",
+        }
+
+        resp = req_lib.get(_POD_BASE, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        features = []
+        for feat in data.get("features", []):
+            geom = feat.get("geometry", {})
+            attr = feat.get("attributes", {})
+            if not geom:
+                continue
+
+            # Build owner name from parts
+            lname = (attr.get("own_lname") or "").strip()
+            fname = (attr.get("own_fname") or "").strip()
+            owner = f"{lname}, {fname}".strip(", ") if lname else fname
+
+            features.append({
+                "lat":         geom.get("y", 0),
+                "lon":         geom.get("x", 0),
+                "pod_file":    (attr.get("pod_file") or "").strip(),
+                "name":        (attr.get("pod_name") or "").strip(),
+                "status":      (attr.get("pod_status") or "").strip(),
+                "use":         (attr.get("use_of_well") or attr.get("use") or "").strip(),
+                "depth":       attr.get("depth_well") or 0,
+                "owner":       owner,
+                "ditch":       (attr.get("ditch_name") or "").strip(),
+                "trs":         _pod_trs(attr),
+                "basin":       (attr.get("pod_basin") or "").strip(),
+            })
+
+        return jsonify({"success": True, "features": features, "count": len(features)})
+
+    except Exception as e:
+        print(f"[water-rights] Error: {e}", flush=True)
+        return jsonify({"success": False, "features": [], "error": str(e)})
+
+
+def _pod_trs(attr: dict) -> str:
+    """Build a TRS string from POD attributes."""
+    twp = (attr.get("tws") or "").strip()
+    rng = (attr.get("rng") or "").strip()
+    sec = (attr.get("sec") or "").strip()
+    if twp and rng:
+        s = f"T{twp} R{rng}"
+        if sec:
+            s += f" Sec {sec}"
+        return s
+    return ""
+
+
+_NGS_RADIAL = "https://geodesy.noaa.gov/api/nde/radial"
+
+@app.route("/api/map-layers/survey-marks")
+def api_survey_marks():
+    """Proxy NGS geodetic control stations near a given point.
+
+    Query params: lat, lon, radius (miles, default 3)
+    Returns array of simplified survey mark objects.
+    """
+    try:
+        lat    = float(request.args.get("lat", 36.4))
+        lon    = float(request.args.get("lon", -105.6))
+        radius = float(request.args.get("radius", 3))
+        radius = min(radius, 10)  # cap at 10 miles
+
+        resp = req_lib.get(_NGS_RADIAL, params={
+            "lat": lat, "lon": lon,
+            "radius": radius, "units": "MILE",
+        }, timeout=12)
+        resp.raise_for_status()
+        marks_raw = resp.json()
+
+        marks = []
+        for m in marks_raw:
+            pid = (m.get("pid") or "").strip()
+            if not pid:
+                continue
+            lat_v = m.get("lat", "").strip()
+            lon_v = m.get("lon", "").strip()
+            if not lat_v or not lon_v:
+                continue
+
+            marks.append({
+                "pid":           pid,
+                "name":          (m.get("name") or "").strip(),
+                "lat":           float(lat_v),
+                "lon":           float(lon_v),
+                "county":        (m.get("stCounty") or "").strip(),
+                "orthoHt":       (m.get("orthoHt") or "").strip(),
+                "vertDatum":     (m.get("vertDatum") or "").strip(),
+                "monumentType":  (m.get("monumentType") or "").strip(),
+                "stamping":      (m.get("stamping") or "").strip(),
+                "setting":       (m.get("setting") or "").strip(),
+                "condition":     (m.get("condition") or "").strip(),
+                "lastRecovered": (m.get("lastRecovered") or "").strip(),
+                "stability":     (m.get("stability") or "").strip(),
+                "posDatum":      (m.get("posDatum") or "").strip(),
+                "satUse":        (m.get("satUse") or "").strip() == "Y",
+                "datasheet_url": f"https://geodesy.noaa.gov/cgi-bin/ds_mark.prl?PidBox={pid}",
+            })
+
+        return jsonify({"success": True, "marks": marks, "count": len(marks)})
+
+    except Exception as e:
+        print(f"[survey-marks] Error: {e}", flush=True)
+        return jsonify({"success": False, "marks": [], "error": str(e)})
 
 
 @app.route("/api/xml/build-index", methods=["POST"])
@@ -3852,6 +4110,98 @@ def api_analyze_deed():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADJACENT PARCELS (standalone endpoint)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/adjacent-parcels", methods=["POST"])
+def api_adjacent_parcels():
+    """Find parcels geometrically adjacent to a given parcel.
+
+    Body: { upc: str, max_results: int (default 20), threshold: float (default 0.0003) }
+    Returns: { success, parcels: [...], count: int }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        upc = (data.get("upc") or "").strip()
+        if not upc:
+            return jsonify({"success": False, "error": "upc is required"})
+
+        survey = get_survey_data_path()
+        if not survey:
+            return jsonify({"success": False, "error": "Survey drive not found"})
+
+        max_r = int(data.get("max_results", 20))
+        threshold = float(data.get("threshold", 0.0003))
+
+        results = xml_processor.find_adjacent_parcels(
+            survey, upc, max_results=max_r, edge_threshold_deg=threshold
+        )
+
+        # Strip heavy polygon data from response to keep it lean
+        clean = []
+        for p in results:
+            clean.append({
+                "upc":            p.get("upc", ""),
+                "owner":          p.get("owner", ""),
+                "book":           p.get("book", ""),
+                "page":           p.get("page", ""),
+                "plat":           p.get("plat", ""),
+                "trs":            p.get("trs", "") or (p.get("arcgis", {}) or {}).get("trs", ""),
+                "cab_refs":       p.get("cab_refs", []),
+                "centroid":       p.get("centroid"),
+                "adjacency_dist": p.get("_adjacency_dist"),
+                "adjacency_type": p.get("_adjacency_type", "edge"),
+            })
+
+        return jsonify({"success": True, "parcels": clean, "count": len(clean)})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LEGAL DESCRIPTION SIMILARITY SEARCH
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/similar-descriptions", methods=["POST"])
+@app.route("/api/legal-similarity", methods=["POST"])
+def api_legal_similarity():
+    """Search for parcels with similar legal descriptions.
+
+    Body: { text: str, min_score: float (default 20), limit: int (default 20) }
+    Returns: { success, results: [...], count: int }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        text = (data.get("text") or "").strip()
+        if not text:
+            return jsonify({"success": False, "error": "text is required"})
+
+        survey = get_survey_data_path()
+        if not survey:
+            return jsonify({"success": False, "error": "Survey drive not found"})
+
+        idx = xml_processor.load_index(survey)
+        if not idx:
+            return jsonify({"success": False, "error": "No parcel index found"})
+
+        min_score = float(data.get("min_score", 20))
+        limit = int(data.get("limit", 20))
+
+        results = _search_similar_descriptions(
+            text, idx.get("parcels", []),
+            min_score=min_score, limit=limit
+        )
+
+        return jsonify({"success": True, "results": results, "count": len(results)})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
 
 
 # ── run ────────────────────────────────────────────────────────────────────────
