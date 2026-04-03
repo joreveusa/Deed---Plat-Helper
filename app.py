@@ -40,6 +40,7 @@ from helpers.cabinet import (
     extract_cabinet_display_name as _extract_cabinet_display_name,
     extract_cabinet_doc_number as _extract_cabinet_doc_number,
     search_local_cabinet as _search_local_cabinet_impl,
+    _warm_cabinet_caches, _init_index_path,
     _cab_scan_cache,
 )
 from helpers.deed_analysis import (
@@ -141,6 +142,21 @@ try:
     detect_survey_drive()
 except Exception as e:
     print(f"[warn] drive detection at startup failed: {e}", flush=True)
+
+
+# ── Cabinet index initialization ────────────────────────────────────────────
+# Must run at import time so desktop_app.py (which imports this module)
+# also gets the cabinet index loaded.  Previously this lived inside
+# `if __name__ == "__main__"` and was skipped when imported.
+try:
+    _init_index_path(os.path.dirname(os.path.abspath(__file__)))
+    _cab_path_init = get_cabinet_path()
+    if _cab_path_init:
+        _warm_cabinet_caches(_cab_path_init)
+    else:
+        print("[cabinet] No cabinet path found — cabinet search will be unavailable until drive is connected", flush=True)
+except Exception as _cab_init_err:
+    print(f"[cabinet] Initialization failed: {_cab_init_err}", flush=True)
 
 
 # CABINET_FOLDERS — imported from helpers.cabinet
@@ -1314,13 +1330,29 @@ def api_find_adjoiners():
             r'right.?of.?way|easement|vacant|unknown|none)$',
             re.I
         )
+        def _clean_owner_name(name: str) -> str:
+            """Strip trailing conjunctions (&, Or, And) from owner names."""
+            if not name:
+                return ''
+            n = name.strip()
+            for _ in range(3):
+                n = re.sub(r'[,\s]+(?:&|AND|OR)\s*$', '', n, flags=re.I).strip()
+            n = re.sub(r',\s*$', '', n).strip()
+            return n
+
         def _is_valid_owner(name: str) -> bool:
             """Return False for garbage / non-person owner entries."""
             if not name or len(name.strip()) < 3:
                 return False
             clean = name.strip()
-            # All digits or mostly digits = bad
+            # All digits or mostly digits = bad (e.g. "9617", "20870")
             if re.fullmatch(r'[\d\s\-]+', clean):
+                return False
+            # Digits followed by a word = UPC concat garbage (e.g. "1073172Road")
+            if re.fullmatch(r'\d{4,}[A-Za-z]+', clean):
+                return False
+            # Starts with UPC-like prefix
+            if re.match(r'^upc\s*\d', clean, re.I):
                 return False
             if _SKIP_OWNER_PATS.search(clean):
                 return False
@@ -1376,7 +1408,7 @@ def api_find_adjoiners():
                             for p in adj_parcels:
                                 if kml_geom_count >= MAX_KML_PER_SUBSTRATEGY:
                                     break
-                                name = p.get("owner", "").title()
+                                name = _clean_owner_name(p.get("owner", "").title())
                                 if not _is_valid_owner(name):
                                     continue
                                 key = name.lower()
@@ -1412,7 +1444,7 @@ def api_find_adjoiners():
                                 try:
                                     diff = abs(int(p_upc) - upc_num)
                                     if diff <= 8:   # within 8 UPC steps = nearby lots
-                                        name = p.get("owner", "").title()
+                                        name = _clean_owner_name(p.get("owner", "").title())
                                         if not _is_valid_owner(name):
                                             continue
                                         key  = name.lower()
@@ -1450,7 +1482,7 @@ def api_find_adjoiners():
                             dlng = abs(pc[0] - clng)
                             dlat = abs(pc[1] - clat)
                             if dlng < RADIUS_DEG and dlat < RADIUS_DEG:
-                                name = p.get("owner", "").title()
+                                name = _clean_owner_name(p.get("owner", "").title())
                                 if not _is_valid_owner(name):
                                     continue
                                 key  = name.lower()
@@ -1721,6 +1753,9 @@ def api_find_plat_local():
         prior_owners   = data.get("prior_owners", [])   # grantor names from deed hint
         kml_matches    = data.get("kml_matches", [])   # may be populated if frontend chains requests
         forced_cabinets = [c.upper() for c in data.get("forced_cabinets", []) if c]
+        # When the user manually typed a name in the 🔍 filter panel, suppress
+        # client_name token matching so it doesn't produce false positives.
+        name_override  = bool(data.get("name_override", False))
 
         # ── Determine which cabinet(s) to search ────────────────────────────────
         if forced_cabinets:
@@ -1745,7 +1780,8 @@ def api_find_plat_local():
         seen_local_paths = set()
 
         # ── Build cab_ref → doc map from KML hits for precise filename matching ─
-        # e.g. kml says "C-191A" → we can look for "191A" in Cabinet C filenames
+        # e.g. kml says "C-191A" → look for "191A" in Cabinet C filenames
+        # Also handles letter-only refs like "C" (used by the filter panel for targeting)
         kml_cab_refs = {}   # {"C": ["191A", "84"], ...}
         for hit in kml_matches:
             for cr in hit.get("cab_refs", []):
@@ -1755,6 +1791,9 @@ def api_find_plat_local():
                     kml_cab_refs.setdefault(letter, [])
                     if doc not in kml_cab_refs[letter]:
                         kml_cab_refs[letter].append(doc)
+                elif len(parts) == 1 and parts[0].upper() in CABINET_FOLDERS:
+                    # Bare letter ref (e.g. "C") — used for cabinet targeting only
+                    kml_cab_refs.setdefault(parts[0].upper(), [])
 
         # ── Also pull cab_refs from deed text for the targeted cabinets ─────────
         deed_refs = parse_cabinet_refs(detail)
@@ -1899,18 +1938,21 @@ def api_find_plat_local():
             #    The client IS the current owner, so their name IS on the cabinet file
             #    (e.g. "Rael, Adela" → finds "Adela Rael.pdf" or "Rael Adela.pdf").
             #    This also covers the grantee since they were pre-merged into client_tokens.
-            for tok in client_tokens:
-                try:
-                    for h in search_local_cabinet(cab_letter, "", tok, ""):
-                        if h["path"] not in seen_local_paths:
-                            seen_local_paths.add(h["path"])
-                            h["source"]   = "local"
-                            h["ref"]      = "client_name"
-                            h["strategy"] = "client_name"
-                            h["_tok_len"] = len(tok) + 100
-                            local_hits.append(h)
-                except Exception:
-                    pass
+            #    SKIPPED when name_override is set (user typed a specific plat name)
+            #    to avoid flooding results with owner-name false positives.
+            if not name_override:
+                for tok in client_tokens:
+                    try:
+                        for h in search_local_cabinet(cab_letter, "", tok, ""):
+                            if h["path"] not in seen_local_paths:
+                                seen_local_paths.add(h["path"])
+                                h["source"]   = "local"
+                                h["ref"]      = "client_name"
+                                h["strategy"] = "client_name"
+                                h["_tok_len"] = len(tok) + 100
+                                local_hits.append(h)
+                    except Exception:
+                        pass
 
             # d) Prior owner name tokens — the plat may be filed under a previous owner.
             #    Build tokens the same way as client_tokens: full name + individual words.
@@ -1984,6 +2026,33 @@ def api_find_plat_local():
                 targeting_reason = broadened_reason
         elif not local_hits and not has_deed_detail:
             print(f"[local] 0 results (name-only mode — auto-broaden disabled)", flush=True)
+
+        # ── Diagnostic: log what was searched when 0 results ─────────────────────
+        if not local_hits:
+            kml_plat_tokens_searched = []
+            for hit in kml_matches:
+                plat_tokens = _extract_plat_name_tokens(hit.get("plat", ""))
+                kml_plat_tokens_searched.extend(plat_tokens)
+            print(
+                f"[local] ZERO RESULTS — cabinet(s)={target_cabs!r} "
+                f"kml_plat_tokens={kml_plat_tokens_searched!r} "
+                f"client_tokens={client_tokens!r} "
+                f"kml_cab_refs={dict(kml_cab_refs)!r} "
+                f"deed_cab_refs={dict(deed_cab_refs)!r}",
+                flush=True
+            )
+            # List first 20 files in each target cabinet so we can spot name mismatches
+            cab_path = get_cabinet_path()
+            for cl in target_cabs:
+                folder = CABINET_FOLDERS.get(cl)
+                if not folder:
+                    continue
+                cab_dir = Path(cab_path) / folder
+                if not cab_dir.exists():
+                    print(f"[local] Cabinet {cl} folder NOT FOUND: {cab_dir}", flush=True)
+                    continue
+                files_sample = [f.name for f in sorted(cab_dir.iterdir()) if f.suffix.lower() == '.pdf'][:20]
+                print(f"[local] Cabinet {cl} first 20 PDFs: {files_sample}", flush=True)
 
         # ── Sort: doc_number → kml_plat_name → kml_cab_ref → deed_cab_ref → client_name → prior_owner → name_match ─
         # doc_number = exact plat doc number match from file's leading number (highest confidence)
@@ -4203,7 +4272,6 @@ def api_legal_similarity():
 
 
 
-
 # ── run ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -4223,4 +4291,7 @@ if __name__ == "__main__":
     print(f"  Local:   http://localhost:5000")
     print(f"  Network: http://{_lan}:5000")
     print("=" * 60)
+    # Cabinet index already initialized at module-import time (see above).
+    # No need to re-init here — this ensures desktop_app.py and direct
+    # `python app.py` launches both have the cabinet index loaded.
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

@@ -223,6 +223,82 @@ async function _initProfiles() {
 }
 
 
+// ── Global Keyboard Shortcuts ─────────────────────────────────────────────────
+function _handleGlobalKeyboard(e) {
+  // Ignore events when an input/textarea/select is focused (let users type normally)
+  const tag = (e.target.tagName || '').toLowerCase();
+  const isInputFocused = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
+
+  // ── Escape: close any open modal ──────────────────────────────────────────
+  if (e.key === 'Escape') {
+    const modals = document.querySelectorAll('.modal-overlay:not(.hidden)');
+    if (modals.length) {
+      // Close the topmost (last) visible modal
+      const top = modals[modals.length - 1];
+      const closeBtn = top.querySelector('.close-btn');
+      if (closeBtn) closeBtn.click();
+      else top.classList.add('hidden');
+      e.preventDefault();
+      return;
+    }
+    // Close plat preview panel if open
+    const preview = document.getElementById('platPreviewPanel');
+    if (preview && preview.classList.contains('open')) {
+      closePlatPreview();
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // ── Ctrl+Enter: primary action for current step ───────────────────────────
+  if (e.ctrlKey && e.key === 'Enter') {
+    e.preventDefault();
+    switch (state.currentStep) {
+      case 1: startSession(); break;
+      case 2: {
+        // If a deed is selected, save it; otherwise run search
+        if (state.selectedDetail) {
+          const saveBtn = document.querySelector('#s2DetailContainer .btn-success');
+          if (saveBtn) saveBtn.click();
+        } else {
+          doStep2Search();
+        }
+        break;
+      }
+      case 4: runAdjoinerDiscovery(); break;
+      case 5: goToStep(6); break;
+      case 6: doGenerateDxf(); break;
+    }
+    return;
+  }
+
+  // ── Ctrl+F: focus the search field for current step ───────────────────────
+  if (e.ctrlKey && e.key === 'f') {
+    let searchEl = null;
+    switch (state.currentStep) {
+      case 2: searchEl = document.getElementById('s2SearchName'); break;
+      case 3: searchEl = document.getElementById('s3CabinetSelect'); break;
+      case 4: searchEl = document.getElementById('s4ManualName'); break;
+    }
+    if (searchEl) {
+      e.preventDefault();
+      searchEl.focus();
+      searchEl.select?.();
+      return;
+    }
+  }
+
+  // ── Number keys 1-6: jump to step (only when not typing) ─────────────────
+  if (!isInputFocused && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= 6) {
+      goToStep(num);
+      e.preventDefault();
+      return;
+    }
+  }
+}
+
 // ── Unsaved-changes guard ─────────────────────────────────────────────────────
 window.addEventListener('beforeunload', (e) => {
   if (state._dirty && state.researchSession) {
@@ -454,12 +530,18 @@ async function startSession() {
       if (_propPicker.mapAddedNames.length) {
         let flushed = 0;
         for (const entry of _propPicker.mapAddedNames) {
-          const adjName = typeof entry === 'object' ? entry.name : entry;
+          let adjName = cleanOwnerName(typeof entry === 'object' ? entry.name : entry);
+          const upc = typeof entry === 'object' ? (entry.upc || '') : '';
+          // If the name is just a UPC code, try to resolve it
+          if (isUpcCode(adjName) && upc) {
+            const resolved = await resolveUpcToOwner(upc);
+            if (resolved) adjName = resolved;
+          }
+          if (!adjName || adjName.length < 2) continue;
           const exists = state.researchSession.subjects.some(
             s => s.type === 'adjoiner' && s.name.toLowerCase() === adjName.toLowerCase()
           );
           if (!exists) {
-            const upc = typeof entry === 'object' ? (entry.upc || '') : '';
             const plat = typeof entry === 'object' ? (entry.plat || '') : '';
             state.researchSession.subjects.push({
               id: 'adj_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
@@ -1929,7 +2011,13 @@ async function doStep3Search() {
     .then(res => {
       const surveyHits = (res && res.online) || [];
       if (!surveyHits.length) {
-        onlCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">No online survey records found for this client/grantor name.</div>';
+        onlCards.innerHTML = '<div class="empty-state text-text3 text-sm p-4">' +
+          '<div class="text-3xl mb-2">🌐</div>' +
+          'No online survey records found for <strong>' + escHtml(activeOwner || clientName || 'this name') + '</strong>.<br><br>' +
+          '<div style="display:flex;flex-direction:column;gap:6px;align-items:center">' +
+          '<button class="btn btn-outline btn-sm" onclick="goToStep(2)" title="Go back and try a different search name">← Try Different Name</button>' +
+          '<button class="btn btn-outline btn-sm" onclick="showPropertyPicker()" title="Open the map to visually identify the client parcel">🗺️ Use Map Picker</button>' +
+          '</div></div>';
       } else {
         onlCards.innerHTML = surveyHits.map(r =>
           '<div class="plat-item">' +
@@ -2127,9 +2215,11 @@ function searchCabinetFromKml(pi) {
   // Pre-fill values from this KML parcel
   const cabRef = p.cab_refs_str || '';   // e.g. "C-191-A" — used for folder targeting only
   const platHint = p.plat || '';   // full PLAT field (shown as tooltip)
-  // Cabinet files are named after the current owner (e.g. "Rael Adela.pdf"),
-  // NOT after the original surveyor in the PLAT field. Use p.owner for matching.
-  const nameDefault = p.owner || _extractPlatName(p.plat || '') || '';
+  // Cabinet files are named after the ORIGINAL plat filer (e.g. "Adela Rael.pdf"),
+  // NOT necessarily the current owner. The KML PLAT field contains the original name.
+  // Priority: extracted plat name → current owner fallback.
+  const platName = _extractPlatName(p.plat || '');
+  const nameDefault = platName || p.owner || '';
 
   // Build filter panel in the local cabinet column
   locCards.innerHTML =
@@ -2160,11 +2250,13 @@ function searchCabinetFromKml(pi) {
     '</div>' +
 
     '<div class="cab-filter-row">' +
-    '<label class="cab-filter-label" for="cabFilterName">Name <span style="opacity:.5">(matched against filenames)</span></label>' +
+    '<label class="cab-filter-label" for="cabFilterName">Plat Name <span style="opacity:.5">(matched against filenames)</span></label>' +
     '<input id="cabFilterName" class="inp cab-filter-inp" ' +
     'value="' + escHtml(nameDefault) + '" ' +
     'placeholder="e.g. ADELA RAEL" />' +
-    '<span class="cab-filter-hint">Current owner name — edit if the file is named differently</span>' +
+    '<span class="cab-filter-hint">Original plat filer name — from KML PLAT field' +
+    (p.owner && p.owner !== nameDefault ? ' &nbsp;&middot;&nbsp; Current owner: <em>' + escHtml(p.owner) + '</em>' : '') +
+    '</span>' +
     '</div>' +
 
     '<div class="cab-filter-row" style="flex-direction:row;align-items:center;gap:8px;padding-top:2px">' +
@@ -2238,8 +2330,11 @@ async function _executeKmlCabinetSearch(pi) {
       client_name: clientName,
     };
     // If the user typed a name override, pass it as grantor for name matching
+    // and set name_override=true so the backend skips client_name token search
+    // (prevents "Garza, Veronica" from flooding results when searching "Adela Rael")
     if (nameInput.trim()) {
       payload.grantor = nameInput.trim();
+      payload.name_override = true;
     }
 
     const res = await apiFetch('/find-plat-local', 'POST', payload);
@@ -2669,27 +2764,52 @@ async function addFoundAdjoiner(name) {
     return false;
   }
 
-  const exists = rs.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === name.toLowerCase());
-  if (exists) { showToast("Already on board", "info"); return true; }
+  // Clean the name (strip trailing &, Or, etc.)
+  let cleanName = cleanOwnerName(name);
 
   // Carry the UPC if we know it (from discoveredAdjoiners or ArcGIS spatial)
   const adjData = (state.discoveredAdjoiners || []).find(d => d.name.toLowerCase() === name.toLowerCase());
+  const upc = (adjData && adjData.upc) || '';
+
+  // If the name is just a UPC code, resolve it to the owner's name
+  if (isUpcCode(cleanName) && upc) {
+    const resolved = await resolveUpcToOwner(upc);
+    if (resolved) cleanName = resolved;
+    else cleanName = `UPC ${cleanName.trim()}`; // Fallback: clearly label as UPC
+  } else if (isUpcCode(cleanName)) {
+    // It's a bare number with no UPC mapping — try treating it as a UPC
+    const resolved = await resolveUpcToOwner(cleanName.trim());
+    if (resolved) {
+      cleanName = resolved;
+    } else {
+      cleanName = `UPC ${cleanName.trim()}`;
+    }
+  }
+
+  if (!cleanName || cleanName.length < 2) {
+    showToast('Name too short to add', 'warn');
+    return false;
+  }
+
+  const exists = rs.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === cleanName.toLowerCase());
+  if (exists) { showToast("Already on board", "info"); return true; }
+
   rs.subjects.push({
     id: "adj_" + Date.now() + Math.random().toString(36).substr(2, 5),
     type: "adjoiner",
-    name: name,
-    upc: (adjData && adjData.upc) || '',
+    name: cleanName,
+    upc: upc,
     plat: (adjData && adjData.plat) || '',
     deed_saved: false, plat_saved: false, status: "pending", notes: ""
   });
 
   const ok = await persistSession();
   if (ok) {
-    showToast(`Added ${name} to research board`, "success");
+    showToast(`Added ${cleanName} to research board`, "success");
   } else {
     // Roll back the in-memory push so state stays consistent
     rs.subjects.pop();
-    showToast(`Failed to save ${name} — not added`, "error");
+    showToast(`Failed to save ${cleanName} — not added`, "error");
   }
   return ok;
 }
@@ -2709,12 +2829,14 @@ async function addAllAndContinue() {
   let added = 0;
   const discovered = state.discoveredAdjoiners || [];
   for (const j of discovered) {
-    const exists = rs.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === j.name.toLowerCase());
+    const cleanName = cleanOwnerName(j.name);
+    if (!cleanName || cleanName.length < 2 || isUpcCode(cleanName)) continue;
+    const exists = rs.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === cleanName.toLowerCase());
     if (!exists) {
       rs.subjects.push({
         id: "adj_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
         type: "adjoiner",
-        name: j.name,
+        name: cleanName,
         upc: j.upc || '',
         plat: j.plat || '',
         deed_saved: false, plat_saved: false, status: "pending", notes: ""
@@ -2864,6 +2986,22 @@ function renderResearchBoard() {
     return;
   }
 
+  // Auto-resolve any numeric-only names (UPCs) that slipped through
+  _autoResolveNumericNames(rs);
+
+  // Clean trailing conjunctions from existing session names (one-time migration)
+  let _namesCleaned = false;
+  for (const subj of rs.subjects) {
+    const cleaned = cleanOwnerName(subj.name);
+    if (cleaned !== subj.name && cleaned.length > 1) {
+      subj.name = cleaned;
+      _namesCleaned = true;
+    }
+  }
+  if (_namesCleaned) {
+    persistSession(); // Save cleaned names (fire-and-forget)
+  }
+
   const adjoiners = rs.subjects.filter(s => s.type === "adjoiner");
   const client = rs.subjects.find(s => s.type === "client");
   let html = "";
@@ -2873,6 +3011,62 @@ function renderResearchBoard() {
 
   adjoiners.forEach(s => { html += buildSubjectCard(s, rs); });
   grid.innerHTML = html;
+
+  // Update the bottom progress bar
+  _updateBoardProgress(rs, client, adjoiners);
+}
+
+/**
+ * Auto-resolve numeric-only adjoiner names via ArcGIS.
+ * Runs once per session load — marks resolved names so it doesn't re-run.
+ */
+let _resolveInFlight = false;
+async function _autoResolveNumericNames(rs) {
+  if (_resolveInFlight) return;
+  const numericSubjects = rs.subjects.filter(
+    s => s.type === 'adjoiner' && isUpcCode(s.name) && !s._resolveAttempted
+  );
+  if (!numericSubjects.length) return;
+
+  _resolveInFlight = true;
+  let changed = false;
+  for (const subj of numericSubjects) {
+    subj._resolveAttempted = true;
+    const upc = subj.upc || subj.name.trim();
+    try {
+      const resolved = await resolveUpcToOwner(upc);
+      if (resolved && resolved.length > 2 && !isUpcCode(resolved)) {
+        console.log(`[resolve] UPC ${upc} → ${resolved}`);
+        subj.name = resolved;
+        if (!subj.upc) subj.upc = upc;
+        changed = true;
+      } else {
+        // Label it clearly as a UPC
+        subj.name = `UPC ${subj.name.trim()}`;
+        if (!subj.upc) subj.upc = upc;
+        changed = true;
+      }
+    } catch (e) {
+      console.warn(`[resolve] Failed for ${upc}:`, e.message);
+    }
+  }
+  _resolveInFlight = false;
+  if (changed) {
+    await persistSession();
+    renderResearchBoard();
+  }
+}
+
+/** Update the Deeds: X/Y, Plats: X/Y footer counters. */
+function _updateBoardProgress(rs, client, adjoiners) {
+  const allSubjects = [client, ...adjoiners].filter(Boolean);
+  const total = allSubjects.length;
+  const deedsDone = allSubjects.filter(s => s.deed_saved).length;
+  const platsDone = allSubjects.filter(s => s.plat_saved).length;
+  const deedEl = document.getElementById('statDeeds');
+  const platEl = document.getElementById('statPlats');
+  if (deedEl) deedEl.textContent = `${deedsDone}/${total}`;
+  if (platEl) platEl.textContent = `${platsDone}/${total}`;
 }
 
 function buildSubjectCard(s, rs) {
@@ -2881,26 +3075,48 @@ function buildSubjectCard(s, rs) {
   const accentColor = isClient ? "var(--accent)" : "#7a4f9a";
 
   const deedChip = s.deed_saved
-    ? `<span class="chip chip-done"> Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="Open deed" onclick="openFile('${s.deed_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')"></button>` : ""}`
-    : `<span class="chip chip-todo"> Deed</span>`;
+    ? `<span class="chip chip-done">✓ Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="Open deed" onclick="openFile('${s.deed_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">📄</button>` : ""}`
+    : `<span class="chip chip-todo">Deed</span>`;
   const platChip = s.plat_saved
-    ? `<span class="chip chip-done"> Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="Open plat" onclick="openFile('${s.plat_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')"></button>` : ""}`
-    : `<span class="chip chip-todo"> Plat</span>`;
+    ? `<span class="chip chip-done">✓ Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="Open plat" onclick="openFile('${s.plat_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">📐</button>` : ""}`
+    : `<span class="chip chip-todo">Plat</span>`;
 
   const statusColors = { done: "#1a3028;color:#56d3a0", na: "#281a1a;color:#888", pending: "var(--bg3);color:var(--text3)" };
-  const statusLabel = { done: " Done", na: " N/A", pending: " Pending" }[st];
+  const statusLabel = { done: "✓ Done", na: "— N/A", pending: "⧗ Pending" }[st];
+
+  // UPC badge (only if we have a UPC and it's not already in the display name)
+  const upcBadge = s.upc && !s.name.includes('UPC')
+    ? `<span style="font-size:9px;font-family:monospace;color:var(--text3);opacity:.7;margin-left:4px">UPC ${escHtml(s.upc)}</span>`
+    : '';
+
+  // Search result count badge (persisted from bulk search)
+  const countBadge = s.search_count != null
+    ? (s.search_count > 0
+      ? `<span style="font-size:10px;color:var(--accent2);margin-left:auto">🔍 ${s.search_count} record${s.search_count !== 1 ? 's' : ''} found</span>`
+      : `<span style="font-size:10px;color:var(--text3);margin-left:auto">No records found</span>`)
+    : '';
+
+  // Loading indicator (set during bulk/individual search)
+  const loadingId = `loader_${s.id}`;
 
   return `
     <div class="adjoiner-card status-${st}" id="card_${s.id}" style="border-top-color:${accentColor}">
       <div class="adjoiner-card-header">
-        <div class="flex-col gap-1">
+        <div class="flex-col gap-1" style="flex:1;min-width:0">
           <strong style="font-size:15px">${escHtml(s.name)}</strong>
-          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:${isClient ? 'var(--accent2)' : '#b080e0'}">
-            ${isClient ? "★ Client" : " Adjoiner"}
-          </span>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:${isClient ? 'var(--accent2)' : '#b080e0'}">
+              ${isClient ? "★ Client" : "⬡ Adjoiner"}
+            </span>
+            ${upcBadge}
+          </div>
         </div>
-        <button class="chip" style="background:${statusColors[st]};border-color:transparent;cursor:pointer;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700"
-          onclick="cycleSubjectStatus('${s.id}')">${statusLabel}</button>
+        <div class="flex-col gap-1" style="align-items:flex-end">
+          <button class="chip" style="background:${statusColors[st]};border-color:transparent;cursor:pointer;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:700"
+            onclick="cycleSubjectStatus('${s.id}')">${statusLabel}</button>
+          ${countBadge}
+        </div>
+        <span id="${loadingId}" style="display:none"><div class="spinner" style="width:16px;height:16px;margin-left:6px"></div></span>
       </div>
 
       <div class="adjoiner-card-body">
@@ -2921,18 +3137,22 @@ function buildSubjectCard(s, rs) {
 
         <!-- Actions -->
         <div class="row-layout gap-2 flex-wrap border-t pt-2" style="border-color:var(--border)">
-          <button class="btn btn-outline btn-sm flex-1" onclick="searchForSubject('${escHtml(s.name.split(",")[0]).replace(/'/g, "\\'")}')">
-             Search
-          </button>
           ${!isClient ? `
-          <button class="btn btn-outline btn-sm flex-1" onclick="saveAdjDeed('${s.id}')">
-            ⬇ Save Deed
+          <button class="btn btn-outline btn-sm flex-1" onclick="saveAdjDeed('${s.id}')" title="Search records and save a deed for this adjoiner">
+            🔍 Find Deed
           </button>
-          <button class="btn btn-outline btn-sm flex-1" onclick="saveAdjPlat('${s.id}')">
-             Find Plat
+          <button class="btn btn-outline btn-sm flex-1" onclick="saveAdjPlat('${s.id}')" title="Search cabinet/KML for plat">
+            📐 Find Plat
           </button>
-          <button class="btn btn-outline btn-sm" style="color:#ff7b72" onclick="removeSubject('${s.id}')">✗</button>
-          ` : ""}
+          <button class="btn btn-outline btn-sm" style="color:#ff7b72" onclick="removeSubject('${s.id}')" title="Remove this adjoiner">✗</button>
+          ` : `
+          <button class="btn btn-outline btn-sm flex-1" onclick="goToStep(2)" title="Go to Client Deed search">
+            🔍 Client Deed
+          </button>
+          <button class="btn btn-outline btn-sm flex-1" onclick="goToStep(3)" title="Go to Client Plat search">
+            📐 Client Plat
+          </button>
+          `}
         </div>
       </div>
     </div>`;
@@ -2973,13 +3193,23 @@ function buildChainTracker(s) {
   </div>`;
 }
 
-//  Search from board 
+//  Search from board — now opens inline deed pick modal instead of navigating away
 function searchForSubject(name) {
-  if (document.getElementById("s2SearchName")) {
-    document.getElementById("s2SearchName").value = name;
+  // Find the subject by name and use the inline deed search modal
+  const rs = state.researchSession;
+  if (!rs) return;
+  const subj = rs.subjects.find(s => s.name.split(',')[0].trim().toLowerCase() === name.toLowerCase()
+    || s.name.toLowerCase() === name.toLowerCase());
+  if (subj && subj.type === 'adjoiner') {
+    saveAdjDeed(subj.id);
+  } else {
+    // Fallback for client or unmatched — go to Step 2
+    if (document.getElementById("s2SearchName")) {
+      document.getElementById("s2SearchName").value = name;
+    }
+    goToStep(2);
+    setTimeout(() => doStep2Search(), 300);
   }
-  goToStep(2);
-  setTimeout(() => doStep2Search(), 300);
 }
 
 // ── Adjoiner: auto-search deeds and show a pick modal ──────────────────────────
@@ -2998,8 +3228,24 @@ async function saveAdjDeed(subjId) {
     return;
   }
 
-  // Otherwise, auto-search by last name and show a pick dialog
-  const lastName = subj.name.split(',')[0].trim();
+  // Handle UPC-only names — try to resolve the owner first
+  let searchableName = subj.name;
+  if (searchableName.startsWith('UPC ') && subj.upc) {
+    // Try resolving UPC to owner name one more time
+    const resolved = await resolveUpcToOwner(subj.upc);
+    if (resolved && !isUpcCode(resolved)) {
+      searchableName = resolved;
+      subj.name = resolved;  // Update the name permanently
+      await persistSession();
+    } else {
+      showToast(`Cannot search for "${subj.name}" — no owner name found for this UPC. Try using the map to identify the owner.`, 'warn');
+      return;
+    }
+  }
+
+  // Extract search name — try full name first, fall back to last name only
+  const fullName = searchableName.trim();
+  const lastName = fullName.split(',')[0].trim();
   if (!lastName || lastName.length < 2) {
     showToast('Adjoiner name too short to search', 'warn');
     return;
@@ -3009,17 +3255,31 @@ async function saveAdjDeed(subjId) {
     showToast('Not connected to records — searching anyway...', 'warn');
   }
 
-  showToast(`Searching records for "${lastName}"...`, 'info');
+  showToast(`Searching records for "${fullName}"...`, 'info');
   try {
-    const res = await apiFetch('/search', 'POST', { name: lastName, operator: 'begins with' });
-    if (!res.success) { showToast('Search error: ' + res.error, 'error'); return; }
-    // Filter to deed / conveyance instrument types — skip mortgages, liens, releases, etc.
+    // Filter to deed / conveyance instrument types
     const _DEED_TYPE_RE = /deed|warranty|quitclaim|grant|convey|patent|transfer|bargain|assign/i;
-    const deedResults = (res.results || []).filter(r =>
+
+    // Try full name first (more precise)
+    let res = await apiFetch('/search', 'POST', { name: fullName, operator: 'begins with' });
+    if (!res.success) { showToast('Search error: ' + res.error, 'error'); return; }
+    let deedResults = (res.results || []).filter(r =>
       _DEED_TYPE_RE.test(r.instrument_type || '') || !r.instrument_type
     );
+
+    // If full name returns 0 results, fall back to last name only
+    if (!deedResults.length && fullName.includes(',')) {
+      showToast(`No results for full name, trying last name "${lastName}"...`, 'info');
+      res = await apiFetch('/search', 'POST', { name: lastName, operator: 'begins with' });
+      if (res.success) {
+        deedResults = (res.results || []).filter(r =>
+          _DEED_TYPE_RE.test(r.instrument_type || '') || !r.instrument_type
+        );
+      }
+    }
+
     if (!deedResults.length) {
-      showToast(`No deed-type records found for "${lastName}" (${(res.results||[]).length} non-deed records skipped). Try searching manually in Step 2.`, 'warn');
+      showToast(`No deed-type records found for "${lastName}" (${(res.results||[]).length} non-deed records skipped).`, 'warn');
       return;
     }
     _showAdjDeedPickModal(subjId, subj.name, deedResults);
@@ -3411,24 +3671,260 @@ async function bulkSearchAdjoiners() {
   if (!pending.length) { showToast("No pending adjoiners", "info"); return; }
   if (!state.loggedIn) { showToast("Not connected to records", "warn"); return; }
 
-  showToast(`Searching ${pending.length} adjoiners...`, "info");
+  // Ask user whether to auto-save or just count
+  const autoSave = confirm(
+    `Found ${pending.length} adjoiners without deeds.\n\n` +
+    `• Click OK to AUTO-SAVE the best deed for each adjoiner\n` +
+    `• Click Cancel to just count records (no downloads)\n\n` +
+    `Auto-save picks the most recent warranty/deed document for each name.`
+  );
+
+  const _DEED_TYPE_RE = /deed|warranty|quitclaim|grant|convey|patent|transfer|bargain|assign/i;
+  showToast(`🔍 ${autoSave ? 'Auto-saving deeds' : 'Counting records'} for ${pending.length} adjoiners...`, "info");
+  let searched = 0, saved = 0, failed = 0;
+
   for (const subj of pending) {
-    const ln = subj.name.split(",")[0].trim();
+    // Show per-card loading indicator
+    const loader = document.getElementById(`loader_${subj.id}`);
+    if (loader) loader.style.display = 'inline-block';
+
+    // Skip UPC-only names that can't be searched
+    if (subj.name.startsWith('UPC ')) {
+      subj.search_count = 0;
+      subj._bulkNote = 'Skipped — no owner name';
+      if (loader) loader.style.display = 'none';
+      renderResearchBoard();
+      continue;
+    }
+
+    // Use FULL name first, fall back to last name
+    const fullName = subj.name.trim();
+    const lastName = fullName.split(',')[0].trim();
+    let searchName = fullName.includes(',') ? fullName : lastName;
+
     try {
-      const res = await apiFetch("/search", "POST", { name: ln, operator: "begins with" });
-      const count = res.results?.length || 0;
-      const card = document.getElementById(`card_${subj.id}`);
-      if (card) {
-        const indicator = document.createElement("div");
-        indicator.className = "text-xs mt-1 " + (count > 0 ? "text-accent2" : "text-text3");
-        indicator.textContent = count > 0 ? ` ${count} record${count !== 1 ? "s" : ""} found` : "No records found";
-        const header = card.querySelector(".adjoiner-card-header");
-        if (header) header.appendChild(indicator);
+      let res = await apiFetch("/search", "POST", { name: searchName, operator: "begins with" });
+      let allResults = res.results || [];
+
+      // Fall back to last name if full name returns 0
+      if (!allResults.length && fullName.includes(',')) {
+        res = await apiFetch("/search", "POST", { name: lastName, operator: "begins with" });
+        allResults = res.results || [];
       }
-    } catch { }
-    await new Promise(r => setTimeout(r, 300));
+
+      // Filter to deed types
+      const deedResults = allResults.filter(r =>
+        _DEED_TYPE_RE.test(r.instrument_type || '') || !r.instrument_type
+      );
+
+      subj.search_count = deedResults.length;
+      searched++;
+
+      // Auto-save: pick the best deed and download it
+      if (autoSave && deedResults.length > 0 && !subj.deed_saved) {
+        const best = _pickBestDeed(deedResults, subj.name);
+        if (best) {
+          try {
+            const dlRes = await apiFetch('/download', 'POST', {
+              doc_no: best.doc_no,
+              grantor: best.grantor || '',
+              grantee: best.grantee || '',
+              location: best.location || '',
+              job_number: rs.job_number,
+              client_name: rs.client_name,
+              job_type: rs.job_type,
+              create_project: true,
+              is_adjoiner: true,
+              adjoiner_name: subj.name,
+              subject_id: subj.id,
+            });
+            if (dlRes.success) {
+              subj.deed_saved = true;
+              if (dlRes.saved_to) subj.deed_path = dlRes.saved_to;
+              saved++;
+            } else {
+              failed++;
+            }
+          } catch (e) {
+            console.warn(`[bulk] Download failed for ${subj.name}:`, e.message);
+            failed++;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`[bulk] Search failed for ${searchName}:`, e.message);
+    }
+
+    if (loader) loader.style.display = 'none';
+    renderResearchBoard();
+    await new Promise(r => setTimeout(r, 500));
   }
-  showToast("Bulk search complete", "success");
+
+  await persistSession();
+  if (autoSave) {
+    showToast(`✓ Bulk complete — ${saved} deeds saved, ${failed} failed, ${searched - saved - failed} no results`, "success");
+  } else {
+    showToast(`✓ Bulk search complete — ${searched} adjoiners checked`, "success");
+  }
+}
+
+/**
+ * Pick the best deed from search results for auto-save.
+ * Prioritizes: warranty deeds > other deeds, most recent first,
+ * and prefers records where the adjoiner is the GRANTEE (they received the property).
+ */
+function _pickBestDeed(results, adjName) {
+  const adjLast = adjName.split(',')[0].trim().toUpperCase();
+  const scored = results.map(r => {
+    let score = 0;
+    const type = (r.instrument_type || '').toLowerCase();
+    const grantor = (r.grantor || '').toUpperCase();
+    const grantee = (r.grantee || '').toUpperCase();
+
+    // Instrument type priority
+    if (/warranty/i.test(type)) score += 50;
+    else if (/deed/i.test(type) && !/trust/i.test(type)) score += 40;
+    else if (/quitclaim/i.test(type)) score += 30;
+    else if (/grant|convey|patent/i.test(type)) score += 25;
+    else score += 5;  // Unknown type, still a deed candidate
+
+    // Prefer records where adjoiner is grantee (they received the property)
+    if (grantee.includes(adjLast)) score += 20;
+    // Also boost if they're grantor (they owned it)
+    if (grantor.includes(adjLast)) score += 10;
+
+    // Recency bonus
+    const dateStr = r.recorded_date || r.instrument_date || '';
+    try {
+      const yr = parseInt(dateStr.split('-')[0]) || parseInt(dateStr.slice(-4));
+      if (yr >= 2020) score += 15;
+      else if (yr >= 2010) score += 10;
+      else if (yr >= 2000) score += 5;
+    } catch (e) {}
+
+    return { ...r, _score: score };
+  });
+
+  scored.sort((a, b) => b._score - a._score);
+  return scored[0] || null;
+}
+
+async function bulkFindPlats() {
+  const rs = state.researchSession;
+  if (!rs) return;
+  const pending = rs.subjects.filter(s => s.type === "adjoiner" && !s.plat_saved);
+  if (!pending.length) { showToast("No adjoiners need plats", "info"); return; }
+
+  const autoSave = confirm(
+    `Found ${pending.length} adjoiners without plats.\n\n` +
+    `• Click OK to AUTO-SAVE the best plat match for each\n` +
+    `• Click Cancel to cancel\n\n` +
+    `This searches cabinet files, KML index, and online records.`
+  );
+  if (!autoSave) return;
+
+  showToast(`📐 Finding plats for ${pending.length} adjoiners...`, "info");
+  let found = 0, failed = 0;
+
+  for (const subj of pending) {
+    // Skip UPC-only
+    if (subj.name.startsWith('UPC ')) continue;
+
+    const loader = document.getElementById(`loader_${subj.id}`);
+    if (loader) loader.style.display = 'inline-block';
+
+    const adjName = subj.name;
+    const adjUpc = subj.upc || '';
+
+    // Build search detail from deed if available
+    let searchDetail = { 'Grantor': adjName, 'Grantee': '' };
+    if (subj.deed_saved && subj.deed_path) {
+      try {
+        const deedInfo = await apiFetch('/extract-deed-info', 'POST', { pdf_path: subj.deed_path });
+        if (deedInfo.success && deedInfo.detail) {
+          searchDetail = { ...deedInfo.detail, 'Grantor': adjName };
+        }
+      } catch (e) {}
+    }
+
+    try {
+      // 1. Cabinet refs from deed
+      let cabRefs = [];
+      try {
+        const fastRes = await apiFetch('/find-plat', 'POST', { detail: searchDetail });
+        cabRefs = (fastRes && fastRes.cabinet_refs) || [];
+      } catch (e) {}
+
+      // 2. KML lookup
+      const kmlRes = await apiFetch('/find-plat-kml', 'POST', {
+        detail: searchDetail, client_name: adjName, client_upc: adjUpc
+      });
+      const kmlHits = (kmlRes && kmlRes.kml_matches) || [];
+
+      // 3. Local cabinet scan
+      const localRes = await apiFetch('/find-plat-local', 'POST', {
+        detail: searchDetail, cabinet_refs: cabRefs, kml_matches: kmlHits,
+        client_name: adjName, grantor: adjName, grantee: '',
+      });
+      const localHits = (localRes && localRes.local) || [];
+
+      // Collect all candidates
+      const allCandidates = [
+        ...localHits,
+        ...(kmlHits.flatMap(k => (k.local_files || []).map(lf => ({ ...lf, strategy: 'kml_local' })))),
+      ];
+
+      if (allCandidates.length > 0) {
+        // Auto-pick the first (highest-ranked) candidate
+        const best = allCandidates[0];
+        try {
+          const saveRes = await apiFetch('/save-plat', 'POST', {
+            source: 'local', file_path: best.path, filename: best.file,
+            job_number: rs.job_number, client_name: rs.client_name,
+            job_type: rs.job_type, subject_id: subj.id,
+            is_adjoiner: true, adjoiner_name: subj.name
+          });
+          if (saveRes.success) {
+            subj.plat_saved = true;
+            if (saveRes.saved_to) subj.plat_path = saveRes.saved_to;
+            found++;
+          } else { failed++; }
+        } catch (e) { failed++; }
+      } else {
+        // Try online fallback
+        try {
+          const onlineRes = await apiFetch('/find-plat-online', 'POST', {
+            detail: searchDetail, client_name: adjName, grantee: '', grantor: adjName
+          });
+          const onlineHits = (onlineRes && onlineRes.online) || [];
+          if (onlineHits.length > 0) {
+            const best = onlineHits[0];
+            const saveRes = await apiFetch('/save-plat', 'POST', {
+              source: 'online', doc_no: best.doc_no, location: best.location || '',
+              job_number: rs.job_number, client_name: rs.client_name,
+              job_type: rs.job_type, subject_id: subj.id,
+              is_adjoiner: true, adjoiner_name: subj.name
+            });
+            if (saveRes.success) {
+              subj.plat_saved = true;
+              if (saveRes.saved_to) subj.plat_path = saveRes.saved_to;
+              found++;
+            } else { failed++; }
+          } else { failed++; }
+        } catch (e) { failed++; }
+      }
+    } catch (e) {
+      console.warn(`[bulk-plat] Error for ${adjName}:`, e.message);
+      failed++;
+    }
+
+    if (loader) loader.style.display = 'none';
+    renderResearchBoard();
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  await persistSession();
+  showToast(`✓ Plat search complete — ${found} plats saved, ${failed} not found`, "success");
 }
 
 async function openFolderForContext() {
@@ -4323,6 +4819,18 @@ function _initPropPickerMap() {
   });
   _propPicker.renderer = canvasRenderer;
 
+  // Create dedicated panes with z-index ABOVE everything including
+  // reference labels (shadowPane=700, markerPane=600, popupPane=700)
+  // so parcel lines never get buried under any basemap layer.
+  _propPicker.map.createPane('parcelsPane');
+  _propPicker.map.getPane('parcelsPane').style.zIndex = 625;
+  _propPicker.map.getPane('parcelsPane').style.pointerEvents = 'none';
+
+  // Pane for the ArcGIS-based highlight polygon (above parcel lines)
+  _propPicker.map.createPane('highlightPane');
+  _propPicker.map.getPane('highlightPane').style.zIndex = 650;
+  _propPicker.map.getPane('highlightPane').style.pointerEvents = 'none';
+
   // ── BLM PLSS Grid Overlay (Township/Range/Section boundaries) ─────────
   // The BLM CadNSDI MapServer is DYNAMIC (singleFusedMapCache: false),
   // so regular L.tileLayer with /tile/ URLs won't work.
@@ -4380,6 +4888,48 @@ function _initPropPickerMap() {
   const plssSections = _createPlssDynamicLayer('2', 0.50, 11);
   // Layer 3: PLSS Quarter Sections / Intersected (visible zoom ≥ 14)
   const plssQuarters = _createPlssDynamicLayer('3', 0.45, 14);
+
+  // ── ArcGIS Parcel Boundaries via Esri Leaflet (authoritative, pixel-perfect) ──
+  // L.esri.dynamicMapLayer handles all the complexity of MapServer /export:
+  // proper bounding boxes, scale detection, dynamic symbology, and tile alignment.
+  const _PARCELS_URL = 'https://gis.ose.nm.gov/server_s/rest/services/Parcels/County_Parcels_2025/MapServer';
+
+  const arcgisParcelsLayer = L.esri.dynamicMapLayer({
+    url: _PARCELS_URL,
+    layers: [29],          // Taos County only
+    opacity: 1.0,
+    pane: 'parcelsPane',
+    minZoom: 13,
+    maxZoom: 19,
+    f: 'image',
+    format: 'png32',
+    attribution: '© <a href="https://gis.ose.nm.gov">NM OSE</a> County Parcels 2025',
+    // Custom symbology: bright red outlines matching Google Earth
+    // Must be a JSON *string* for esri-leaflet to pass it correctly to the /export URL
+    dynamicLayers: JSON.stringify([{
+      id: 29,
+      source: { type: 'mapLayer', mapLayerId: 29 },
+      drawingInfo: {
+        renderer: {
+          type: 'simple',
+          symbol: {
+            type: 'esriSFS',
+            style: 'esriSFSSolid',
+            color: [0, 0, 0, 0],       // transparent fill
+            outline: {
+              type: 'esriSLS',
+              style: 'esriSLSSolid',
+              color: [220, 40, 40, 255], // bright red — matches Google Earth KML lines
+              width: 2
+            }
+          }
+        }
+      }
+    }]),
+  });
+
+  // Add ArcGIS parcels to map by default
+  arcgisParcelsLayer.addTo(_propPicker.map);
 
   // ── Water Rights (NM OSE Points of Diversion) dynamic layer ─────────
   const _waterRightsGroup = L.layerGroup();
@@ -4480,6 +5030,7 @@ function _initPropPickerMap() {
   const overlays = {
     '🏷️ Place Names': referenceLabels,
     '🛣️ Roads': transportOverlay,
+    '🏠 Parcels (ArcGIS)': arcgisParcelsLayer,
     '📐 Townships (PLSS)': plssTownships,
     '📐 Sections (PLSS)': plssSections,
     '📐 Quarter Sec (PLSS)': plssQuarters,
@@ -4637,16 +5188,8 @@ function _renderPropPickerLayer() {
     onEachFeature: (feature, layer) => {
       layer.on({
         click: e => { L.DomEvent.stopPropagation(e); _onPropParcelClick(feature, layer); },
-        mouseover: () => {
-          if (layer !== _propPicker.selectedLayer) {
-            layer.setStyle && layer.setStyle({ fillOpacity: 0.80, weight: 2.5 });
-          }
-        },
-        mouseout: () => {
-          if (layer !== _propPicker.selectedLayer) {
-            layer.setStyle && layer.setStyle(_pickerParcelStyle(feature, boardNames));
-          }
-        },
+        // No mouseover/mouseout styling — KML polygons are invisible click targets.
+        // The ArcGIS tile layer provides the authoritative red boundary lines.
       });
       const p = feature.properties;
       const ttLines = [`<b>${p.owner || '(no name)'}</b>`];
@@ -4670,25 +5213,81 @@ function _pickerParcelFill(feature, boardNames) {
   const p = feature.properties;
   if (p.highlight) return '#e3c55a';                                      // client / highlighted → gold
   if (boardNames.has((p.owner || '').toLowerCase())) return '#b080e0';   // on research board → purple
-  return '#4facfe';                                                        // regular parcel → blue
+  return 'transparent';                                                    // regular parcel → invisible
 }
 
 function _pickerParcelStyle(feature, boardNames) {
   const fill = _pickerParcelFill(feature, boardNames);
   const highlight = feature.properties.highlight;
   const onBoard = boardNames.has((feature.properties.owner || '').toLowerCase());
+  // KML polygons are invisible click targets — ArcGIS layer renders real boundaries.
+  // stroke:false eliminates gray spider lines from the canvas renderer.
   return {
     fillColor: fill,
-    fillOpacity: highlight ? 0.50 : onBoard ? 0.35 : 0.12,
-    color: highlight ? '#f0c040' : onBoard ? '#b080e0' : '#2196f3',
-    weight: highlight ? 2.5 : onBoard ? 2.0 : 1.5,
+    fillOpacity: highlight ? 0.20 : onBoard ? 0.15 : 0,
+    stroke: false,
+    color: 'transparent',
+    weight: 0,
   };
+}
+
+// ── ArcGIS-based highlight: fetch precise geometry and draw on highlightPane ──
+
+/**
+ * Fetch the actual parcel polygon from ArcGIS by UPC and draw a
+ * highlight polygon that perfectly matches the authoritative boundary lines.
+ * @param {string} upc - The UPC to query
+ * @param {string} color - Fill/stroke color (e.g. '#56d3a0')
+ * @param {number} fillOpacity - Fill opacity (0–1)
+ */
+async function _fetchArcgisHighlight(upc, color, fillOpacity) {
+  if (!upc || !_propPicker.map) return;
+  try {
+    const params = new URLSearchParams({
+      where: `UPC='${upc}'`,
+      outFields: 'UPC',
+      returnGeometry: 'true',
+      outSR: '4326',
+      f: 'json',
+    });
+    const url = `https://gis.ose.nm.gov/server_s/rest/services/Parcels/County_Parcels_2025/MapServer/29/query?${params}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    const data = await resp.json();
+
+    if (!data.features || !data.features.length) return;
+    const rings = data.features[0].geometry?.rings;
+    if (!rings || !rings.length) return;
+
+    // Convert ArcGIS rings [lng,lat] to Leaflet [lat,lng]
+    const latlngs = rings.map(ring =>
+      ring.map(pt => [pt[1], pt[0]])
+    );
+
+    // Remove any existing highlight
+    if (_propPicker._arcgisHighlight) {
+      _propPicker.map.removeLayer(_propPicker._arcgisHighlight);
+    }
+
+    // Draw the precise polygon on the highlight pane
+    _propPicker._arcgisHighlight = L.polygon(latlngs, {
+      pane: 'highlightPane',
+      fillColor: color,
+      fillOpacity: fillOpacity,
+      color: color,
+      weight: 3,
+      opacity: 0.9,
+      interactive: false,
+    }).addTo(_propPicker.map);
+
+  } catch (e) {
+    console.warn('[arcgis-highlight] Failed to fetch geometry for UPC', upc, e.message);
+  }
 }
 
 // ── Parcel click handler ──────────────────────────────────────────────────────
 
 function _onPropParcelClick(feature, layer) {
-  // Deselect previous (board-aware styling)
+  // Deselect previous KML highlight
   if (_propPicker.selectedLayer && _propPicker.selectedLayer !== layer) {
     const boardNames = new Set(
       (state.researchSession?.subjects || []).map(s => s.name.toLowerCase())
@@ -4701,12 +5300,25 @@ function _onPropParcelClick(feature, layer) {
     );
   }
 
+  // Remove previous ArcGIS highlight polygon
+  if (_propPicker._arcgisHighlight) {
+    _propPicker.map.removeLayer(_propPicker._arcgisHighlight);
+    _propPicker._arcgisHighlight = null;
+  }
+
+  // Light KML highlight (just a subtle fill — the ArcGIS highlight will provide the precise outline)
   layer.setStyle && layer.setStyle({
-    fillColor: '#56d3a0', fillOpacity: 0.65, color: '#56d3a0', weight: 2.5,
+    fillColor: '#56d3a0', fillOpacity: 0.25, color: 'rgba(86,211,160,0.3)', weight: 0.5,
   });
 
   _propPicker.selectedLayer = layer;
   _propPicker.selectedProps = feature.properties;
+
+  // Fetch precise ArcGIS geometry for the selected parcel and draw accurate highlight
+  const upc = feature.properties.upc;
+  if (upc) {
+    _fetchArcgisHighlight(upc, '#56d3a0', 0.30);
+  }
 
   const p = feature.properties;
   document.getElementById('propPickerOwner').textContent = p.owner || '(No Name)';
@@ -4954,10 +5566,12 @@ function confirmPropertySelection() {
   }
   if (p) p.highlight = true;
 
-  // Colour the selected polygon gold (client)
+  // Colour the selected polygon gold (client) — subtle KML fill + precise ArcGIS outline
   _propPicker.selectedLayer && _propPicker.selectedLayer.setStyle && _propPicker.selectedLayer.setStyle({
-    fillColor: '#e3c55a', fillOpacity: 0.55, color: '#f0c040', weight: 2.5,
+    fillColor: '#e3c55a', fillOpacity: 0.15, color: 'rgba(240,192,64,0.2)', weight: 0.5,
   });
+  // Draw precise ArcGIS gold highlight
+  if (p.upc) _fetchArcgisHighlight(p.upc, '#f0c040', 0.35);
 
   // Disable the "Select as Client" button (already selected)
   document.getElementById('btnConfirmProperty').disabled = true;
@@ -4991,8 +5605,10 @@ async function pickerAddSelectedAsAdjoiner() {
     // Style the parcel as "on board" (purple) even though session doesn't exist yet
     _propPicker.selectedLayer && _propPicker.selectedLayer.setStyle &&
       _propPicker.selectedLayer.setStyle({
-        fillColor: '#b080e0', fillOpacity: 0.55, color: '#b080e0', weight: 2,
+        fillColor: '#b080e0', fillOpacity: 0.15, color: 'rgba(176,128,224,0.2)', weight: 0.5,
       });
+    // Draw precise ArcGIS purple highlight
+    if (_propPicker.selectedProps.upc) _fetchArcgisHighlight(_propPicker.selectedProps.upc, '#b080e0', 0.25);
     return;
   }
 
@@ -5002,8 +5618,10 @@ async function pickerAddSelectedAsAdjoiner() {
   if (ok) {
     _propPicker.selectedLayer && _propPicker.selectedLayer.setStyle &&
       _propPicker.selectedLayer.setStyle({
-        fillColor: '#b080e0', fillOpacity: 0.55, color: '#b080e0', weight: 2,
+        fillColor: '#b080e0', fillOpacity: 0.15, color: 'rgba(176,128,224,0.2)', weight: 0.5,
       });
+    // Draw precise ArcGIS purple highlight
+    if (_propPicker.selectedProps.upc) _fetchArcgisHighlight(_propPicker.selectedProps.upc, '#b080e0', 0.25);
   }
 }
 
@@ -5530,6 +6148,47 @@ function _handleGlobalKeyboard(e) {
 
 function escHtml(str) {
   return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/**
+ * Clean an owner name from ArcGIS / KML / deed text:
+ *   - Strip trailing conjunctions: " &", " OR", " AND"
+ *   - Strip trailing commas/whitespace
+ *   - Returns cleaned name (preserves original casing)
+ */
+function cleanOwnerName(name) {
+  if (!name) return '';
+  let n = name.trim();
+  // Iteratively strip trailing conjunctions (handles "NAME &" or "NAME, &")
+  for (let i = 0; i < 3; i++) {
+    n = n.replace(/[,\s]+(?:&|AND|OR)\s*$/i, '').trim();
+  }
+  // Strip trailing comma
+  n = n.replace(/,\s*$/, '').trim();
+  return n;
+}
+
+/**
+ * Check if a string is a raw UPC code (all digits, possibly with spaces/dashes).
+ */
+function isUpcCode(name) {
+  return /^[\d\s\-]+$/.test(name.trim()) && name.trim().length >= 3;
+}
+
+/**
+ * Resolve a UPC code to an owner name via ArcGIS.
+ * Returns the owner name, or null if resolution fails.
+ */
+async function resolveUpcToOwner(upc) {
+  try {
+    const res = await apiFetch('/property-address', 'POST', { upc: upc.trim() });
+    if (res.success && res.owner_official && res.owner_official.trim().length > 2) {
+      return cleanOwnerName(res.owner_official.trim());
+    }
+  } catch (e) {
+    console.warn(`[resolveUpc] Failed to resolve UPC ${upc}:`, e.message);
+  }
+  return null;
 }
 
 function getTypeClass(type) {

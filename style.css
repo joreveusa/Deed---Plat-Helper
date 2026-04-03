@@ -2740,6 +2740,70 @@ body, body * {
   border-color: rgba(227, 197, 90, 0.3);
 }
 
+/* ═══════════════════════════ RESUME BANNER ═══════════════════════════ */
+.resume-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  margin-bottom: 10px;
+  background: linear-gradient(135deg, rgba(45, 138, 110, 0.12), rgba(79, 172, 254, 0.08));
+  border: 1px solid rgba(45, 138, 110, 0.35);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: fadeIn 0.5s ease, resumePulse 3s ease-in-out infinite;
+}
+.resume-banner:hover {
+  background: linear-gradient(135deg, rgba(45, 138, 110, 0.2), rgba(79, 172, 254, 0.14));
+  border-color: var(--accent2);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(45, 138, 110, 0.2);
+}
+@keyframes resumePulse {
+  0%, 100% { border-color: rgba(45, 138, 110, 0.35); }
+  50% { border-color: rgba(45, 138, 110, 0.6); }
+}
+.resume-banner-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+.resume-banner-info { flex: 1; }
+.resume-banner-title {
+  font-size: 14px;
+  font-weight: 800;
+  font-family: 'Outfit', sans-serif;
+  color: var(--accent2);
+  margin-bottom: 2px;
+}
+.resume-banner-meta {
+  font-size: 12px;
+  color: var(--text2);
+}
+.resume-banner-type {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 8px;
+  background: rgba(227, 197, 90, 0.12);
+  color: #e3c55a;
+  border: 1px solid rgba(227, 197, 90, 0.25);
+  margin-left: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.3px;
+}
+.resume-banner-arrow {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--accent2);
+  flex-shrink: 0;
+  transition: transform 0.2s;
+}
+.resume-banner:hover .resume-banner-arrow {
+  transform: translateX(4px);
+}
+
 /* ── fadeIn animation (shared) ─────────────────────────────── */
 @keyframes fadeIn {
   from { opacity: 0; }

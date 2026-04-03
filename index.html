@@ -11,6 +11,8 @@
   <!-- Leaflet map for KML parcel picker -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <!-- Esri Leaflet — proper ArcGIS MapServer integration (dynamic layers, custom symbology) -->
+  <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
 </head>
 <body>
   <!-- TOP NAVIGATION BAR -->
@@ -391,7 +393,8 @@
            </div>
            <div class="row-layout gap-2">
              <button class="btn btn-outline btn-sm" style="color:#ff7b72;border-color:rgba(255,123,114,.3)" onclick="removePendingSubjects()" title="Remove all adjoiners that have no saved deeds or plats">🗑️ Remove Pending</button>
-             <button class="btn btn-outline" onclick="bulkSearchAdjoiners()" title="Attempts an online name search for all pending adjoiners">🔍 Bulk Search</button>
+             <button class="btn btn-outline" onclick="bulkSearchAdjoiners()" title="Search and auto-save deeds for all pending adjoiners">📄 Bulk Deeds</button>
+             <button class="btn btn-outline" onclick="bulkFindPlats()" title="Auto-find and save plats for all adjoiners missing plats">📐 Bulk Plats</button>
              <button class="btn btn-outline" onclick="openFolderForContext()">📁 Open Folder</button>
              <button class="btn btn-success" onclick="goToStep(6)">Continue to Boundary →</button>
            </div>

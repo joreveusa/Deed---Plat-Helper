@@ -183,13 +183,16 @@ def _extract_placemark(elem, source_name: str, ns: str = "{http://www.opengis.ne
     if ext_data is not None:
         for sd in ext_data.iter():
             if sd.tag.endswith("SimpleData") or sd.tag == "SimpleData":
-                attr_name = sd.get("name", "")
+                raw_name = sd.get("name", "")
+                # Strip namespace prefixes like "Taos_County:" to normalize field names
+                attr_name = raw_name.split(":")[-1].strip().upper() if ":" in raw_name else raw_name.upper()
                 val = (sd.text or "").strip()
                 if attr_name == "UPC":
                     upc = val
-                elif attr_name == "OWNER" and not owner:
-                    # Some KMZ files store owner in ExtendedData
-                    owner = val
+                elif attr_name in ("OWNER", "OWNERALL", "OWNER_ALL"):
+                    # Override if we have no owner OR current owner is just a numeric ID
+                    if not owner or owner.isdigit():
+                        owner = val
                 elif attr_name == "PLAT":
                     plat = val
                 elif attr_name == "BOOK":
@@ -388,7 +391,9 @@ def _find_polygon_in_kml(kml_path: str, target_upc: str) -> Optional[list]:
                 if ext is not None:
                     for sd in ext.iter():
                         if (sd.tag.endswith("SimpleData") or sd.tag == "SimpleData"):
-                            if sd.get("name") == "UPC" and (sd.text or "").strip() == target_upc:
+                            sd_name = sd.get("name", "")
+                            sd_key = sd_name.split(":")[-1].strip().upper() if ":" in sd_name else sd_name.upper()
+                            if sd_key == "UPC" and (sd.text or "").strip() == target_upc:
                                 return _extract_all_coords(elem, ns)
                 elem.clear()
     except Exception:
@@ -419,7 +424,9 @@ def _find_polygon_in_kmz(kmz_path: str, target_upc: str) -> Optional[list]:
                             if ext is not None:
                                 for sd in ext.iter():
                                     if (sd.tag.endswith("SimpleData") or sd.tag == "SimpleData"):
-                                        if sd.get("name") == "UPC" and (sd.text or "").strip() == target_upc:
+                                        sd_name = sd.get("name", "")
+                                        sd_key = sd_name.split(":")[-1].strip().upper() if ":" in sd_name else sd_name.upper()
+                                        if sd_key == "UPC" and (sd.text or "").strip() == target_upc:
                                             return _extract_all_coords(elem, ns)
                             elem.clear()
     except Exception:
@@ -1164,17 +1171,65 @@ def find_adjacent_parcels(
     return results[:max_results]
 
 
-def _simplify_ring(ring: list, max_pts: int = 50) -> list:
+def _perpendicular_distance(point, line_start, line_end):
+    """Perpendicular distance from a point to a line segment (for RDP)."""
+    dx = line_end[0] - line_start[0]
+    dy = line_end[1] - line_start[1]
+    mag_sq = dx * dx + dy * dy
+    if mag_sq < 1e-20:
+        return ((point[0] - line_start[0]) ** 2 + (point[1] - line_start[1]) ** 2) ** 0.5
+    u = ((point[0] - line_start[0]) * dx + (point[1] - line_start[1]) * dy) / mag_sq
+    u = max(0, min(1, u))
+    proj_x = line_start[0] + u * dx
+    proj_y = line_start[1] + u * dy
+    return ((point[0] - proj_x) ** 2 + (point[1] - proj_y) ** 2) ** 0.5
+
+
+def _rdp_simplify(points: list, epsilon: float) -> list:
+    """Ramer-Douglas-Peucker line simplification (iterative to avoid stack overflow)."""
+    if len(points) < 3:
+        return points
+    # Iterative RDP using an explicit stack
+    keep = [False] * len(points)
+    keep[0] = True
+    keep[-1] = True
+    stack = [(0, len(points) - 1)]
+    while stack:
+        start, end = stack.pop()
+        if end - start < 2:
+            continue
+        max_dist = 0.0
+        max_idx = start
+        for i in range(start + 1, end):
+            d = _perpendicular_distance(points[i], points[start], points[end])
+            if d > max_dist:
+                max_dist = d
+                max_idx = i
+        if max_dist > epsilon:
+            keep[max_idx] = True
+            stack.append((start, max_idx))
+            stack.append((max_idx, end))
+    return [points[i] for i in range(len(points)) if keep[i]]
+
+
+def _simplify_ring(ring: list, max_pts: int = 500) -> list:
     """
-    Reduce a polygon ring to at most max_pts vertices using simple stride sampling.
+    Reduce a polygon ring to at most max_pts vertices using Ramer-Douglas-Peucker.
     Always keeps first and last point (so ring stays closed).
-    Coordinates are rounded to 4 decimal places (~11m accuracy — fine for parcel outlines).
+    Coordinates are rounded to 7 decimal places (~1cm accuracy — matches Google Earth quality).
     """
-    # Round coords first
-    ring = [[round(c[0], 4), round(c[1], 4)] for c in ring]
+    # Round coords to 7 dp (~1cm) — preserves smooth lines
+    ring = [[round(c[0], 7), round(c[1], 7)] for c in ring]
     if len(ring) <= max_pts:
         return ring
-    # Keep first, last, and evenly-spaced intermediate points
+    # Use RDP with progressively increasing epsilon until under max_pts
+    epsilon = 1e-7  # ~1cm in degrees
+    for _ in range(20):
+        simplified = _rdp_simplify(ring, epsilon)
+        if len(simplified) <= max_pts:
+            return simplified
+        epsilon *= 2.0
+    # Fallback: stride sampling if RDP doesn't converge
     step = (len(ring) - 1) / (max_pts - 1)
     indices = set([0, len(ring) - 1])
     for i in range(1, max_pts - 1):
@@ -1196,8 +1251,8 @@ def get_map_geojson(
       - highlight: True if the parcel UPC is in highlight_upcs
 
     Parcels without polygon data are emitted as Point (centroid).
-    Coordinates are simplified to 4 decimal places and polygons are
-    capped at 50 vertices to keep the response size manageable.
+    Coordinates are simplified to 7 decimal places (~1cm accuracy) and polygons are
+    simplified using Ramer-Douglas-Peucker with up to 500 vertices for accurate rendering.
 
     If source_filter is non-empty, only parcels from that source file
     are included (e.g. "TC_Parcels_2024_og.kml").
@@ -1250,11 +1305,11 @@ def get_map_geojson(
 
         if polygon and len(polygon) >= 3:
             ring = polygon if polygon[0] == polygon[-1] else polygon + [polygon[0]]
-            ring = _simplify_ring(ring, max_pts=50)
+            ring = _simplify_ring(ring, max_pts=500)
             geometry = {"type": "Polygon", "coordinates": [ring]}
         elif centroid:
             geometry = {"type": "Point",
-                        "coordinates": [round(centroid[0], 4), round(centroid[1], 4)]}
+                        "coordinates": [round(centroid[0], 7), round(centroid[1], 7)]}
         else:
             continue  # skip parcels with no geometry
 

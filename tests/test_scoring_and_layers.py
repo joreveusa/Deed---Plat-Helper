@@ -51,7 +51,7 @@ class TestScoreDeeds:
     def test_mortgage_gets_penalty(self):
         result = {"instrument_type": "Mortgage"}
         scored = _score_search_result(result)
-        assert scored["relevance_score"] < 0
+        assert scored["relevance_score"] <= 0  # clamped to 0 minimum
 
     def test_deed_outscores_mortgage(self):
         deed = _score_search_result({"instrument_type": "Warranty Deed"})
