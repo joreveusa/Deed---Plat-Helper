@@ -2599,6 +2599,147 @@ body, body * {
   color: #fff;
 }
 
+/* ═══════════════════════════ SEARCH RELEVANCE ═══════════════════════════ */
+
+/* Sort controls in results header */
+.results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sort-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sort-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text3);
+  white-space: nowrap;
+}
+.sort-select {
+  padding: 4px 8px !important;
+  font-size: 11px !important;
+  font-weight: 600;
+  width: auto !important;
+  min-width: 110px;
+  height: 28px !important;
+  border-radius: 6px !important;
+  cursor: pointer;
+}
+
+/* TRS context bar */
+.relevance-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: linear-gradient(135deg, rgba(45, 138, 110, 0.08), rgba(79, 172, 254, 0.05));
+  border: 1px solid rgba(45, 138, 110, 0.2);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text2);
+  animation: fadeIn 0.3s ease;
+}
+.relevance-context-label {
+  font-weight: 700;
+  color: var(--text3);
+  font-size: 11px;
+}
+.relevance-context-bar strong {
+  color: var(--accent2);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+/* Relevance badges in result rows */
+.relevance-badges-cell {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+.relevance-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  cursor: default;
+  transition: transform 0.15s;
+}
+.relevance-badge:hover {
+  transform: scale(1.25);
+}
+.badge-trs {
+  background: rgba(64, 194, 159, 0.12);
+  border: 1px solid rgba(64, 194, 159, 0.3);
+}
+.badge-subdiv {
+  background: rgba(79, 172, 254, 0.12);
+  border: 1px solid rgba(79, 172, 254, 0.3);
+}
+.badge-client {
+  background: rgba(227, 197, 90, 0.12);
+  border: 1px solid rgba(227, 197, 90, 0.3);
+}
+.badge-adj {
+  background: rgba(176, 128, 224, 0.12);
+  border: 1px solid rgba(176, 128, 224, 0.3);
+}
+
+.relevance-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Row highlighting for high/medium relevance */
+.result-row-high-relevance {
+  background: rgba(45, 138, 110, 0.08) !important;
+  border-left: 3px solid var(--accent2) !important;
+}
+.result-row-high-relevance:hover {
+  background: rgba(45, 138, 110, 0.14) !important;
+}
+.result-row-high-relevance .relevance-score {
+  background: rgba(45, 138, 110, 0.2);
+  color: var(--accent2);
+  border-color: rgba(45, 138, 110, 0.4);
+}
+
+.result-row-medium-relevance {
+  background: rgba(227, 197, 90, 0.04) !important;
+  border-left: 3px solid rgba(227, 197, 90, 0.4) !important;
+}
+.result-row-medium-relevance:hover {
+  background: rgba(227, 197, 90, 0.08) !important;
+}
+.result-row-medium-relevance .relevance-score {
+  background: rgba(227, 197, 90, 0.15);
+  color: #e3c55a;
+  border-color: rgba(227, 197, 90, 0.3);
+}
+
 /* ── fadeIn animation (shared) ─────────────────────────────── */
 @keyframes fadeIn {
   from { opacity: 0; }

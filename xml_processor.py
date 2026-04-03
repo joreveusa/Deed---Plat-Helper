@@ -20,6 +20,11 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None  # enrichment disabled if requests not installed
+
 # KML namespaces — Taos County files use 2.2; some KMZ files omit the namespace entirely
 _KML_NAMESPACES = [
     "{http://www.opengis.net/kml/2.2}",
@@ -444,6 +449,162 @@ def _extract_all_coords(placemark_elem, ns: str = "") -> list:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ARCGIS ENRICHMENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+# NM OSE ArcGIS Parcel Service — Taos County is layer 29
+_ARCGIS_TAOS_QUERY_URL = (
+    "https://gis.ose.nm.gov/server_s/rest/services/"
+    "Parcels/County_Parcels_2025/MapServer/29/query"
+)
+
+# Fields to pull for enrichment (lean — skip geometry and address)
+_ARCGIS_ENRICH_FIELDS = (
+    "UPC,Township,TownshipDirection,Range,RangeDirection,Section,"
+    "PLSSID,LegalDescription,Subdivision,ZoningCode,ZoningDescription,"
+    "LandUseCode,LandUseDescription,NeighborhoodCode,NeighborhoodDescription,"
+    "OwnerAll,SitusAddressAll,LandArea"
+)
+
+_ARCGIS_BATCH_SIZE = 40      # UPCs per query (keep URL length manageable)
+_ARCGIS_BATCH_DELAY = 0.25   # seconds between batches
+
+
+def _build_trs_string(attrs: dict) -> str:
+    """Assemble a human-readable TRS string from ArcGIS attribute fields."""
+    twp = (attrs.get("Township") or "").strip()
+    twp_dir = (attrs.get("TownshipDirection") or "").strip()
+    rng = (attrs.get("Range") or "").strip()
+    rng_dir = (attrs.get("RangeDirection") or "").strip()
+    sec = (attrs.get("Section") or "").strip()
+    if not twp or not rng:
+        return ""
+    trs = f"T{twp}{twp_dir} R{rng}{rng_dir}"
+    if sec:
+        trs += f" Sec {sec}"
+    return trs
+
+
+def enrich_index_with_arcgis(
+    index: dict,
+    progress_callback=None,
+) -> dict:
+    """Batch-query ArcGIS for parcels with UPCs and merge enrichment data.
+
+    Modifies the index dict in-place and returns enrichment stats.
+    """
+    if _requests is None:
+        return {"enriched": 0, "error": "requests library not available"}
+
+    parcels = index.get("parcels", [])
+    # Collect parcels with UPCs that haven't been enriched yet
+    to_enrich = []
+    for p in parcels:
+        if p.get("upc") and not p.get("arcgis"):
+            to_enrich.append(p)
+
+    if not to_enrich:
+        return {"enriched": 0, "skipped": "all parcels already enriched or no UPCs"}
+
+    total = len(to_enrich)
+    enriched_count = 0
+    error_count = 0
+    t0 = time.time()
+
+    # Process in batches
+    for batch_start in range(0, total, _ARCGIS_BATCH_SIZE):
+        batch = to_enrich[batch_start:batch_start + _ARCGIS_BATCH_SIZE]
+        upcs = [p["upc"] for p in batch]
+
+        if progress_callback:
+            pct = round(batch_start / total * 100)
+            progress_callback(
+                batch_start, total,
+                f"Enriching parcels from ArcGIS… {pct}% ({batch_start}/{total})"
+            )
+
+        # Build OR query: UPC IN ('xxx','yyy',...)
+        upc_list = ",".join(f"'{u}'" for u in upcs)
+        where_clause = f"UPC IN ({upc_list})"
+
+        try:
+            resp = _requests.get(
+                _ARCGIS_TAOS_QUERY_URL,
+                params={
+                    "where":          where_clause,
+                    "outFields":      _ARCGIS_ENRICH_FIELDS,
+                    "returnGeometry": "false",
+                    "f":              "json",
+                },
+                headers={"User-Agent": "DeedPlatHelper/1.0"},
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                print(f"[arcgis-enrich] Batch HTTP {resp.status_code} at offset {batch_start}")
+                error_count += len(batch)
+                continue
+
+            data = resp.json()
+            features = data.get("features", [])
+
+            # Build lookup by UPC
+            by_upc = {}
+            for feat in features:
+                a = feat.get("attributes", {})
+                fupc = (a.get("UPC") or "").strip()
+                if fupc:
+                    by_upc[fupc] = a
+
+            # Merge into parcel records
+            for p in batch:
+                a = by_upc.get(p["upc"])
+                if not a:
+                    continue
+                trs = _build_trs_string(a)
+                p["arcgis"] = {
+                    "trs":              trs,
+                    "plssid":           (a.get("PLSSID") or "").strip(),
+                    "legal_desc":       (a.get("LegalDescription") or "").strip()[:500],
+                    "subdivision":      (a.get("Subdivision") or "").strip(),
+                    "zoning":           (a.get("ZoningDescription") or "").strip(),
+                    "zoning_code":      (a.get("ZoningCode") or "").strip(),
+                    "land_use":         (a.get("LandUseDescription") or "").strip(),
+                    "land_use_code":    (a.get("LandUseCode") or "").strip(),
+                    "neighborhood":     (a.get("NeighborhoodDescription") or "").strip(),
+                    "neighborhood_code":(a.get("NeighborhoodCode") or "").strip(),
+                    "owner_official":   (a.get("OwnerAll") or "").strip(),
+                    "situs":            (a.get("SitusAddressAll") or "").strip(),
+                    "land_area":        a.get("LandArea") or 0,
+                }
+                # Promote TRS to top-level for fast search filtering
+                if trs:
+                    p["trs"] = trs
+                enriched_count += 1
+
+        except Exception as e:
+            print(f"[arcgis-enrich] Batch error at offset {batch_start}: {e}")
+            error_count += len(batch)
+
+        # Rate-limit between batches
+        if batch_start + _ARCGIS_BATCH_SIZE < total:
+            time.sleep(_ARCGIS_BATCH_DELAY)
+
+    elapsed = round(time.time() - t0, 1)
+    index["arcgis_enriched_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    index["arcgis_enriched_count"] = enriched_count
+
+    print(f"[arcgis-enrich] Done: {enriched_count}/{total} enriched, "
+          f"{error_count} errors, {elapsed}s")
+
+    return {
+        "enriched":   enriched_count,
+        "total":      total,
+        "errors":     error_count,
+        "elapsed_sec": elapsed,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # INDEX: Build & Load
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -513,12 +674,22 @@ def build_index(survey_data_path: str, progress_callback=None) -> dict:
 
     # Build search-optimized index
     index = {
-        "version":    2,
+        "version":    3,
         "built_at":   time.strftime("%Y-%m-%dT%H:%M:%S"),
         "total":      len(deduped),
         "sources":    sources,
         "parcels":    deduped,
     }
+
+    # ── ArcGIS enrichment (adds TRS, legal desc, zoning, etc.) ────────────
+    if _requests is not None:
+        print(f"[xml] Starting ArcGIS enrichment for {len(deduped)} parcels...",
+              flush=True)
+        enrich_stats = enrich_index_with_arcgis(index, progress_callback)
+        print(f"[xml] ArcGIS enrichment: {enrich_stats}", flush=True)
+    else:
+        print("[xml] Skipping ArcGIS enrichment (requests library not available)",
+              flush=True)
 
     # Save
     idx_path = _index_path(survey_data_path)
@@ -533,6 +704,7 @@ def build_index(survey_data_path: str, progress_callback=None) -> dict:
         "sources":    sources,
         "elapsed_sec": elapsed,
         "index_path": str(idx_path),
+        "arcgis_enriched": index.get("arcgis_enriched_count", 0),
     }
 
 
@@ -583,6 +755,9 @@ def index_status(survey_data_path: str) -> dict:
         "sources":   idx.get("sources", []) if idx else [],
         "xml_files": xml_files,
         "size_mb":   round(idx_path.stat().st_size / (1024 * 1024), 1),
+        "version":   idx.get("version", 1) if idx else 1,
+        "arcgis_enriched_at":    idx.get("arcgis_enriched_at") if idx else None,
+        "arcgis_enriched_count": idx.get("arcgis_enriched_count", 0) if idx else 0,
     }
 
 
@@ -597,6 +772,8 @@ def search_parcels_in_index(
     book: str = "",
     page: str = "",
     cabinet_ref: str = "",
+    trs: str = "",
+    subdivision: str = "",
     operator: str = "contains",
     limit: int = 50,
 ) -> list[dict]:
@@ -610,7 +787,8 @@ def search_parcels_in_index(
         return []
     parcels = index.get("parcels", [])
     return _filter_parcels(parcels, owner=owner, upc=upc, book=book, page=page,
-                           cabinet_ref=cabinet_ref, operator=operator, limit=limit)
+                           cabinet_ref=cabinet_ref, trs=trs, subdivision=subdivision,
+                           operator=operator, limit=limit)
 
 
 def _filter_parcels(
@@ -620,6 +798,8 @@ def _filter_parcels(
     book: str = "",
     page: str = "",
     cabinet_ref: str = "",
+    trs: str = "",
+    subdivision: str = "",
     operator: str = "contains",
     limit: int = 50,
 ) -> list[dict]:
@@ -630,20 +810,25 @@ def _filter_parcels(
     book_q     = book.strip()
     page_q     = page.strip()
     cab_q      = cabinet_ref.strip().upper()
+    trs_q      = trs.strip().upper()
+    subdiv_q   = subdivision.strip().upper()
 
     for p in parcels:
         match = True
 
         if owner_q:
             p_owner = p.get("owner", "").upper()
+            # Also search against ArcGIS official owner
+            p_owner_arc = (p.get("arcgis", {}).get("owner_official", "") or "").upper()
+            combined_owner = p_owner + " " + p_owner_arc
             if operator == "exact":
-                if p_owner != owner_q:
+                if p_owner != owner_q and p_owner_arc != owner_q:
                     match = False
             elif operator == "begins":
-                if not p_owner.startswith(owner_q):
+                if not p_owner.startswith(owner_q) and not p_owner_arc.startswith(owner_q):
                     match = False
             else:
-                if owner_q not in p_owner:
+                if owner_q not in combined_owner:
                     match = False
 
         if match and upc_q:
@@ -663,6 +848,17 @@ def _filter_parcels(
                 if cab_q not in p.get("plat", "").upper():
                     match = False
 
+        if match and trs_q:
+            p_trs = (p.get("trs", "") or "").upper()
+            arc_trs = (p.get("arcgis", {}).get("trs", "") or "").upper()
+            if trs_q not in p_trs and trs_q not in arc_trs:
+                match = False
+
+        if match and subdiv_q:
+            p_subdiv = (p.get("arcgis", {}).get("subdivision", "") or "").upper()
+            if subdiv_q not in p_subdiv:
+                match = False
+
         if match:
             results.append(p)
             if len(results) >= limit:
@@ -678,6 +874,8 @@ def search_parcels(
     book: str = "",
     page: str = "",
     cabinet_ref: str = "",
+    trs: str = "",
+    subdivision: str = "",
     operator: str = "contains",
     limit: int = 50,
 ) -> list[dict]:
@@ -689,6 +887,8 @@ def search_parcels(
         upc:         UPC code (exact match)
         book/page:   Book and/or page number
         cabinet_ref: Cabinet reference like "C-191A"
+        trs:         Township/Range/Section (partial match)
+        subdivision: Subdivision name (partial match)
         operator:    "contains", "begins", "exact"
         limit:       Max results
 
@@ -700,27 +900,60 @@ def search_parcels(
     return _filter_parcels(
         idx.get("parcels", []),
         owner=owner, upc=upc, book=book, page=page,
-        cabinet_ref=cabinet_ref, operator=operator, limit=limit,
+        cabinet_ref=cabinet_ref, trs=trs, subdivision=subdivision,
+        operator=operator, limit=limit,
     )
 
 
-def cross_reference_deed(survey_data_path: str, deed_detail: dict) -> list[dict]:
+def cross_reference_deed(survey_data_path: str, deed_detail: dict,
+                         client_upc: str = "") -> list[dict]:
     """
     Given a deed detail dict (from 1stNMTitle), find matching parcels.
 
     Cross-references via:
+      0. client_upc — the parcel selected on the map picker (highest priority)
       1. Grantor/Grantee name match
       2. Book/page (Location field like "M568-482")
       3. Cabinet references in the deed
+
+    Results are sorted by relevance: parcels matching on multiple criteria
+    rank highest (e.g. name + book/page = very likely the client's parcel).
     """
     idx = load_index(survey_data_path)
     if not idx:
         return []
 
-    results = []
-    seen_upcs = set()
+    # Track per-UPC: which strategies matched and the first match reason
+    # score_map[upc] = {"score": int, "reasons": [str], "parcel": dict}
+    score_map: dict[str, dict] = {}
 
-    # Strategy 1: Name match
+    def _record_hit(parcel: dict, reason: str, score: int):
+        """Record a parcel hit, accumulating score for multi-match parcels."""
+        upc = parcel.get("upc", "")
+        if not upc:
+            return
+        if upc in score_map:
+            # Already seen — boost score and append reason
+            entry = score_map[upc]
+            entry["score"] += score
+            entry["reasons"].append(reason)
+        else:
+            parcel["_match_reason"] = reason
+            score_map[upc] = {
+                "score": score,
+                "reasons": [reason],
+                "parcel": parcel,
+            }
+
+    # Strategy 0: Map-picked parcel (score 100 — user explicitly selected it)
+    client_upc_clean = (client_upc or "").strip()
+    if client_upc_clean:
+        hits = search_parcels(survey_data_path, upc=client_upc_clean, limit=1)
+        for h in hits:
+            _record_hit(h, "Map selection", 100)
+        print(f"[xref] Strategy 0: client_upc={client_upc_clean!r} -> {len(hits)} hit(s)", flush=True)
+
+    # Strategy 1: Name match (score 10 — common, lower confidence alone)
     for name_field in ["Grantor", "Grantee"]:
         name = deed_detail.get(name_field, "")
         if name:
@@ -728,13 +961,13 @@ def cross_reference_deed(survey_data_path: str, deed_detail: dict) -> list[dict]
             if last_name and len(last_name) >= 3:
                 hits = search_parcels(survey_data_path, owner=last_name, operator="contains", limit=10)
                 for h in hits:
-                    if h.get("upc") and h["upc"] not in seen_upcs:
-                        h["_match_reason"] = f"Name match: {name_field}"
-                        results.append(h)
-                        seen_upcs.add(h["upc"])
+                    _record_hit(h, f"Name match: {name_field}", 10)
+                print(f"[xref] Strategy 1: {name_field}={last_name!r} -> {len(hits)} hit(s)", flush=True)
 
-    # Strategy 2: Book/page from Location field
+    # Strategy 2: Book/page from Location field (score 50 — very precise)
     location = deed_detail.get("Location", "")
+    book_num = ""
+    page_num = ""
     if location:
         m = re.match(r'^[A-Za-z]?(\d+)-(\d+)', location.strip())
         if m:
@@ -742,12 +975,14 @@ def cross_reference_deed(survey_data_path: str, deed_detail: dict) -> list[dict]
             page_num = m.group(2)
             hits = search_parcels(survey_data_path, book=book_num, page=page_num, limit=5)
             for h in hits:
-                if h.get("upc") and h["upc"] not in seen_upcs:
-                    h["_match_reason"] = f"Book/Page: {book_num}-{page_num}"
-                    results.append(h)
-                    seen_upcs.add(h["upc"])
+                _record_hit(h, f"Book/Page: {book_num}-{page_num}", 50)
+            print(f"[xref] Strategy 2: Location={location!r} book={book_num} page={page_num} -> {len(hits)} hit(s)", flush=True)
+        else:
+            print(f"[xref] Strategy 2: Location={location!r} — regex didn't match", flush=True)
+    else:
+        print(f"[xref] Strategy 2: No Location field in deed detail", flush=True)
 
-    # Strategy 3: Cabinet references
+    # Strategy 3: Cabinet references (score 30 — good precision)
     cab_pat = re.compile(r'\bCAB(?:INET)?\.?\s*([A-Fa-f])\s*[-–]\s*(\d+[A-Za-z]?)\b', re.I)
     for val in deed_detail.values():
         if not isinstance(val, str):
@@ -756,10 +991,21 @@ def cross_reference_deed(survey_data_path: str, deed_detail: dict) -> list[dict]
             cab_key = f"{cm.group(1).upper()}-{cm.group(2).upper()}"
             hits = search_parcels(survey_data_path, cabinet_ref=cab_key, limit=5)
             for h in hits:
-                if h.get("upc") and h["upc"] not in seen_upcs:
-                    h["_match_reason"] = f"Cabinet: {cab_key}"
-                    results.append(h)
-                    seen_upcs.add(h["upc"])
+                _record_hit(h, f"Cabinet: {cab_key}", 30)
+
+    # Build results sorted by score (highest first = most criteria matched)
+    results = []
+    for entry in sorted(score_map.values(), key=lambda e: -e["score"]):
+        p = entry["parcel"]
+        # Update match_reason to show all matched criteria for multi-match parcels
+        if len(entry["reasons"]) > 1:
+            p["_match_reason"] = " + ".join(entry["reasons"])
+        results.append(p)
+
+    # Log top-5 scores for debugging
+    for i, entry in enumerate(sorted(score_map.values(), key=lambda e: -e["score"])[:5]):
+        p = entry["parcel"]
+        print(f"[xref] #{i+1}: score={entry['score']} upc={p.get('upc','')} owner={p.get('owner','')} reasons={entry['reasons']}", flush=True)
 
     return results[:30]  # cap total results
 
@@ -1022,5 +1268,260 @@ def get_map_geojson(
         "type":     "FeatureCollection",
         "features": features,
         "sources":  all_sources,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DATA QUALITY: INDEX HEALTH & CROSS-SOURCE ANOMALY DETECTION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def compute_index_health(survey_data_path: str) -> dict:
+    """Compute comprehensive health metrics about the parcel index.
+
+    Returns a dict with:
+      - total_parcels, pct_with_upc, pct_with_polygon, pct_with_arcgis
+      - pct_with_owner, pct_with_plat_ref, pct_with_cab_refs
+      - placeholder_count (Unknown Owner / UPC-only labels)
+      - index_age_days, stale_warning
+      - source_files (list of {name, record_count})
+      - xml_file_dates vs index build date
+    """
+    idx = load_index(survey_data_path)
+    if not idx:
+        return {"exists": False, "total_parcels": 0}
+
+    parcels = idx.get("parcels", [])
+    total = len(parcels)
+    if total == 0:
+        return {"exists": True, "total_parcels": 0}
+
+    # Count metrics
+    has_upc = 0
+    has_polygon = 0
+    has_arcgis = 0
+    has_real_owner = 0
+    has_plat = 0
+    has_cab_refs = 0
+    placeholder_names = 0
+
+    for p in parcels:
+        if p.get("upc"):
+            has_upc += 1
+        if p.get("polygon") and len(p["polygon"]) >= 3:
+            has_polygon += 1
+        if p.get("arcgis"):
+            has_arcgis += 1
+        owner = p.get("owner", "")
+        if owner and not owner.startswith("UPC ") and owner != "Unknown Owner":
+            has_real_owner += 1
+        else:
+            placeholder_names += 1
+        if p.get("plat"):
+            has_plat += 1
+        if p.get("cab_refs"):
+            has_cab_refs += 1
+
+    # Index age
+    built_at = idx.get("built_at", "")
+    index_age_days = 0
+    stale_warning = False
+    if built_at:
+        try:
+            from datetime import datetime
+            built_dt = datetime.strptime(built_at, "%Y-%m-%dT%H:%M:%S")
+            index_age_days = (datetime.now() - built_dt).days
+            stale_warning = index_age_days > 30
+        except Exception:
+            pass
+
+    # Check if XML/KML files are newer than the index
+    idx_path = _index_path(survey_data_path)
+    idx_mtime = idx_path.stat().st_mtime if idx_path.exists() else 0
+    xml_files = discover_xml_files(survey_data_path)
+    newer_xml_files = []
+    for xf in xml_files:
+        try:
+            xf_mtime = Path(xf["path"]).stat().st_mtime
+            if xf_mtime > idx_mtime:
+                newer_xml_files.append(xf["name"])
+        except Exception:
+            pass
+
+    # ArcGIS enrichment stats
+    enriched_at = idx.get("arcgis_enriched_at", "")
+    enriched_count = idx.get("arcgis_enriched_count", 0)
+
+    # Source breakdown
+    source_counts: dict[str, int] = {}
+    for p in parcels:
+        src = p.get("source", "unknown")
+        source_counts[src] = source_counts.get(src, 0) + 1
+    sources = [{"name": k, "record_count": v} for k, v in
+               sorted(source_counts.items(), key=lambda x: -x[1])]
+
+    pct = lambda n: round((n / total) * 100, 1) if total else 0
+
+    return {
+        "exists":              True,
+        "total_parcels":       total,
+        "has_upc":             has_upc,
+        "pct_with_upc":        pct(has_upc),
+        "has_polygon":         has_polygon,
+        "pct_with_polygon":    pct(has_polygon),
+        "has_arcgis":          has_arcgis,
+        "pct_with_arcgis":     pct(has_arcgis),
+        "has_real_owner":      has_real_owner,
+        "pct_with_owner":      pct(has_real_owner),
+        "has_plat":            has_plat,
+        "pct_with_plat_ref":   pct(has_plat),
+        "has_cab_refs":        has_cab_refs,
+        "pct_with_cab_refs":   pct(has_cab_refs),
+        "placeholder_count":   placeholder_names,
+        "built_at":            built_at,
+        "index_age_days":      index_age_days,
+        "stale_warning":       stale_warning,
+        "newer_xml_files":     newer_xml_files,
+        "arcgis_enriched_at":  enriched_at,
+        "arcgis_enriched_count": enriched_count,
+        "sources":             sources,
+        "xml_files":           xml_files,
+        "index_version":       idx.get("version", 1),
+    }
+
+
+def detect_data_conflicts(survey_data_path: str, max_conflicts: int = 200) -> dict:
+    """Compare KML parcel data against ArcGIS enrichment and flag mismatches.
+
+    Detects:
+      - Owner mismatch: KML owner != ArcGIS OwnerAll (normalized)
+      - Area mismatch: polygon area vs ArcGIS LandArea differ >50%
+      - Missing enrichment: parcels with UPC but no ArcGIS data
+      - TRS conflict: KML-derived TRS != ArcGIS TRS (when both present)
+
+    Returns:
+      {
+        "total_checked": int,
+        "conflicts": [ { upc, type, kml_value, arcgis_value, severity } ],
+        "summary": { owner_mismatches, area_mismatches, missing_enrichment, trs_mismatches }
+      }
+    """
+    import math as _math
+
+    idx = load_index(survey_data_path)
+    if not idx:
+        return {"total_checked": 0, "conflicts": [], "summary": {}}
+
+    parcels = idx.get("parcels", [])
+    conflicts = []
+    summary = {
+        "owner_mismatches": 0,
+        "area_mismatches": 0,
+        "missing_enrichment": 0,
+        "trs_mismatches": 0,
+    }
+
+    def _normalize_name(name: str) -> str:
+        """Normalize an owner name for comparison."""
+        if not name:
+            return ""
+        name = re.sub(r'[,.\-\'\"]+', ' ', name.upper())
+        name = re.sub(r'\s+', ' ', name).strip()
+        name = re.sub(r'\s+(JR|SR|II|III|IV|EST|ESTATE|TRUST|LLC|INC|ETAL|ET\s*AL)\.?\s*$', '', name)
+        return name
+
+    def _polygon_area_sqm(polygon: list) -> float:
+        """Estimate polygon area in sq meters using Shoelace at Taos County latitude."""
+        if not polygon or len(polygon) < 3:
+            return 0.0
+        M_PER_DEG_LAT = 111_000
+        M_PER_DEG_LNG = 111_000 * _math.cos(_math.radians(36.4))
+        pts = [(p[0] * M_PER_DEG_LNG, p[1] * M_PER_DEG_LAT) for p in polygon]
+        n = len(pts)
+        a = 0.0
+        for i in range(n):
+            j = (i + 1) % n
+            a += pts[i][0] * pts[j][1]
+            a -= pts[j][0] * pts[i][1]
+        return abs(a) / 2.0
+
+    total_checked = 0
+
+    for p in parcels:
+        upc = p.get("upc", "")
+        arc = p.get("arcgis")
+        if not upc:
+            continue
+
+        total_checked += 1
+
+        if not arc:
+            if len(conflicts) < max_conflicts:
+                conflicts.append({
+                    "upc": upc, "type": "missing_enrichment",
+                    "kml_value": p.get("owner", ""), "arcgis_value": "",
+                    "severity": "info",
+                })
+            summary["missing_enrichment"] += 1
+            continue
+
+        # Owner mismatch
+        kml_owner = _normalize_name(p.get("owner", ""))
+        arc_owner = _normalize_name(arc.get("owner_official", ""))
+        if kml_owner and arc_owner and kml_owner != arc_owner:
+            if kml_owner not in arc_owner and arc_owner not in kml_owner:
+                kml_last = kml_owner.split()[0] if kml_owner.split() else ""
+                arc_last = arc_owner.split()[0] if arc_owner.split() else ""
+                if kml_last != arc_last:
+                    if len(conflicts) < max_conflicts:
+                        conflicts.append({
+                            "upc": upc, "type": "owner_mismatch",
+                            "kml_value": p.get("owner", ""),
+                            "arcgis_value": arc.get("owner_official", ""),
+                            "severity": "warn",
+                        })
+                    summary["owner_mismatches"] += 1
+
+        # Area mismatch
+        arc_area = arc.get("land_area")
+        kml_poly = p.get("polygon")
+        if arc_area and kml_poly and len(kml_poly) >= 3:
+            try:
+                arc_area_sqm = float(arc_area) * 0.092903
+                kml_area_sqm = _polygon_area_sqm(kml_poly)
+                if kml_area_sqm > 0 and arc_area_sqm > 0:
+                    ratio = max(kml_area_sqm, arc_area_sqm) / min(kml_area_sqm, arc_area_sqm)
+                    if ratio > 1.5:
+                        severity = "critical" if ratio > 3.0 else "warn"
+                        if len(conflicts) < max_conflicts:
+                            conflicts.append({
+                                "upc": upc, "type": "area_mismatch",
+                                "kml_value": f"{kml_area_sqm:.0f} sq m (polygon)",
+                                "arcgis_value": f"{arc_area_sqm:.0f} sq m (ArcGIS)",
+                                "severity": severity, "ratio": round(ratio, 2),
+                            })
+                        summary["area_mismatches"] += 1
+            except (ValueError, TypeError):
+                pass
+
+        # TRS mismatch
+        kml_trs = (p.get("trs", "") or "").strip().upper()
+        arc_trs = (arc.get("trs", "") or "").strip().upper()
+        if kml_trs and arc_trs and kml_trs != arc_trs:
+            kml_norm = re.sub(r'SEC\s*', 'S', kml_trs)
+            arc_norm = re.sub(r'SEC\s*', 'S', arc_trs)
+            if kml_norm != arc_norm:
+                if len(conflicts) < max_conflicts:
+                    conflicts.append({
+                        "upc": upc, "type": "trs_mismatch",
+                        "kml_value": kml_trs, "arcgis_value": arc_trs,
+                        "severity": "warn",
+                    })
+                summary["trs_mismatches"] += 1
+
+    return {
+        "total_checked": total_checked,
+        "conflicts": conflicts,
+        "conflict_count": len(conflicts),
+        "summary": summary,
     }
 

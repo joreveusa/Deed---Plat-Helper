@@ -453,15 +453,20 @@ async function startSession() {
       // the session. Now that the session exists, add them as subjects.
       if (_propPicker.mapAddedNames.length) {
         let flushed = 0;
-        for (const name of _propPicker.mapAddedNames) {
+        for (const entry of _propPicker.mapAddedNames) {
+          const adjName = typeof entry === 'object' ? entry.name : entry;
           const exists = state.researchSession.subjects.some(
-            s => s.type === 'adjoiner' && s.name.toLowerCase() === name.toLowerCase()
+            s => s.type === 'adjoiner' && s.name.toLowerCase() === adjName.toLowerCase()
           );
           if (!exists) {
+            const upc = typeof entry === 'object' ? (entry.upc || '') : '';
+            const plat = typeof entry === 'object' ? (entry.plat || '') : '';
             state.researchSession.subjects.push({
               id: 'adj_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
               type: 'adjoiner',
-              name: name,
+              name: adjName,
+              upc: upc,
+              plat: plat,
               deed_saved: false, plat_saved: false, status: 'pending', notes: ''
             });
             flushed++;
@@ -608,9 +613,10 @@ function _safeCloneSession(session) {
 // 
 // STEP 2: CLIENT DEED
 // 
-async function doStep2Search() {
+async function doStep2Search(sortBy) {
   const name = document.getElementById("s2SearchName").value.trim();
   const op = document.getElementById("s2SearchOp").value;
+  const sort = sortBy || (document.getElementById("s2SortBy")?.value) || "relevance";
 
   if (!state.loggedIn) {
     showToast("Not connected to 1stNMTitle — click Settings to log in", "warn");
@@ -623,33 +629,81 @@ async function doStep2Search() {
   const tbody = document.getElementById("s2ResultsBody");
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner" style="width:12px;height:12px;display:inline-block;vertical-align:middle;margin-right:4px"></span>Searching…`;
-  tbody.innerHTML = `<tr><td colspan="5" class="empty-cell"><div class="loading-state">Searching records for <strong>${escHtml(name)}</strong>…</div></td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="6" class="empty-cell"><div class="loading-state">Searching records for <strong>${escHtml(name)}</strong>…</div></td></tr>`;
   document.getElementById("s2ResultCount").textContent = "0";
+
+  // Show TRS context bar if available
+  const trsBar = document.getElementById("s2TrsContext");
+  if (trsBar) trsBar.innerHTML = '';
 
   try {
     const signal = _getAbortSignal('step2search');
-    const res = await apiFetch("/search", "POST", { name, operator: op }, { signal });
+
+    // Use enriched search when we have client context
+    const hasContext = state.researchSession && state.researchSession.client_upc;
+    let res;
+    if (hasContext) {
+      // Gather adjoiner names from session
+      const adjNames = (state.researchSession.subjects || [])
+        .filter(s => s.type === 'adjoiner')
+        .map(s => s.name);
+
+      res = await apiFetch("/search-enriched", "POST", {
+        name,
+        operator: op,
+        client_upc: state.researchSession.client_upc || '',
+        client_name: state.researchSession.client_name || '',
+        adjoiner_names: adjNames,
+        sort_by: sort,
+      }, { signal });
+    } else {
+      res = await apiFetch("/search", "POST", { name, operator: op }, { signal });
+    }
+
     if (!res.success) {
-      tbody.innerHTML = `<tr><td colspan="5" class="empty-cell text-danger">Error: ${res.error}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-cell text-danger">Error: ${res.error}</td></tr>`;
       return;
     }
 
     if (!res.results.length) {
-      tbody.innerHTML = `<tr><td colspan="5" class="empty-cell text-text3">No records found for "${escHtml(name)}"</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-cell text-text3">No records found for "${escHtml(name)}"</td></tr>`;
       return;
+    }
+
+    // Show TRS context if enriched
+    if (trsBar && res.client_trs) {
+      let ctx = `<span class="relevance-context-label">🏠 Client TRS:</span> <strong>${escHtml(res.client_trs)}</strong>`;
+      if (res.client_subdivision) {
+        ctx += ` &middot; <span class="relevance-context-label">📍 Subdivision:</span> <strong>${escHtml(res.client_subdivision)}</strong>`;
+      }
+      trsBar.innerHTML = `<div class="relevance-context-bar">${ctx}</div>`;
     }
 
     document.getElementById("s2ResultCount").textContent = res.results.length;
     state.searchResults = res.results;
-    tbody.innerHTML = res.results.map((r, i) => `
-      <tr class="row-${getTypeClass(r.instrument_type)}" onclick="loadS2Detail('${r.doc_no}', ${i}, this)">
+    tbody.innerHTML = res.results.map((r, i) => {
+      const tags = r.relevance_tags || [];
+      const score = r.relevance_score || 0;
+      const rowClass = score >= 40 ? 'result-row-high-relevance'
+                     : score >= 20 ? 'result-row-medium-relevance'
+                     : '';
+      // Build relevance badges
+      let badges = '';
+      if (tags.includes('trs_match'))        badges += '<span class="relevance-badge badge-trs" title="Same TRS section as client">🏠</span>';
+      if (tags.includes('same_subdivision')) badges += '<span class="relevance-badge badge-subdiv" title="Same subdivision">📍</span>';
+      if (tags.includes('client_name'))      badges += '<span class="relevance-badge badge-client" title="Client name match">👤</span>';
+      if (tags.includes('adjoiner'))         badges += '<span class="relevance-badge badge-adj" title="Adjoiner name match">🏘️</span>';
+
+      return `
+      <tr class="row-${getTypeClass(r.instrument_type)} ${rowClass}" onclick="loadS2Detail('${r.doc_no}', ${i}, this)">
         <td class="mono font-bold text-accent2">${r.doc_no || ''}</td>
         <td title="${escHtml(r.grantor || '')}">${escHtml((r.grantor || '').split(",")[0] || r.grantor || '')}</td>
         <td><span class="badge ${getTypeClass(r.instrument_type)}">${r.instrument_type || 'Deed'}</span></td>
         <td class="text-xs text-text3">${escHtml(r.location || '')}</td>
         <td class="text-xs text-text3">${(r.recorded_date || r.instrument_date || '').split("-")[0] || r.date || ''}</td>
-      </tr>
-    `).join("");
+        <td class="relevance-badges-cell">${badges}${score > 0 ? `<span class="relevance-score" title="Relevance score">${score}</span>` : ''}</td>
+      </tr>`;
+    }).join("");
 
     // Auto-select if only one result
     if (res.results.length === 1) {
@@ -662,7 +716,7 @@ async function doStep2Search() {
 
   } catch (e) {
     if (e.name === 'AbortError') return;  // cancelled by newer search
-    tbody.innerHTML = `<tr><td colspan="5" class="text-danger p-3">Search error: ${e.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="text-danger p-3">Search error: ${e.message}</td></tr>`;
   } finally {
     btn.disabled = false;
     btn.innerHTML = "Search";
@@ -1784,13 +1838,14 @@ async function onCabinetSelectChange(val) {
       state._cabinetHits = localHits;
       locCards.innerHTML = localHits.map((f, fi) => {
         const stratLabel = f.strategy === 'doc_number' ? '\u2605 Doc# Match'
-          : f.strategy === 'kml_cab_ref' ? '\u2605 KML Match'
-            : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref'
-              : f.strategy === 'client_name' ? '\u2B50 Client'
-                : f.strategy === 'name_match' ? 'Name Match'
-                  : f.strategy === 'page_ref' ? 'Page Ref'
-                    : (f.strategy || 'match');
-        const isTop = f.strategy === 'doc_number' || f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name';
+          : f.strategy === 'kml_plat_name' ? '\u2605 Plat Name'
+            : f.strategy === 'kml_cab_ref' ? '\u2605 KML Match'
+              : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref'
+                : f.strategy === 'client_name' ? '\u2B50 Client'
+                  : f.strategy === 'name_match' ? 'Name Match'
+                    : f.strategy === 'page_ref' ? 'Page Ref'
+                      : (f.strategy || 'match');
+        const isTop = f.strategy === 'doc_number' || f.strategy === 'kml_plat_name' || f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name';
         const docNumBadge = f.doc_number
           ? ' <span style="font-family:monospace;font-size:10px;opacity:.7">Doc# ' + escHtml(f.doc_number) + '</span>'
           : '';
@@ -1896,7 +1951,9 @@ async function doStep3Search() {
 
   // ── KML → then chain Local (so kml_matches with cab_refs are passed) ──────
   // Always query KML index: with deed → full cross-reference; without → name-only search
-  const kmlPromise = apiFetch('/find-plat-kml', 'POST', { detail, client_name: clientName })
+  // Pass client_upc from map picker so the selected parcel always ranks first.
+  const clientUpc = (state.researchSession && state.researchSession.client_upc) || '';
+  const kmlPromise = apiFetch('/find-plat-kml', 'POST', { detail, client_name: clientName, client_upc: clientUpc })
     .then(res => {
       const kmlHits = (res && res.kml_matches) || [];
       if (!kmlCards) return kmlHits;
@@ -1962,14 +2019,15 @@ async function doStep3Search() {
         const hitRows = localHits.map((f, fi) => {
           const confidencePct = _calcPlatConfidence(f);
           const stratLabel = f.strategy === 'doc_number' ? '\u2605 Doc# Match'
-            : f.strategy === 'kml_cab_ref' ? '\u2605 KML Ref Match'
-              : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
-                : f.strategy === 'client_name' ? '\u2B50 Client Match'
-                  : f.strategy === 'prior_owner' ? '\uD83D\uDC64 Prior Owner'
-                    : f.strategy === 'name_match' ? 'Name Match'
-                      : f.strategy === 'page_ref' ? 'Page Ref'
-                        : (f.strategy || 'match');
-          const isTop = f.strategy === 'doc_number' || f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
+            : f.strategy === 'kml_plat_name' ? '\u2605 Plat Name Match'
+              : f.strategy === 'kml_cab_ref' ? '\u2605 KML Ref Match'
+                : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
+                  : f.strategy === 'client_name' ? '\u2B50 Client Match'
+                    : f.strategy === 'prior_owner' ? '\uD83D\uDC64 Prior Owner'
+                      : f.strategy === 'name_match' ? 'Name Match'
+                        : f.strategy === 'page_ref' ? 'Page Ref'
+                          : (f.strategy || 'match');
+          const isTop = f.strategy === 'doc_number' || f.strategy === 'kml_plat_name' || f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
           const docNumBadge = f.doc_number
             ? ' <span style="font-family:monospace;font-size:10px;opacity:.7">Doc# ' + escHtml(f.doc_number) + '</span>'
             : '';
@@ -2214,13 +2272,14 @@ async function _executeKmlCabinetSearch(pi) {
         '</div>';
       locCards.innerHTML = header + localHits.map((f, fi) => {
         const stratLabel = f.strategy === 'doc_number' ? '\u2605 Doc# Match'
-          : f.strategy === 'kml_cab_ref' ? '\u2605 KML Ref Match'
-            : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
-              : f.strategy === 'client_name' ? '\u2B50 Client Match'
-                : f.strategy === 'name_match' ? 'Name Match'
-                  : f.strategy === 'page_ref' ? 'Page Ref'
-                    : (f.strategy || 'match');
-        const isTop = f.strategy === 'doc_number' || f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
+          : f.strategy === 'kml_plat_name' ? '\u2605 Plat Name Match'
+            : f.strategy === 'kml_cab_ref' ? '\u2605 KML Ref Match'
+              : f.strategy === 'deed_cab_ref' ? '\u2B50 Deed Ref Match'
+                : f.strategy === 'client_name' ? '\u2B50 Client Match'
+                  : f.strategy === 'name_match' ? 'Name Match'
+                    : f.strategy === 'page_ref' ? 'Page Ref'
+                      : (f.strategy || 'match');
+        const isTop = f.strategy === 'doc_number' || f.strategy === 'kml_plat_name' || f.strategy === 'kml_cab_ref' || f.strategy === 'deed_cab_ref' || f.strategy === 'client_name' || f.strategy === 'prior_owner';
         const docNumBadge = f.doc_number
           ? ' <span style="font-family:monospace;font-size:10px;opacity:.7">Doc# ' + escHtml(f.doc_number) + '</span>'
           : '';
@@ -2458,6 +2517,7 @@ async function runAdjoinerDiscovery(autoMode = false) {
         deed_path: clientSubj.deed_path || "",
         job_number: rs.job_number,
         client_name: rs.client_name,
+        client_upc: rs.client_upc || '',
         job_type: rs.job_type,
       }, { signal });
     }
@@ -2610,10 +2670,14 @@ async function addFoundAdjoiner(name) {
   const exists = rs.subjects.some(s => s.type === "adjoiner" && s.name.toLowerCase() === name.toLowerCase());
   if (exists) { showToast("Already on board", "info"); return true; }
 
+  // Carry the UPC if we know it (from discoveredAdjoiners or ArcGIS spatial)
+  const adjData = (state.discoveredAdjoiners || []).find(d => d.name.toLowerCase() === name.toLowerCase());
   rs.subjects.push({
     id: "adj_" + Date.now() + Math.random().toString(36).substr(2, 5),
     type: "adjoiner",
     name: name,
+    upc: (adjData && adjData.upc) || '',
+    plat: (adjData && adjData.plat) || '',
     deed_saved: false, plat_saved: false, status: "pending", notes: ""
   });
 
@@ -2649,6 +2713,8 @@ async function addAllAndContinue() {
         id: "adj_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
         type: "adjoiner",
         name: j.name,
+        upc: j.upc || '',
+        plat: j.plat || '',
         deed_saved: false, plat_saved: false, status: "pending", notes: ""
       });
       added++;
@@ -3118,8 +3184,9 @@ async function saveAdjPlat(subjId) {
       cabRefs = (fastRes && fastRes.cabinet_refs) || [];
     } catch (e) { }
 
-    // 2. KML lookup (by name)
-    const kmlRes = await apiFetch('/find-plat-kml', 'POST', { detail: searchDetail, client_name: adjName });
+    // 2. KML lookup (by name + UPC if available — UPC ensures the right parcel ranks first)
+    const adjUpc = subj.upc || '';
+    const kmlRes = await apiFetch('/find-plat-kml', 'POST', { detail: searchDetail, client_name: adjName, client_upc: adjUpc });
     const kmlHits = (kmlRes && kmlRes.kml_matches) || [];
 
     // 3. Local cabinet scan (fires after KML so we pass kml_matches)
@@ -3267,6 +3334,20 @@ async function removeSubject(id) {
   state.researchSession.subjects = state.researchSession.subjects.filter(s => s.id !== id);
   await persistSession();
   renderResearchBoard();
+}
+
+async function removePendingSubjects() {
+  const rs = state.researchSession;
+  if (!rs) return;
+  const pending = rs.subjects.filter(s => s.type === 'adjoiner' && !s.deed_saved && !s.plat_saved);
+  if (!pending.length) { showToast('No pending adjoiners to remove', 'info'); return; }
+  if (!confirm(`Remove ${pending.length} pending adjoiner(s) with no saved deeds or plats?`)) return;
+  const removeIds = new Set(pending.map(s => s.id));
+  rs.subjects = rs.subjects.filter(s => !removeIds.has(s.id));
+  await persistSession();
+  renderResearchBoard();
+  updateGlobalProgress();
+  showToast(`Removed ${pending.length} pending adjoiner(s)`, 'success');
 }
 
 async function cycleSubjectStatus(id) {
@@ -4120,7 +4201,7 @@ const _propPicker = {
   availableSources: [],
   // ── Adjoiner picking (merged from old _kmlMap) ──
   highlightUpcs: [],     // UPCs to mark as "client" (gold)
-  mapAddedNames: [],     // adjoiner names added this session via the picker
+  mapAddedNames: [],     // adjoiner parcels added this session via the picker [{name, upc, plat}]
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -4140,6 +4221,10 @@ function clearPropertySelection() {
   _propPicker.confirmedParcel = null;
   document.getElementById('selectedParcelCard').classList.add('hidden');
   document.getElementById('setupClient').value = '';
+  // Also clear client_upc from session so it doesn't flow into downstream searches
+  if (state.researchSession) {
+    state.researchSession.client_upc = '';
+  }
 }
 
 // ── Open / close modal ────────────────────────────────────────────────────────
@@ -4164,7 +4249,8 @@ async function showPropertyPicker() {
       .map(s => s.name);
     // Merge: keep any queued-but-not-yet-flushed names, add board names
     boardAdj.forEach(n => {
-      if (!_propPicker.mapAddedNames.includes(n)) _propPicker.mapAddedNames.push(n);
+      const alreadyQueued = _propPicker.mapAddedNames.some(e => (typeof e === 'object' ? e.name : e) === n);
+      if (!alreadyQueued) _propPicker.mapAddedNames.push({ name: n, upc: '', plat: '' });
     });
     _updatePickerAddedList();
   }
@@ -4799,8 +4885,9 @@ async function pickerAddSelectedAsAdjoiner() {
   if (!name) { showToast('No owner name for this parcel', 'warn'); return; }
 
   // Always add to the visual queue
-  if (!_propPicker.mapAddedNames.includes(name)) {
-    _propPicker.mapAddedNames.push(name);
+  const parcelData = { name, upc: _propPicker.selectedProps.upc || '', plat: _propPicker.selectedProps.plat || '' };
+  if (!_propPicker.mapAddedNames.some(e => (typeof e === 'object' ? e.name : e) === name)) {
+    _propPicker.mapAddedNames.push(parcelData);
     _updatePickerAddedList();
   }
 
@@ -4834,9 +4921,10 @@ function _updatePickerAddedList() {
     el.innerHTML = '<div style="font-size:11px;color:var(--text3);font-style:italic">None yet</div>';
     return;
   }
-  el.innerHTML = _propPicker.mapAddedNames.map(n =>
-    `<div style="font-size:11px;padding:4px 8px;background:rgba(176,128,224,.12);border:1px solid rgba(176,128,224,.25);border-radius:6px;color:#b080e0">${escHtml(n)}</div>`
-  ).join('');
+  el.innerHTML = _propPicker.mapAddedNames.map(entry => {
+    const n = typeof entry === 'object' ? entry.name : entry;
+    return `<div style="font-size:11px;padding:4px 8px;background:rgba(176,128,224,.12);border:1px solid rgba(176,128,224,.25);border-radius:6px;color:#b080e0">${escHtml(n)}</div>`;
+  }).join('');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5137,6 +5225,7 @@ function updateFileBadges() {
 function _calcPlatConfidence(hit) {
   const strat = hit.strategy || '';
   if (strat === 'doc_number') return 97;
+  if (strat === 'kml_plat_name') return 92;
   if (strat === 'kml_cab_ref') return 90;
   if (strat === 'deed_cab_ref') return 82;
   if (strat === 'client_name') return 65;

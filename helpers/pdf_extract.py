@@ -2,6 +2,7 @@
 helpers/pdf_extract.py — PDF text extraction with native + OCR fallback.
 
 Extracted from app.py to improve testability and separation of concerns.
+OCR output is cleaned via helpers.ocr_correct before returning.
 """
 
 import os
@@ -9,6 +10,8 @@ import re
 import io
 import json
 from pathlib import Path
+
+from helpers.ocr_correct import clean_survey_text, correction_stats
 
 
 def _find_tesseract() -> str:
@@ -68,7 +71,8 @@ def extract_pdf_text(pdf_path: str) -> tuple[str, str]:
                 img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
                 img = ImageEnhance.Contrast(img).enhance(1.8)
                 img = img.point(lambda x: 255 if x > 128 else 0, "1")
-                text += pytesseract.image_to_string(img, config="--oem 3 --psm 6") + "\n"
+                page_text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
+                text += page_text + "\n"
             doc.close()
         except Exception as e:
             print(f"[pdf] OCR failed for {pdf_path}: {e}", flush=True)
@@ -77,6 +81,14 @@ def extract_pdf_text(pdf_path: str) -> tuple[str, str]:
                 print(f"[pdf] Falling back to native text ({len(native_text.strip())} chars)", flush=True)
                 text = native_text
                 source = "text"
+
+    # Apply survey-domain OCR correction on OCR output
+    if source == "ocr" and text.strip():
+        original = text
+        text = clean_survey_text(text)
+        stats = correction_stats(original, text)
+        if stats["changed"]:
+            print(f"[pdf] OCR correction applied: {stats['corrections']} character changes", flush=True)
 
     return text, source
 
@@ -125,6 +137,13 @@ def ocr_plat_file(pdf_path: str) -> list[str]:
             text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
             full_text += text + "\n"
         doc.close()
+
+        # Apply survey-domain OCR corrections
+        original = full_text
+        full_text = clean_survey_text(full_text)
+        stats = correction_stats(original, full_text)
+        if stats["changed"]:
+            print(f"[OCR] Post-processing applied: {stats['corrections']} character changes", flush=True)
     except Exception as e:
         print(f"[OCR] Failed to read {pdf_path}: {e}")
         return []

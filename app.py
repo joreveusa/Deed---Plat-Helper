@@ -638,6 +638,257 @@ def api_search():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
 
+
+# ── relevance scoring ─────────────────────────────────────────────────────────
+
+# Instrument types most relevant to boundary survey research
+_DEED_TYPES = {'deed', 'warranty', 'quitclaim', 'grant', 'conveyance', 'bargain'}
+_PLAT_TYPES = {'plat', 'survey', 'partition', 'subdivision'}
+_LOW_TYPES  = {'mortgage', 'lien', 'release', 'assignment', 'satisfaction', 'ucc'}
+
+
+def _score_search_result(
+    result: dict,
+    client_trs: str = "",
+    client_name: str = "",
+    adjoiner_names: list = None,
+    client_subdivision: str = "",
+) -> dict:
+    """Score a single 1stNMTitle search result for relevance to the client property.
+
+    Modifies the result dict in-place, adding:
+      - relevance_score (int 0-100)
+      - relevance_tags  (list of tag strings)
+
+    Returns the modified result.
+    """
+    score = 0
+    tags = []
+    adjoiner_set = {n.upper().split(",")[0].strip() for n in (adjoiner_names or []) if n}
+    client_last = client_name.split(",")[0].strip().upper() if client_name else ""
+
+    inst_type = (result.get("instrument_type") or "").lower()
+    grantor   = (result.get("grantor") or "").upper()
+    grantee   = (result.get("grantee") or "").upper()
+    location  = (result.get("location") or "").upper()
+
+    # ── TRS match (highest value — same section as client) ─────────────
+    if client_trs:
+        trs_up = client_trs.upper()
+        # Extract TRS components from location field
+        # Location often contains book-page like "M568-482" but sometimes has section refs
+        # Also check if the deed's grantor/grantee names match KML parcels in same TRS
+        # (this is a heuristic — full TRS matching happens via the KML index)
+        # For now, check if the location field directly mentions the same section
+        trs_parts = re.findall(r'SEC(?:TION)?\s*(\d+)', location, re.I)
+        client_sec = re.search(r'SEC\s*(\d+)', trs_up)
+        if client_sec and trs_parts:
+            if client_sec.group(1) in trs_parts:
+                score += 40
+                tags.append("trs_match")
+
+    # ── Subdivision match ─────────────────────────────────────────────
+    if client_subdivision:
+        subdiv_up = client_subdivision.upper()
+        if subdiv_up in location or subdiv_up in grantor or subdiv_up in grantee:
+            score += 25
+            tags.append("same_subdivision")
+
+    # ── Name match (client or adjoiner) ───────────────────────────────
+    if client_last and len(client_last) >= 2:
+        if client_last in grantor or client_last in grantee:
+            score += 30
+            tags.append("client_name")
+
+    if adjoiner_set:
+        for adj_last in adjoiner_set:
+            if adj_last and len(adj_last) >= 3:
+                if adj_last in grantor or adj_last in grantee:
+                    score += 20
+                    tags.append("adjoiner")
+                    break
+
+    # ── Instrument type priority ──────────────────────────────────────
+    inst_words = set(inst_type.split())
+    if _DEED_TYPES & inst_words:
+        score += 15
+        tags.append("deed")
+    elif _PLAT_TYPES & inst_words:
+        score += 12
+        tags.append("plat")
+    elif _LOW_TYPES & inst_words:
+        score -= 5  # deprioritize mortgages/liens
+
+    # ── Recency bonus ─────────────────────────────────────────────────
+    rec_date = result.get("recorded_date") or result.get("instrument_date") or ""
+    if rec_date:
+        try:
+            year = int(rec_date.split("-")[0]) if "-" in rec_date else int(rec_date[-4:])
+            if year >= 2015:
+                score += 5
+            elif year >= 2000:
+                score += 3
+        except (ValueError, IndexError):
+            pass
+
+    result["relevance_score"] = max(0, min(100, score))
+    result["relevance_tags"]  = tags
+    return result
+
+
+@app.route("/api/search-enriched", methods=["POST"])
+def api_search_enriched():
+    """Enriched search: standard 1stNMTitle search + ArcGIS relevance scoring.
+
+    Body: {
+        name, operator, name_type, address,   (standard search params)
+        client_upc,                           (triggers ArcGIS enrichment)
+        client_name, adjoiner_names,          (for name matching)
+        sort_by                               (relevance|date|type|original)
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        client_upc  = (data.get("client_upc") or "").strip()
+        client_name = (data.get("client_name") or "").strip()
+        adj_names   = data.get("adjoiner_names") or []
+        sort_by     = data.get("sort_by", "relevance")
+
+        # Step 1: Perform the standard search by delegating to api_search internals
+        # (We replicate the call rather than HTTP-fetching ourselves)
+        name      = (data.get("name") or "").strip()
+        address   = (data.get("address") or "").strip()
+        name_type = data.get("name_type", "grantor")
+        op_map = {"contains": "contains", "begins with": "begin",
+                  "exact match": "exact", "equals": "exact"}
+        operator = op_map.get(data.get("operator", "contains"), "contains")
+
+        if not name and not address:
+            return jsonify({"success": False, "error": "No search criteria provided"})
+
+        sess = _session()
+        search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+        resp = sess.get(search_url, timeout=15)
+
+        landed = resp.url.lower().rstrip('/')
+        if landed == BASE_URL.lower().rstrip('/') or 'login' in landed:
+            return jsonify({"success": False, "error": "Session expired — please log in again."})
+
+        if 'CROSSNAMEFIELD' not in resp.text and 'FIELD14' not in resp.text:
+            return jsonify({"success": False, "error": "Session expired — please log in again."})
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        action = BASE_URL + "/scripts/hflook.asp"
+        form_data = _scrape_form_data(soup)
+        if not form_data:
+            return jsonify({"success": False, "error": "Search form not found"})
+
+        if name:
+            form_data["CROSSNAMEFIELD"] = name
+            form_data["CROSSNAMETYPE"]  = operator
+            form_data["CROSSTYPE"]      = "GE" if name_type == "grantee" else "GR"
+        if address:
+            form_data["FIELD19"] = address
+            form_data["SEARCHTYPE19"] = operator
+
+        post_resp = sess.post(action, data=form_data, timeout=20)
+        soup2 = BeautifulSoup(post_resp.text, "html.parser")
+
+        # Parse results
+        results = []
+        count_text = ""
+        for tag in soup2.find_all(string=re.compile(r'\d+ records? found', re.I)):
+            count_text = tag.strip()
+            break
+
+        rows = soup2.find_all("tr")
+        for row in rows:
+            cells = row.find_all("td")
+            if len(cells) < 9:
+                continue
+            doc_link = cells[1].find("a") if len(cells) > 1 else None
+            if not doc_link:
+                continue
+            doc_no = doc_link.text.strip()
+            if not doc_no or not re.match(r'^[A-Z0-9]+$', doc_no):
+                continue
+            results.append({
+                "doc_no":           doc_no,
+                "location":         cells[2].text.strip() if len(cells) > 2 else "",
+                "document_code":    cells[3].text.strip() if len(cells) > 3 else "",
+                "gf_number":        cells[4].text.strip() if len(cells) > 4 else "",
+                "instrument_type":  cells[5].text.strip() if len(cells) > 5 else "",
+                "document_no":      cells[6].text.strip() if len(cells) > 6 else "",
+                "recorded_date":    cells[7].text.strip() if len(cells) > 7 else "",
+                "instrument_date":  cells[8].text.strip() if len(cells) > 8 else "",
+                "grantor":          cells[9].text.strip() if len(cells) > 9 else "",
+                "grantee":          cells[10].text.strip() if len(cells) > 10 else "",
+            })
+
+        # Step 2: Get client's ArcGIS context for scoring
+        client_trs = ""
+        client_subdivision = ""
+        if client_upc:
+            arc = _arcgis_lookup_upc(client_upc)
+            if arc and arc.get("success"):
+                client_trs = arc.get("trs", "")
+                client_subdivision = arc.get("subdivision", "")
+
+        # Also try from KML index if no ArcGIS TRS
+        if not client_trs and client_upc:
+            survey = get_survey_data_path()
+            idx = xml_processor.load_index(survey)
+            if idx:
+                for p in idx.get("parcels", []):
+                    if p.get("upc") == client_upc:
+                        client_trs = p.get("trs", "") or (
+                            p.get("arcgis", {}).get("trs", "") if p.get("arcgis") else ""
+                        )
+                        client_subdivision = (
+                            p.get("arcgis", {}).get("subdivision", "") if p.get("arcgis") else ""
+                        )
+                        break
+
+        # Step 3: Score each result
+        for r in results:
+            _score_search_result(
+                r,
+                client_trs=client_trs,
+                client_name=client_name,
+                adjoiner_names=adj_names,
+                client_subdivision=client_subdivision,
+            )
+
+        # Step 4: Sort by requested order
+        if sort_by == "relevance":
+            results.sort(key=lambda r: r.get("relevance_score", 0), reverse=True)
+        elif sort_by == "date":
+            results.sort(
+                key=lambda r: r.get("recorded_date") or r.get("instrument_date") or "",
+                reverse=True
+            )
+        elif sort_by == "type":
+            type_order = {"deed": 0, "plat": 1, "survey": 2}
+            results.sort(key=lambda r: type_order.get(
+                (r.get("instrument_type") or "").lower().split()[0] if r.get("instrument_type") else "",
+                99
+            ))
+
+        return jsonify({
+            "success":    True,
+            "results":    results,
+            "count":      len(results),
+            "count_text": count_text,
+            "sort_by":    sort_by,
+            "client_trs":        client_trs,
+            "client_subdivision": client_subdivision,
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
 # ── chain-of-title search ─────────────────────────────────────────────────────
 
 @app.route("/api/chain-search", methods=["POST"])
@@ -975,6 +1226,7 @@ def api_find_adjoiners():
         location  = data.get("location", "") or detail.get("Location", "") or detail.get("location", "")
         doc_no    = data.get("doc_no", "")   or detail.get("doc_no", "")
         deed_path = data.get("deed_path", "")  # saved deed PDF path from session
+        client_upc = data.get("client_upc", "").strip()  # from map picker selection
 
         results  = []
         seen_names: set = set()
@@ -1072,21 +1324,33 @@ def api_find_adjoiners():
             if kml_idx:
                 parcels = kml_idx.get("parcels", [])
 
-                # Step A: find the client parcel by grantor last name + book/page
+                # Step A: find the client parcel — prefer client_upc (from map
+                #   picker), fall back to grantor name + book/page heuristic.
                 client_parcel = None
-                grantor_last  = grantor.split(",")[0].strip().upper() if grantor else ""
-                loc_m = re.match(r'^[A-Za-z]?(\d+)-(\d+)', location.strip()) if location else None
-                book_num = loc_m.group(1) if loc_m else ""
-                page_num = loc_m.group(2) if loc_m else ""
 
-                for p in parcels:
-                    p_owner = p.get("owner", "").upper()
-                    owner_match = grantor_last and grantor_last in p_owner
-                    book_match  = book_num and p.get("book", "") == book_num and p.get("page", "") == page_num
-                    if owner_match or book_match:
-                        client_parcel = p
-                        print(f"[adjoiners][kml] client parcel: {p.get('owner')} UPC={p.get('upc')} centroid={p.get('centroid')}", flush=True)
-                        break
+                # Priority 1: exact UPC match from map selection
+                if client_upc:
+                    for p in parcels:
+                        if p.get("upc", "") == client_upc:
+                            client_parcel = p
+                            print(f"[adjoiners][kml] client parcel (UPC match): {p.get('owner')} UPC={client_upc} centroid={p.get('centroid')}", flush=True)
+                            break
+
+                # Priority 2: grantor name + book/page fallback
+                if not client_parcel:
+                    grantor_last  = grantor.split(",")[0].strip().upper() if grantor else ""
+                    loc_m = re.match(r'^[A-Za-z]?(\d+)-(\d+)', location.strip()) if location else None
+                    book_num = loc_m.group(1) if loc_m else ""
+                    page_num = loc_m.group(2) if loc_m else ""
+
+                    for p in parcels:
+                        p_owner = p.get("owner", "").upper()
+                        owner_match = grantor_last and grantor_last in p_owner
+                        book_match  = book_num and p.get("book", "") == book_num and p.get("page", "") == page_num
+                        if owner_match or book_match:
+                            client_parcel = p
+                            print(f"[adjoiners][kml] client parcel (name/book fallback): {p.get('owner')} UPC={p.get('upc')} centroid={p.get('centroid')}", flush=True)
+                            break
 
                 if client_parcel:
                     client_upc     = client_parcel.get("upc", "")
@@ -1373,6 +1637,7 @@ def api_find_plat_kml():
         data        = request.get_json() or {}
         detail      = data.get("detail", {})
         client_name = data.get("client_name", "").strip()
+        client_upc  = data.get("client_upc", "").strip()
         kml_matches = []
         idx = xml_processor._cached_index
         if idx is None:
@@ -1382,7 +1647,7 @@ def api_find_plat_kml():
             survey = get_survey_data_path()
             # If we have a deed, use the full cross-reference (grantor/grantee/book/page/cab)
             if detail and (detail.get("Grantor") or detail.get("Grantee") or detail.get("Location")):
-                kml_results = xml_processor.cross_reference_deed(survey, detail)
+                kml_results = xml_processor.cross_reference_deed(survey, detail, client_upc=client_upc)
             elif client_name:
                 # No deed yet — search by client name (owner contains last name)
                 last_name = client_name.split(",")[0].strip().upper()
@@ -1390,6 +1655,14 @@ def api_find_plat_kml():
                     raw = xml_processor.search_parcels_in_index(idx, owner=last_name, operator="contains", limit=15)
                     for p in raw:
                         p["_match_reason"] = f"Client name: {client_name}"
+                    # If we have a client_upc, boost that parcel to the front
+                    if client_upc:
+                        upc_hit = xml_processor.search_parcels_in_index(idx, upc=client_upc, limit=1)
+                        if upc_hit:
+                            upc_hit[0]["_match_reason"] = "Map selection"
+                            # Remove if already in raw results, then prepend
+                            raw = [p for p in raw if p.get("upc") != client_upc]
+                            raw = upc_hit + raw
                     kml_results = raw
                 else:
                     kml_results = []
@@ -1568,8 +1841,31 @@ def api_find_plat_local():
                 except Exception:
                     pass
 
-            # b) KML owner name — the current owner whose name IS on cabinet files.
-            #    e.g. KML parcel owner = "ADELA RAEL" → matches "Rael Adela.pdf"
+            # b) KML PLAT field name tokens — PRIMARY name-based strategy.
+            #     Cabinet files are named after the ORIGINAL plat filer / subdivider
+            #     (e.g. "Adela Rael.pdf"), NOT the current owner. The KML PLAT
+            #     field contains that original name, so it's the most reliable
+            #     way to find the correct cabinet file by name.
+            #     Example: "C-191-A ADELA RAEL" → tokens ["ADELA RAEL", "ADELA", "RAEL"]
+            for hit in kml_matches:
+                plat_tokens = _extract_plat_name_tokens(hit.get("plat", ""))
+                for tok in plat_tokens:
+                    try:
+                        for h in search_local_cabinet(cab_letter, "", tok, ""):
+                            if h["path"] not in seen_local_paths:
+                                seen_local_paths.add(h["path"])
+                                h["source"]   = "local"
+                                h["ref"]      = "kml_plat_name"
+                                h["strategy"] = "kml_plat_name"  # distinct strategy for sorting/display
+                                h["_tok_len"] = len(tok) + 200   # highest KML name score
+                                local_hits.append(h)
+                    except Exception:
+                        pass
+
+            # b2) KML owner name — SECONDARY name-based strategy.
+            #    The current parcel owner (e.g. GARZA, VERONICA) may or may not
+            #    match the cabinet file name. Ownership changes over time but
+            #    cabinet files don't get renamed, so this is a fallback.
             for hit in kml_matches:
                 owner = hit.get("owner", "").strip()
                 if not owner:
@@ -1586,28 +1882,8 @@ def api_find_plat_local():
                                 seen_local_paths.add(h["path"])
                                 h["source"]   = "local"
                                 h["ref"]      = "kml_owner"
-                                h["strategy"] = "kml_cab_ref"   # top-priority display
-                                h["_tok_len"] = len(tok) + 190
-                                local_hits.append(h)
-                    except Exception:
-                        pass
-
-            # b2) KML PLAT field name tokens — secondary name-based strategy.
-            #     Cabinet filenames (e.g. "Rael Adela.pdf") do NOT contain
-            #     cabinet refs, so we strip the ref prefix from the KML PLAT
-            #     string and use the remaining name for matching.
-            #     Example: "C-191-A ADELA RAEL" → tokens ["ADELA RAEL", "ADELA", "RAEL"]
-            for hit in kml_matches:
-                plat_tokens = _extract_plat_name_tokens(hit.get("plat", ""))
-                for tok in plat_tokens:
-                    try:
-                        for h in search_local_cabinet(cab_letter, "", tok, ""):
-                            if h["path"] not in seen_local_paths:
-                                seen_local_paths.add(h["path"])
-                                h["source"]   = "local"
-                                h["ref"]      = "kml_plat_name"
-                                h["strategy"] = "kml_cab_ref"   # top-priority display
-                                h["_tok_len"] = len(tok) + 180  # rank below owner hits
+                                h["strategy"] = "kml_cab_ref"   # secondary KML match
+                                h["_tok_len"] = len(tok) + 180
                                 local_hits.append(h)
                     except Exception:
                         pass
@@ -1702,10 +1978,11 @@ def api_find_plat_local():
         elif not local_hits and not has_deed_detail:
             print(f"[local] 0 results (name-only mode — auto-broaden disabled)", flush=True)
 
-        # ── Sort: doc_number → kml_cab_ref → deed_cab_ref → client_name → prior_owner → name_match ─
+        # ── Sort: doc_number → kml_plat_name → kml_cab_ref → deed_cab_ref → client_name → prior_owner → name_match ─
         # doc_number = exact plat doc number match from file's leading number (highest confidence)
-        strategy_order = {"doc_number": 0, "kml_cab_ref": 1, "deed_cab_ref": 2,
-                          "client_name": 3, "prior_owner": 4, "name_match": 5, "page_ref": 6}
+        # kml_plat_name = PLAT field name match (original filer — most reliable name match)
+        strategy_order = {"doc_number": 0, "kml_plat_name": 1, "kml_cab_ref": 2, "deed_cab_ref": 3,
+                          "client_name": 4, "prior_owner": 5, "name_match": 6, "page_ref": 7}
         local_hits.sort(key=lambda r: (
             strategy_order.get(r.get("strategy", ""), 9),
             -(r.get("_tok_len") or 0)
@@ -2619,6 +2896,41 @@ def api_xml_status():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route("/api/index-health")
+def api_index_health():
+    """Return comprehensive health metrics about the parcel index.
+
+    Reports completeness percentages (UPC, polygon, ArcGIS enrichment, owner names),
+    index freshness (age, stale warning, newer XML files), and source breakdown.
+    """
+    try:
+        survey = get_survey_data_path()
+        health = xml_processor.compute_index_health(survey)
+        return jsonify({"success": True, **health})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/data-conflicts")
+def api_data_conflicts():
+    """Detect cross-source anomalies between KML parcel data and ArcGIS enrichment.
+
+    Flags owner mismatches, area discrepancies, TRS conflicts, and parcels
+    missing ArcGIS data. Returns a summary and up to 200 individual conflicts.
+
+    Query params: max_conflicts (int, default 200)
+    """
+    try:
+        survey = get_survey_data_path()
+        max_c  = int(request.args.get("max_conflicts", 200))
+        result = xml_processor.detect_data_conflicts(survey, max_conflicts=max_c)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
 @app.route("/api/xml/build-index", methods=["POST"])
 def api_xml_build_index():
     """Parse all KML/KMZ files in the XML folder and build/rebuild the parcel index."""
@@ -2633,12 +2945,42 @@ def api_xml_build_index():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route("/api/xml/enrich-index", methods=["POST"])
+def api_xml_enrich_index():
+    """Trigger ArcGIS enrichment of the existing parcel index.
+
+    Enriches parcels with TRS, legal description, subdivision, zoning, etc.
+    without requiring a full KML/KMZ re-parse. The enriched data is saved
+    back to the index JSON file.
+    """
+    try:
+        survey = get_survey_data_path()
+        idx = xml_processor.load_index(survey, force=True)
+        if not idx:
+            return jsonify({"success": False, "error": "No parcel index found. Build the index first."})
+
+        stats = xml_processor.enrich_index_with_arcgis(idx)
+
+        # Save updated index back to disk
+        idx_path = xml_processor._index_path(survey)
+        idx_path.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+
+        # Force cache refresh
+        xml_processor._cached_index = idx
+        xml_processor._cached_index_mtime = idx_path.stat().st_mtime
+
+        return jsonify({"success": True, **stats})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
 @app.route("/api/xml/search", methods=["POST"])
 def api_xml_search():
     """
-    Search parcel index by owner name, UPC, book/page, or cabinet reference.
+    Search parcel index by owner name, UPC, book/page, cabinet ref, TRS, or subdivision.
 
-    Body: { owner, upc, book, page, cabinet_ref, operator, limit }
+    Body: { owner, upc, book, page, cabinet_ref, trs, subdivision, operator, limit }
     """
     try:
         survey = get_survey_data_path()
@@ -2650,6 +2992,8 @@ def api_xml_search():
             book=data.get("book", ""),
             page=data.get("page", ""),
             cabinet_ref=data.get("cabinet_ref", ""),
+            trs=data.get("trs", ""),
+            subdivision=data.get("subdivision", ""),
             operator=data.get("operator", "contains"),
             limit=int(data.get("limit", 50)),
         )

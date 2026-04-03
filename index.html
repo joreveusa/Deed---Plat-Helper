@@ -197,14 +197,24 @@
             <div class="results-container glass-card mt-3">
               <div class="results-header">
                 <h3 class="card-title text-sm">Search Results <span id="s2ResultCount" class="result-badge">0</span></h3>
+                <div class="sort-controls">
+                  <label for="s2SortBy" class="sort-label">Sort:</label>
+                  <select id="s2SortBy" class="inp sort-select" onchange="doStep2Search(this.value)">
+                    <option value="relevance">Relevance</option>
+                    <option value="date">Date (newest)</option>
+                    <option value="type">Type (deeds first)</option>
+                    <option value="original">Original order</option>
+                  </select>
+                </div>
               </div>
+              <div id="s2TrsContext"></div>
               <div class="table-wrap">
                 <table class="data-table" id="s2ResultsTable">
                   <thead>
-                    <tr><th>Doc #</th><th>Grantor</th><th>Type</th><th>Book/Page</th><th>Year</th></tr>
+                    <tr><th>Doc #</th><th>Grantor</th><th>Type</th><th>Book/Page</th><th>Year</th><th style="width:80px">Relevance</th></tr>
                   </thead>
                   <tbody id="s2ResultsBody">
-                    <tr><td colspan="5" class="empty-cell">Enter a search above or start session.</td></tr>
+                    <tr><td colspan="6" class="empty-cell">Enter a search above or start session.</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -330,6 +340,7 @@
              <p class="card-desc">Search, save deeds, and locate plats for all adjoiners.</p>
            </div>
            <div class="row-layout gap-2">
+             <button class="btn btn-outline btn-sm" style="color:#ff7b72;border-color:rgba(255,123,114,.3)" onclick="removePendingSubjects()" title="Remove all adjoiners that have no saved deeds or plats">🗑️ Remove Pending</button>
              <button class="btn btn-outline" onclick="bulkSearchAdjoiners()" title="Attempts an online name search for all pending adjoiners">🔍 Bulk Search</button>
              <button class="btn btn-outline" onclick="openFolderForContext()">📁 Open Folder</button>
              <button class="btn btn-success" onclick="goToStep(6)">Continue to Boundary →</button>
