@@ -28,3 +28,5 @@ Thumbs.db
 *.log
 server.log
 server_err.log
+data/cabinet_index.json
+client_config.json
