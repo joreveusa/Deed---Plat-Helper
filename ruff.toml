@@ -1,0 +1,29 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Ruff — Python linter & formatter configuration
+# Docs: https://docs.astral.sh/ruff/
+# ──────────────────────────────────────────────────────────────────────────────
+
+target-version = "py311"
+line-length = 120
+
+[lint]
+# Start conservative — expand as code is cleaned up
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort (import ordering)
+    "UP",  # pyupgrade (Python version upgrades)
+]
+ignore = [
+    "E501",  # line too long — fix gradually, not all at once
+    "E722",  # bare except — some exist in app.py, fix over time
+]
+
+[lint.per-file-ignores]
+# app.py is the monolith — more lenient until it's fully split
+"app.py" = ["F401", "E402"]
+"xml_processor.py" = ["F401", "E402"]
+
+[lint.isort]
+known-first-party = ["helpers"]
