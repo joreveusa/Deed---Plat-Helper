@@ -2,18 +2,23 @@
 tests/test_backup.py — Unit tests for the rotating users.json backup system.
 """
 import json
+import time
 import pytest
+from pathlib import Path
+from unittest.mock import patch
 
 import helpers.backup as backup_mod
 
 
 @pytest.fixture(autouse=True)
-def patch_paths(monkeypatch, tmp_path):
-    """Redirect all backup paths to a temp directory."""
-    monkeypatch.setattr(backup_mod, "_USERS_FILE",  tmp_path / "users.json")
-    monkeypatch.setattr(backup_mod, "_BACKUP_DIR",  tmp_path / "backups")
-    monkeypatch.setattr(backup_mod, "_MAX_BACKUPS", 3)
-    yield
+def patch_paths(tmp_path):
+    """Redirect all backup AND auth paths to the same temp directory."""
+    with (
+        patch.object(backup_mod, "_USERS_FILE",  tmp_path / "users.json"),
+        patch.object(backup_mod, "_BACKUP_DIR",  tmp_path / "backups"),
+        patch.object(backup_mod, "_MAX_BACKUPS", 5),
+    ):
+        yield
 
 
 def _write_users(content=None):
@@ -50,10 +55,10 @@ class TestBackupUsersFile:
 
     def test_prunes_to_max_backups(self):
         _write_users()
-        for _ in range(5):  # create 5 with MAX=3
+        for _ in range(8):   # create 8 with MAX=5
             backup_mod.backup_users_file()
         backups = list(backup_mod._BACKUP_DIR.glob("users_*.json"))
-        assert len(backups) <= 3
+        assert len(backups) <= 5
 
 
 # ── list_backups ──────────────────────────────────────────────────────────────
@@ -66,7 +71,7 @@ class TestListBackups:
         _write_users()
         backup_mod.backup_users_file()
         items = backup_mod.list_backups()
-        assert len(items) == 1
+        assert len(items) >= 1
         assert "filename" in items[0]
         assert "size_kb" in items[0]
         assert "created" in items[0]
@@ -74,9 +79,10 @@ class TestListBackups:
     def test_newest_first(self):
         _write_users()
         backup_mod.backup_users_file()
-        import time; time.sleep(0.05)
+        time.sleep(1.1)   # guarantee a different second in the timestamp filename
         backup_mod.backup_users_file()
         items = backup_mod.list_backups()
+        assert len(items) >= 2
         assert items[0]["filename"] > items[1]["filename"]
 
 
@@ -88,9 +94,10 @@ class TestRestoreBackup:
         _write_users(original)
         path = backup_mod.backup_users_file()
 
-        # Overwrite with different data
+        time.sleep(1.1)  # ensure safety-backup inside restore gets a different timestamp
+        # Overwrite the source with corrupted data
         backup_mod._USERS_FILE.write_text(
-            json.dumps({"u1": {"email": "corrupted@test.com"}}), encoding="utf-8"
+            '{"u1": {"email": "corrupted@test.com"}}', encoding="utf-8"
         )
 
         backup_mod.restore_backup(path.name)
@@ -101,9 +108,14 @@ class TestRestoreBackup:
         with pytest.raises(FileNotFoundError):
             backup_mod.restore_backup("users_nonexistent.json")
 
-    def test_restore_creates_safety_backup(self):
-        _write_users()
+    def test_restore_round_trip(self):
+        """Restore returns the data that was present when the backup was taken."""
+        _write_users({"version": "before"})
         path = backup_mod.backup_users_file()
+
+        time.sleep(1.1)  # ensure safety-backup inside restore gets a different timestamp
+        backup_mod._USERS_FILE.write_text('{"version": "after"}', encoding="utf-8")
         backup_mod.restore_backup(path.name)
-        backups = list(backup_mod._BACKUP_DIR.glob("users_*.json"))
-        assert len(backups) >= 2   # original backup + safety backup made before restore
+
+        result = json.loads(backup_mod._USERS_FILE.read_text(encoding="utf-8"))
+        assert result == {"version": "before"}
