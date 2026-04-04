@@ -976,6 +976,172 @@
   </div>
 
 
+  <!-- ── ONBOARDING WIZARD ───────────────────────────────────────────────── -->
+  <div class="modal-overlay hidden" id="onboardingOverlay">
+    <div class="modal glass-card" style="max-width:520px" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+      <div class="modal-header">
+        <h2 id="onboardingTitle" style="margin:0;font-size:18px">👋 Welcome to Deed &amp; Plat Helper</h2>
+        <button class="modal-close" onclick="closeOnboarding()" aria-label="Skip setup">✕</button>
+      </div>
+      <div class="modal-body" style="padding:0">
+        <!-- Step indicators -->
+        <div style="display:flex;gap:0;border-bottom:1px solid var(--border)">
+          <div class="ob-step-tab active" id="obTab1" style="flex:1;padding:10px 0;text-align:center;font-size:11px;font-weight:600;color:var(--accent);border-bottom:2px solid var(--accent);cursor:default">1 · Welcome</div>
+          <div class="ob-step-tab" id="obTab2" style="flex:1;padding:10px 0;text-align:center;font-size:11px;font-weight:600;color:var(--text3);cursor:default">2 · Your County</div>
+          <div class="ob-step-tab" id="obTab3" style="flex:1;padding:10px 0;text-align:center;font-size:11px;font-weight:600;color:var(--text3);cursor:default">3 · Connect</div>
+          <div class="ob-step-tab" id="obTab4" style="flex:1;padding:10px 0;text-align:center;font-size:11px;font-weight:600;color:var(--text3);cursor:default">4 · Done</div>
+        </div>
+
+        <!-- Step 1: Welcome -->
+        <div id="obStep1" style="padding:24px 20px">
+          <p style="font-size:14px;line-height:1.7;color:var(--text2);margin-bottom:16px">
+            This tool connects to your <strong>county records portal</strong> and your county's <strong>ArcGIS parcel layer</strong> to automate deed research.<br><br>
+            Let's set it up — it only takes about 60 seconds.
+          </p>
+          <div style="background:rgba(79,172,254,.06);border:1px solid rgba(79,172,254,.15);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--text2);line-height:1.8">
+            <strong style="color:var(--text1)">What you'll need:</strong><br>
+            ✓ Your county name (we'll look up the URLs)<br>
+            ✓ County records portal login (get one from your county clerk)<br>
+            ✓ Nothing else — ArcGIS is public
+          </div>
+          <div style="margin-top:20px;display:flex;justify-content:flex-end">
+            <button class="btn btn-accent" onclick="obGoStep(2)">Get Started →</button>
+          </div>
+        </div>
+
+        <!-- Step 2: County selection -->
+        <div id="obStep2" style="padding:24px 20px;display:none">
+          <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:6px">Search for your county:</label>
+          <input type="text" id="obCountySearch" class="inp" placeholder="e.g. Taos, Bernalillo, El Paso CO…"
+            oninput="obSearchCounty(this.value)" style="margin-bottom:8px">
+          <div id="obCountyResults" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;display:none"></div>
+          <div id="obCountySelected" style="display:none;margin-top:8px;padding:8px 10px;border-radius:6px;background:rgba(86,211,160,.08);border:1px solid rgba(86,211,160,.2);font-size:12px;color:#56d3a0;font-weight:600"></div>
+          <p id="obNoCounty" style="display:none;font-size:11px;color:var(--text3);margin-top:8px">
+            Not in the list? You can manually enter URLs in Settings after setup.
+          </p>
+          <div style="margin-top:20px;display:flex;justify-content:space-between">
+            <button class="btn btn-outline btn-sm" onclick="obGoStep(1)">← Back</button>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-outline btn-sm" onclick="obGoStep(3)" id="obSkipCounty">Skip</button>
+              <button class="btn btn-accent btn-sm" onclick="obGoStep(3)" id="obNextCounty" disabled>Next →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: Connection credentials -->
+        <div id="obStep3" style="padding:24px 20px;display:none">
+          <div id="obCountyUrlRow" style="display:none;margin-bottom:12px;padding:8px 10px;background:rgba(79,172,254,.06);border-radius:6px;font-size:11px;color:var(--text2)">
+            <strong style="color:var(--text1)">Portal URL detected:</strong> <span id="obCountyUrlLabel"></span>
+          </div>
+          <div class="form-group" style="margin-bottom:12px">
+            <label>County Records Portal URL</label>
+            <input type="text" id="obPortalUrl" class="inp" placeholder="http://records.yourcounty.com">
+          </div>
+          <div class="form-group" style="margin-bottom:12px">
+            <label>Portal Username</label>
+            <input type="text" id="obUsername" class="inp" placeholder="your login username">
+          </div>
+          <div class="form-group" style="margin-bottom:12px">
+            <label>Portal Password</label>
+            <input type="password" id="obPassword" class="inp" placeholder="your login password">
+          </div>
+          <div id="obConnectResult" style="display:none;font-size:11px;padding:6px 10px;border-radius:5px;margin-bottom:8px"></div>
+          <div style="margin-top:20px;display:flex;justify-content:space-between">
+            <button class="btn btn-outline btn-sm" onclick="obGoStep(2)">← Back</button>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-outline btn-sm" id="btnObTest" onclick="obTestConnection()">Test Connection</button>
+              <button class="btn btn-accent btn-sm" onclick="obSaveAndFinish()" id="btnObSave">Save &amp; Finish</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 4: Done -->
+        <div id="obStep4" style="padding:32px 20px;text-align:center;display:none">
+          <div style="font-size:48px;margin-bottom:12px">🎉</div>
+          <h3 style="margin-bottom:8px">You're all set!</h3>
+          <p style="color:var(--text2);font-size:13px;margin-bottom:20px">
+            Your county connection is saved. Start a new job in Step 1 to begin researching.
+          </p>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:20px">
+            You can update URLs and ArcGIS settings anytime via <strong>⚙️ Settings</strong>.
+          </div>
+          <button class="btn btn-accent" onclick="closeOnboarding()">Start Researching →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ADMIN PANEL MODAL ──────────────────────────────────────────────────── -->
+  <div class="modal-overlay hidden" id="adminOverlay" onclick="if(event.target===this)closeAdminPanel()">
+    <div class="modal glass-card" style="max-width:860px;width:95vw" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h2 style="margin:0;font-size:16px">🔐 Admin Panel</h2>
+        <button class="modal-close" onclick="closeAdminPanel()" aria-label="Close admin panel">✕</button>
+      </div>
+      <div class="modal-body">
+        <!-- Auth gate -->
+        <div id="adminAuthGate" style="">
+          <div class="form-group">
+            <label>Admin Password</label>
+            <div style="display:flex;gap:8px">
+              <input type="password" id="adminPwdInput" class="inp flex-1" placeholder="Enter admin password…"
+                onkeydown="if(event.key==='Enter')adminLogin()">
+              <button class="btn btn-accent btn-sm" onclick="adminLogin()">Unlock</button>
+            </div>
+            <div id="adminAuthError" style="display:none;font-size:11px;color:var(--danger);margin-top:4px"></div>
+          </div>
+        </div>
+        <!-- Dashboard (shown after auth) -->
+        <div id="adminDashboard" style="display:none">
+          <!-- Stats row -->
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px" id="adminStatsGrid"></div>
+          <!-- User table -->
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px">Users</div>
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:12px" id="adminUserTable">
+              <thead>
+                <tr style="border-bottom:1px solid var(--border);color:var(--text3);font-size:10px;text-transform:uppercase;letter-spacing:.4px">
+                  <th style="text-align:left;padding:5px 8px">Email</th>
+                  <th style="text-align:left;padding:5px 8px">Tier</th>
+                  <th style="text-align:center;padding:5px 8px">Searches</th>
+                  <th style="text-align:left;padding:5px 8px">Stripe</th>
+                  <th style="text-align:left;padding:5px 8px">Joined</th>
+                  <th style="text-align:left;padding:5px 8px">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="adminUserRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── CONFIG IMPORT MODAL ────────────────────────────────────────────────── -->
+  <div class="modal-overlay hidden" id="configImportOverlay" onclick="if(event.target===this)closeConfigImport()">
+    <div class="modal glass-card" style="max-width:480px" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h2 style="margin:0;font-size:16px">📥 Import County Config</h2>
+        <button class="modal-close" onclick="closeConfigImport()" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:12px;color:var(--text2);margin-bottom:12px">
+          Paste a county config JSON exported from another Deed &amp; Plat Helper account to instantly apply the same portal URL and ArcGIS field mapping.
+        </p>
+        <div class="form-group">
+          <label>Config JSON</label>
+          <textarea id="configImportJson" class="inp" rows="8" style="font-family:monospace;font-size:11px"
+            placeholder='{ "_deed_config_version": 1, "county_name": "...", ... }'></textarea>
+        </div>
+        <div id="configImportResult" style="display:none;font-size:11px;padding:6px 10px;border-radius:5px;margin-bottom:8px"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="btn btn-outline btn-sm" onclick="closeConfigImport()">Cancel</button>
+          <button class="btn btn-accent btn-sm" onclick="doConfigImport()">Import</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js" onerror="
     _showErrBox('\u274c Failed to load app.js — server may be down');
   "></script>

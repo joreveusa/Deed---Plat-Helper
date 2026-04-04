@@ -4,9 +4,7 @@ tests/test_auth.py — Unit tests for SaaS auth + subscription gating.
 Runs in CI without Flask server or external services.
 """
 
-import os
 import json
-import tempfile
 import pytest
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
