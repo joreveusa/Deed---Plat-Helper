@@ -40,7 +40,8 @@ def admin_client(monkeypatch, tmp_path):
     monkeypatch.setenv("DEED_ADMIN_PASSWORD", "test-admin-pass-1234")
 
     # Re-import admin so it picks up the monkeypatched env var
-    import importlib, helpers.admin as adm
+    import importlib
+    import helpers.admin as adm
     importlib.reload(adm)
 
     app_module.app.config["TESTING"] = True
@@ -53,17 +54,23 @@ def admin_client(monkeypatch, tmp_path):
 class TestCheckAdminPassword:
     def test_correct_password(self, monkeypatch):
         monkeypatch.setenv("DEED_ADMIN_PASSWORD", "secret123")
-        import importlib, helpers.admin as adm; importlib.reload(adm)
+        import importlib
+        import helpers.admin as adm
+        importlib.reload(adm)
         assert adm.check_admin_password("secret123") is True
 
     def test_wrong_password(self, monkeypatch):
         monkeypatch.setenv("DEED_ADMIN_PASSWORD", "secret123")
-        import importlib, helpers.admin as adm; importlib.reload(adm)
+        import importlib
+        import helpers.admin as adm
+        importlib.reload(adm)
         assert adm.check_admin_password("wrongpass") is False
 
     def test_empty_password_rejected(self, monkeypatch):
         monkeypatch.setenv("DEED_ADMIN_PASSWORD", "secret123")
-        import importlib, helpers.admin as adm; importlib.reload(adm)
+        import importlib
+        import helpers.admin as adm
+        importlib.reload(adm)
         assert adm.check_admin_password("") is False
 
 
