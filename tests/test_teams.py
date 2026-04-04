@@ -16,7 +16,7 @@ def temp_users(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def owner():
-    u = auth_mod.create_user("owner@survey.com", "pass123", tier="team")
+    u = auth_mod.create_user("owner@survey.com", "passw0rd123", tier="team")
     return auth_mod.get_user(u["id"])
 
 
@@ -91,6 +91,6 @@ class TestLeaveTeam:
         assert auth_mod.get_user(member["id"])["tier"] == "free"
 
     def test_non_team_user_cannot_leave(self):
-        solo = auth_mod.create_user("solo@survey.com", "pass")
+        solo = auth_mod.create_user("solo@survey.com", "longpassword1")
         ok, _ = teams_mod.leave_team(solo)
         assert ok is False

@@ -30,15 +30,16 @@ def backup_users_file() -> Path | None:
     Returns the backup path on success, None if the source doesn't exist.
     Old backups beyond _MAX_BACKUPS are pruned automatically.
     """
-    if not _USERS_FILE.exists():
+    import helpers.backup as _m
+    if not _m._USERS_FILE.exists():
         return None
 
-    _BACKUP_DIR.mkdir(exist_ok=True)
+    _m._BACKUP_DIR.mkdir(exist_ok=True)
 
     ts   = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    dest = _BACKUP_DIR / f"users_{ts}.json"
+    dest = _m._BACKUP_DIR / f"users_{ts}.json"
     try:
-        shutil.copy2(_USERS_FILE, dest)
+        shutil.copy2(_m._USERS_FILE, dest)
         log.debug(f"[backup] Created {dest.name}")
         _prune_old_backups()
         return dest
@@ -49,8 +50,9 @@ def backup_users_file() -> Path | None:
 
 def _prune_old_backups() -> None:
     """Delete oldest backups beyond _MAX_BACKUPS."""
-    backups = sorted(_BACKUP_DIR.glob("users_*.json"))
-    excess  = len(backups) - _MAX_BACKUPS
+    import helpers.backup as _m
+    backups = sorted(_m._BACKUP_DIR.glob("users_*.json"))
+    excess  = len(backups) - _m._MAX_BACKUPS
     for old in backups[:excess]:
         try:
             old.unlink()
@@ -61,10 +63,11 @@ def _prune_old_backups() -> None:
 
 def list_backups() -> list[dict]:
     """Return metadata for all available backups (newest first)."""
-    if not _BACKUP_DIR.exists():
+    import helpers.backup as _m
+    if not _m._BACKUP_DIR.exists():
         return []
     result = []
-    for p in sorted(_BACKUP_DIR.glob("users_*.json"), reverse=True):
+    for p in sorted(_m._BACKUP_DIR.glob("users_*.json"), reverse=True):
         stat = p.stat()
         result.append({
             "filename": p.name,
@@ -81,7 +84,8 @@ def restore_backup(filename: str) -> bool:
     Creates a backup of the current file before restoring.
     Returns True on success.
     """
-    src = _BACKUP_DIR / filename
+    import helpers.backup as _m
+    src = _m._BACKUP_DIR / filename
     if not src.exists():
         raise FileNotFoundError(f"Backup not found: {filename}")
 
@@ -89,7 +93,7 @@ def restore_backup(filename: str) -> bool:
     backup_users_file()
 
     try:
-        shutil.copy2(src, _USERS_FILE)
+        shutil.copy2(src, _m._USERS_FILE)
         log.info(f"[backup] Restored users.json from {filename}")
         return True
     except Exception as e:
