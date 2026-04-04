@@ -682,8 +682,10 @@ def api_config():
         if "last_session" in data:
             profile["last_session"] = data["last_session"]
         if "arcgis_url" in data:
-            profile["arcgis_url"] = (data["arcgis_url"] or "").strip()
-        if "arcgis_fields" in data and isinstance(data["arcgis_fields"], dict):
+            new_url = (data["arcgis_url"] or "").strip()
+            if new_url:  # Only overwrite if user actually supplied a URL
+                profile["arcgis_url"] = new_url
+        if "arcgis_fields" in data and isinstance(data["arcgis_fields"], dict) and profile.get("arcgis_url"):
             profile["arcgis_fields"] = data["arcgis_fields"]
         if "firstnm_url" in data:
             profile["firstnm_url"] = data["firstnm_url"]
@@ -701,8 +703,10 @@ def api_config():
         if "firstnm_url" in data:
             cfg["firstnm_url"] = data["firstnm_url"]
         if "arcgis_url" in data:
-            cfg["arcgis_url"] = (data["arcgis_url"] or "").strip()
-        if "arcgis_fields" in data and isinstance(data["arcgis_fields"], dict):
+            new_url = (data["arcgis_url"] or "").strip()
+            if new_url:  # Only overwrite if user actually supplied a URL
+                cfg["arcgis_url"] = new_url
+        if "arcgis_fields" in data and isinstance(data["arcgis_fields"], dict) and cfg.get("arcgis_url"):
             cfg["arcgis_fields"] = data["arcgis_fields"]
         if "last_session" in data:
             cfg["last_session"] = data["last_session"]

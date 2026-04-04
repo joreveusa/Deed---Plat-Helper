@@ -3916,16 +3916,17 @@ async function saveConfig() {
   btn.innerHTML = "Connecting...";
   status.textContent = "";
 
-  // Collect ArcGIS config (if section is visible/configured)
-  const arcgisUrl    = (document.getElementById('arcgisUrl')?.value || '').trim();
-  const arcgisFields = _collectArcgisFields();
+  // Collect ArcGIS config — only include if the user has actually filled in the URL
+  // so we don't silently wipe a previously saved ArcGIS config when the section wasn't touched
+  const arcgisUrl = (document.getElementById('arcgisUrl')?.value || '').trim();
+  const payload = { firstnm_url: url, firstnm_user: user, firstnm_pass: pass };
+  if (arcgisUrl) {
+    payload.arcgis_url    = arcgisUrl;
+    payload.arcgis_fields = _collectArcgisFields();
+  }
 
   try {
-    const res = await apiFetch("/config", "POST", {
-      firstnm_url: url, firstnm_user: user, firstnm_pass: pass,
-      arcgis_url:    arcgisUrl,
-      arcgis_fields: arcgisFields,
-    });
+    const res = await apiFetch("/config", "POST", payload);
     if (!res.success) { showToast("Config save failed: " + res.error, "error"); return; }
 
     // Now login
@@ -5904,10 +5905,14 @@ async function doSaasLogout() {
 }
 
 // ── Account dropdown ──────────────────────────────────────────────────────────
-function showAccountMenu() {
+function showAccountMenu(e) {
+  if (e && e.stopPropagation) e.stopPropagation();
   if (!_saasUser) { showAuthModal('login'); return; }
   const menu = document.getElementById('accountMenu');
   if (!menu) return;
+
+  const isOpen = !menu.classList.contains('hidden');
+  if (isOpen) { menu.classList.add('hidden'); return; }
 
   // Refresh usage stats
   document.getElementById('acctMenuEmail').textContent = _saasUser.email || '';
@@ -5918,7 +5923,10 @@ function showAccountMenu() {
   document.getElementById('acctMenuLimit').textContent    = tier === 'free' ? '10' : '∞';
 
   menu.classList.remove('hidden');
-  setTimeout(() => document.addEventListener('click', _closeMenuOnClickOutside, { once: true }), 0);
+  // Delay registering the outside-click listener so this click doesn't immediately close it
+  requestAnimationFrame(() => {
+    document.addEventListener('click', _closeMenuOnClickOutside, { once: true });
+  });
 }
 
 function closeAccountMenu() {
