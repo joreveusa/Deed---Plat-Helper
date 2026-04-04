@@ -241,9 +241,9 @@ function _getAbortSignal(key) {
   return _abortControllers[key].signal;
 }
 
-// 
+//
 // INIT & BOOTSTRAP
-// 
+//
 document.addEventListener("DOMContentLoaded", async () => {
   // Initialize profile system — restores saved profile or prompts user
   await _initProfiles();
@@ -302,9 +302,9 @@ async function loadConfig() {
   }
 }
 
-// 
+//
 // WORKFLOW STEPPER LOGIC
-// 
+//
 function goToStep(step) {
   if (step > 1 && !state.researchSession) {
     showToast("Please start a research session first", "warn");
@@ -398,9 +398,9 @@ function updateJobContext() {
   updateFileBadges();
 }
 
-// 
+//
 // STEP 1: JOB SETUP
-// 
+//
 async function startSession() {
   const numInput = document.getElementById("setupJobNum").value;
   const num = parseInt(numInput) || state.nextJobNum;
@@ -624,9 +624,9 @@ function _safeCloneSession(session) {
     return safe;
   }
 }
-// 
+//
 // STEP 2: CLIENT DEED
-// 
+//
 async function doStep2Search(sortBy) {
   const name = document.getElementById("s2SearchName").value.trim();
   const op = document.getElementById("s2SearchOp").value;
@@ -2464,9 +2464,9 @@ async function saveClientPlatOnline(docNo, loc) {
   }
 }
 
-// 
+//
 // STEP 4: ADJOINER DISCOVERY
-// 
+//
 /**
  * Fire-and-forget: pre-scan adjoiners in the background after plat save.
  * Results are cached in state._prefetchedAdjoiners so Step 4 renders instantly.
@@ -2865,9 +2865,9 @@ async function saveFromCabinetBrowser(filePath, filename) {
     showToast('Error: ' + e.message, 'error');
   }
 }
-// 
+//
 // STEP 5: ADJOINER RESEARCH BOARD
-// 
+//
 function renderResearchBoard() {
   const grid = document.getElementById("s5ResearchGrid");
   const rs = state.researchSession;
@@ -2985,7 +2985,7 @@ function buildChainTracker(s) {
   </div>`;
 }
 
-//  Search from board 
+//  Search from board
 function searchForSubject(name) {
   if (document.getElementById("s2SearchName")) {
     document.getElementById("s2SearchName").value = name;
@@ -3343,7 +3343,7 @@ async function _pickAdjPlatOnline(subjId, idx) {
   } catch (e) { showToast('Error: ' + e.message, 'error'); }
 }
 
-//  Board persistence helpers 
+//  Board persistence helpers
 async function removeSubject(id) {
   state.researchSession.subjects = state.researchSession.subjects.filter(s => s.id !== id);
   await persistSession();
@@ -3464,9 +3464,9 @@ function openFile(filePath) {
     .then(r => { if (!r.success) showToast("File not found", "error"); })
     .catch(() => showToast("Could not open file", "error"));
 }
-// 
+//
 // STEP 6: BOUNDARY LINES (DXF)
-// 
+//
 function switchS6Tab(tab) {
   ["calls", "parcels", "options"].forEach(t => {
     document.getElementById(`s6Tab${t.charAt(0).toUpperCase() + t.slice(1)}`)?.classList.toggle("hidden", t !== tab);
@@ -3610,7 +3610,7 @@ function recalcS6Closure() {
   }
 }
 
-//  Parcels (Adjoiner boundaries) 
+//  Parcels (Adjoiner boundaries)
 function renderS6ParcelList() {
   const wrap = document.getElementById("s6ParcelList");
   let html = `
@@ -3712,7 +3712,7 @@ async function extractCallsFromPdf(idx, pdfPath) {
   }
 }
 
-//  DXF Generation 
+//  DXF Generation
 async function doGenerateDxf() {
   const rs = state.researchSession;
   if (!rs) { showToast("Load a session first", "warn"); return; }
@@ -3762,7 +3762,7 @@ async function doGenerateDxf() {
   }
 }
 
-//  SVG Sketch 
+//  SVG Sketch
 function updateS6Sketch() {
   const calls = state.parsedCalls;
   const sketchWrap = document.getElementById("s6SketchWrap");
@@ -3827,9 +3827,9 @@ function updateS6Sketch() {
   s += `<polygon points="${W - 16},26 ${W - 20},34 ${W - 12},34" fill="#79a8e0"/>`;
   svg.innerHTML = s;
 }
-// 
+//
 // SETTINGS MODAL
-// 
+//
 function showSettingsModal() {
   document.getElementById("settingsOverlay").classList.remove("hidden");
   loadDriveStatus(); // refresh drive status every time modal opens
@@ -4219,9 +4219,9 @@ async function testArcgisConfig() {
 
 
 
-// 
+//
 // LOGIN & CONNECTION
-// 
+//
 async function checkLogin() {
   try {
     const url = document.getElementById("cfgUrl").value.trim();
@@ -4255,9 +4255,9 @@ function setStatusDot(mode, text) {
   if (span) span.textContent = text;
 }
 
-// 
+//
 // GLOBAL PROGRESS FOOTER
-// 
+//
 function updateGlobalProgress() {
   const rs = state.researchSession;
   if (!rs) return;
@@ -4278,9 +4278,9 @@ function updateGlobalProgress() {
   document.getElementById("globalProgressFill").style.width = pct + "%";
 }
 
-// 
+//
 // EXPORT
-// 
+//
 async function exportSession() {
   const rs = state.researchSession;
   if (!rs) { showToast("No session loaded", "warn"); return; }
@@ -5735,16 +5735,22 @@ function getTypeClass(type) {
   return "badge-other";
 }
 
-async function apiFetch(path, method = "GET", body = null, { signal } = {}) {
-  const opts = { method, headers: { "Content-Type": "application/json" } };
-  if (body) opts.body = JSON.stringify(body);
-  if (signal) opts.signal = signal;
-  const res = await fetch(API + path, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+// NOTE: apiFetch is defined in the SaaS section below (handles credentials + auth/upgrade intercepts)
+// This stub keeps hoisting intact for any calls before the SaaS block loads.
+async function apiFetch(path, method = 'GET', body = null, opts = {}) {
+  const fetchOpts = { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include' };
+  if (body) fetchOpts.body = JSON.stringify(body);
+  if (opts?.signal) fetchOpts.signal = opts.signal;
+  const res  = await fetch(API + path, fetchOpts);
+  const data = await res.json();
+  if (!res.ok) {
+    if (data.auth_required)    showAuthModal?.('login');
+    else if (data.upgrade_required) handleUpgradeRequired?.(data);
+  }
+  return data;
 }
 
-//  Toast 
+//  Toast
 let _toastEl;
 function showToast(msg, type = "info") {
   if (!_toastEl) {
@@ -6558,3 +6564,211 @@ async function doConfigImport() {
     resultEl.textContent = '✗ ' + (res.error || 'Import failed');
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FORGOT / RESET PASSWORD
+// ─────────────────────────────────────────────────────────────────────────────
+
+function showForgotPassword() {
+  document.getElementById('authForgotForm').style.display = '';
+  document.getElementById('authForgotRow').style.display  = 'none';
+  document.getElementById('forgotEmail').focus();
+}
+function hideForgotPassword() {
+  document.getElementById('authForgotForm').style.display = 'none';
+  document.getElementById('authForgotRow').style.display  = '';
+  document.getElementById('forgotResult').style.display   = 'none';
+}
+
+async function doForgotPassword() {
+  const email    = (document.getElementById('forgotEmail')?.value || '').trim();
+  const resultEl = document.getElementById('forgotResult');
+  if (!email) { showToast('Enter your email address', 'warn'); return; }
+
+  const btn = document.querySelector('#authForgotForm .btn-accent');
+  if (btn) { btn.textContent = 'Sending…'; btn.disabled = true; }
+
+  const res = await apiFetch('/auth/forgot-password', 'POST', { email });
+
+  if (resultEl) {
+    resultEl.style.display    = '';
+    resultEl.style.background = 'rgba(86,211,160,.12)';
+    resultEl.style.color      = '#56d3a0';
+    resultEl.textContent      = '✓ ' + (res.message || 'Check your email for a reset link.');
+  }
+  if (btn) { btn.textContent = 'Send Reset Link'; btn.disabled = false; }
+}
+
+async function doResetPassword() {
+  const newPwd     = document.getElementById('resetNewPassword')?.value || '';
+  const confirmPwd = document.getElementById('resetConfirmPassword')?.value || '';
+  const resultEl   = document.getElementById('resetResult');
+  const token      = new URLSearchParams(window.location.search).get('token') || '';
+
+  if (!newPwd || newPwd.length < 8) {
+    showResult(resultEl, false, 'Password must be at least 8 characters.');
+    return;
+  }
+  if (newPwd !== confirmPwd) {
+    showResult(resultEl, false, 'Passwords do not match.');
+    return;
+  }
+  if (!token) {
+    showResult(resultEl, false, 'No reset token found in URL. Request a new reset link.');
+    return;
+  }
+
+  const btn = document.querySelector('#authResetForm .btn-primary');
+  if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+
+  const res = await apiFetch('/auth/reset-password', 'POST', { token, password: newPwd });
+
+  if (res.success) {
+    showResult(resultEl, true, '✓ ' + res.message);
+    showToast('Password updated! Signing you in…', 'success');
+    // Remove token from URL then trigger login
+    history.replaceState(null, '', '/');
+    setTimeout(() => {
+      document.getElementById('authResetForm').style.display = 'none';
+      document.getElementById('authForgotRow').style.display = '';
+      document.getElementById('authEmail')?.focus();
+    }, 1500);
+  } else {
+    showResult(resultEl, false, '✗ ' + (res.error || 'Reset failed.'));
+  }
+  if (btn) { btn.textContent = 'Set New Password'; btn.disabled = false; }
+}
+
+function showResult(el, success, msg) {
+  if (!el) return;
+  el.style.display    = '';
+  el.style.background = success ? 'rgba(86,211,160,.12)' : 'rgba(255,107,107,.12)';
+  el.style.color      = success ? '#56d3a0' : 'var(--danger)';
+  el.textContent      = msg;
+}
+
+/** On page load, if ?token= in URL, open auth modal with reset form showing */
+function _checkResetToken() {
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (!token) return;
+  // Show auth modal with the reset form
+  showAuthModal('login');
+  setTimeout(() => {
+    document.getElementById('authResetForm').style.display  = '';
+    document.getElementById('authForgotRow').style.display  = 'none';
+    document.getElementById('btnAuthSubmit').style.display  = 'none';
+    document.getElementById('authForgotForm').style.display = 'none';
+    // Hide tabs — this is the reset flow only
+    const tabs = document.querySelectorAll('.auth-tab');
+    tabs.forEach(t => t.style.display = 'none');
+  }, 50);
+}
+
+document.addEventListener('DOMContentLoaded', _checkResetToken);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USAGE BAR — update when account dropdown opens
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function _refreshUsageBar() {
+  try {
+    const res = await apiFetch('/auth/usage');
+    if (!res.success) return;
+    const searchesEl = document.getElementById('acctMenuSearches');
+    const limitEl    = document.getElementById('acctMenuLimit');
+    const barEl      = document.getElementById('acctMenuUsageBar');
+    const rowEl      = document.getElementById('acctMenuUsageRow');
+
+    if (searchesEl) searchesEl.textContent = res.used ?? 0;
+    if (limitEl)    limitEl.textContent    = res.limit === null ? '∞' : (res.limit ?? 10);
+
+    if (barEl && rowEl) {
+      if (res.limit === null) {
+        // Unlimited — hide the bar row for Pro/Team
+        rowEl.style.display = 'none';
+      } else {
+        rowEl.style.display = '';
+        const pct = Math.min(100, Math.round((res.used / res.limit) * 100));
+        barEl.style.width      = pct + '%';
+        // Color: green <60%, amber 60-80%, red ≥80%
+        barEl.style.background = pct >= 80 ? '#da3633' : pct >= 60 ? '#c9a227' : 'var(--accent)';
+      }
+    }
+  } catch(e) { /* silently ignore — usage bar is best-effort */ }
+}
+
+// Patch openAccountMenu (if it exists) to refresh usage bar on open
+const _origOpenAccountMenu = window.openAccountMenu;
+window.openAccountMenu = function(...args) {
+  if (_origOpenAccountMenu) _origOpenAccountMenu.apply(this, args);
+  _refreshUsageBar();
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEARCH HISTORY — recent queries panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _searchHistory = [];
+
+async function _loadSearchHistory() {
+  try {
+    const res = await apiFetch('/auth/history');
+    if (res.success) _searchHistory = res.history || [];
+  } catch(e) {}
+}
+
+/** Render a compact history dropdown below the name search input. */
+function _renderSearchHistory(inputEl, containerEl) {
+  if (!containerEl || !_searchHistory.length) return;
+  containerEl.innerHTML = _searchHistory.slice(0, 8).map(h => `
+    <div onclick="_fillSearch(${JSON.stringify(h.query)})"
+      style="padding:6px 10px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between;align-items:center"
+      onmouseover="this.style.background='rgba(79,172,254,.1)'" onmouseout="this.style.background=''">
+      <span style="color:var(--text1)">${escHtml(h.query)}</span>
+      <span style="font-size:10px;color:var(--text3)">${h.count ?? ''} results · ${(h.at||'').slice(0,10)}</span>
+    </div>`).join('');
+  containerEl.style.display = '';
+}
+
+function _fillSearch(query) {
+  const nameInput = document.getElementById('searchName');
+  if (nameInput) {
+    nameInput.value = query;
+    nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  const hist = document.getElementById('searchHistoryDropdown');
+  if (hist) hist.style.display = 'none';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FRIENDLY QUOTA MODAL — intercept upgrade_required on search
+// ─────────────────────────────────────────────────────────────────────────────
+
+function handleUpgradeRequired(data) {
+  // If upgrade modal exists, show it; otherwise fall back to upgrade overlay
+  const msg = data.error || 'This feature requires a Pro subscription.';
+  const isQuota = msg.includes('searches');
+
+  if (isQuota) {
+    // Show upgrade overlay with a quota-specific message
+    const msgEl = document.getElementById('upgradeModalMsg');
+    if (msgEl) msgEl.textContent = msg;
+    const ovl = document.getElementById('upgradeOverlay');
+    if (ovl) ovl.classList.remove('hidden');
+  } else {
+    // Generic upgrade prompt (pro feature gate)
+    showToast('⚡ ' + msg, 'warn');
+    setTimeout(() => {
+      const ovl = document.getElementById('upgradeOverlay');
+      if (ovl) ovl.classList.remove('hidden');
+    }, 600);
+  }
+}
+
+// Patch switchAuthTab to show/hide forgot link
+const _origSwitchAuthTab = window.switchAuthTab;
+window.switchAuthTab = function(tab) {
+  if (_origSwitchAuthTab) _origSwitchAuthTab.apply(this, arguments);
+  const forgotRow = document.getElementById('authForgotRow');
+  if (forgotRow) forgotRow.style.display = tab === 'login' ? '' : 'none';
+};

@@ -1,4 +1,6 @@
 # Python
+users.json           # SaaS user database — NEVER commit (contains emails + hashed passwords)
+_patch_routes.py     # one-off maintenance scripts
 .venv/
 __pycache__/
 *.pyc

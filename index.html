@@ -22,7 +22,7 @@
         <span class="brand-sub">Red Tail Surveying</span>
       </div>
     </div>
-    
+
     <div class="job-context hidden" id="jobContextBar">
       <div class="job-badge">Job #<span id="ctxJobNum">----</span></div>
       <div class="job-client" id="ctxClient">No Session</div>
@@ -88,7 +88,7 @@
     </nav>
 
     <div class="step-content-area">
-      
+
       <!-- STEP 1: JOB SETUP -->
       <section class="step-panel active" id="step1Panel">
         <div class="glass-card setup-card">
@@ -179,7 +179,7 @@
       <!-- STEP 2: CLIENT DEED -->
       <section class="step-panel hidden" id="step2Panel">
         <div class="split-layout">
-          
+
           <!-- Left: Search & Results -->
           <div class="split-left">
             <div class="glass-card search-card">
@@ -374,14 +374,14 @@
                 <button class="tab-btn" onclick="switchS6Tab('parcels')">Adjoiner Parcels</button>
                 <button class="tab-btn" onclick="switchS6Tab('options')">DXF Options</button>
               </div>
-              
+
               <div class="tab-content flex-1" id="s6TabCalls">
                 <div class="row-layout gap-2 mb-2 p-2" style="background:var(--bg3);border-bottom:1px solid var(--border)">
                   <button class="btn btn-outline btn-sm" onclick="reparseClientCallsFromSession()" title="Re-import boundary calls from the saved client deed">📥 Re-import Calls</button>
                   <button class="btn btn-outline btn-sm" onclick="addManualCall()">+ Add Call</button>
                   <button class="btn btn-outline btn-sm text-danger ml-auto" onclick="clearAllCalls()">🗑️ Clear</button>
                 </div>
-                
+
                 <div class="closure-bar hidden" id="s6ClosureBar">
                   <span id="s6ClosureText">Closure: 0.00 ft</span>
                 </div>
@@ -416,7 +416,7 @@
                 <div class="form-check"><input type="checkbox" id="optDrawBoundary" checked> <label>Draw Boundary Lines (Polylines)</label></div>
                 <div class="form-check"><input type="checkbox" id="optDrawLabels" checked> <label>Draw Bearing & Distance Labels</label></div>
                 <div class="form-check"><input type="checkbox" id="optDrawEndpoints"> <label>Draw Endpoints</label></div>
-                
+
                 <div class="form-group mt-3">
                   <label>Label Text Height</label>
                   <input type="number" id="optLabelSize" class="inp" value="2.0" step="0.5">
@@ -898,6 +898,36 @@
         <button class="btn btn-primary w-full" id="btnAuthSubmit" onclick="doAuthSubmit()" style="margin-top:8px">
           Sign In
         </button>
+        <!-- Forgot password link — only visible on login tab -->
+        <div id="authForgotRow" style="margin-top:10px;text-align:center">
+          <a href="#" onclick="showForgotPassword();return false" style="font-size:11px;color:var(--text3)" id="authForgotLink">Forgot your password?</a>
+        </div>
+        <!-- Forgot password form (hidden until link clicked) -->
+        <div id="authForgotForm" style="display:none;margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+          <div class="form-group" style="margin-bottom:8px">
+            <label>Enter your account email</label>
+            <input type="email" id="forgotEmail" class="inp" placeholder="you@example.com">
+          </div>
+          <div id="forgotResult" style="display:none;font-size:11px;padding:6px 8px;border-radius:5px;margin-bottom:8px"></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-outline btn-sm flex-1" onclick="hideForgotPassword()">Cancel</button>
+            <button class="btn btn-accent btn-sm flex-1" onclick="doForgotPassword()">Send Reset Link</button>
+          </div>
+        </div>
+        <!-- Reset password form — shown when ?token= is in URL -->
+        <div id="authResetForm" style="display:none;margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+          <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Enter your new password below.</p>
+          <div class="form-group" style="margin-bottom:8px">
+            <label>New Password</label>
+            <input type="password" id="resetNewPassword" class="inp" placeholder="At least 8 characters">
+          </div>
+          <div class="form-group" style="margin-bottom:8px">
+            <label>Confirm New Password</label>
+            <input type="password" id="resetConfirmPassword" class="inp" placeholder="Repeat new password" onkeydown="if(event.key==='Enter')doResetPassword()">
+          </div>
+          <div id="resetResult" style="display:none;font-size:11px;padding:6px 8px;border-radius:5px;margin-bottom:8px"></div>
+          <button class="btn btn-primary w-full" onclick="doResetPassword()">Set New Password</button>
+        </div>
         <div style="margin-top:14px;text-align:center;font-size:12px;color:var(--text3)">
           <span id="authSwitchText">Don't have an account?</span>
           <a href="#" onclick="switchAuthTab(document.getElementById('authTabRegister').classList.contains('auth-tab-active')?'login':'register');return false"
@@ -914,9 +944,14 @@
       <div class="dropdown-tier" id="acctMenuTier">Free Plan</div>
     </div>
     <div class="dropdown-divider"></div>
-    <div class="dropdown-usage">
-      <span>Searches this month:</span>
-      <strong id="acctMenuSearches">0</strong> / <span id="acctMenuLimit">10</span>
+    <div class="dropdown-usage" id="acctMenuUsageRow">
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px">
+        <span>Searches this month</span>
+        <strong><span id="acctMenuSearches">0</span> / <span id="acctMenuLimit">10</span></strong>
+      </div>
+      <div style="background:var(--surface3,#1a1a2e);border-radius:4px;height:4px;overflow:hidden">
+        <div id="acctMenuUsageBar" style="height:100%;background:var(--accent);border-radius:4px;transition:width .4s;width:0%"></div>
+      </div>
     </div>
     <div class="dropdown-divider"></div>
     <button class="dropdown-item upgrade-item" id="acctMenuUpgrade"
@@ -1087,7 +1122,7 @@
       </div>
       <div class="modal-body">
         <!-- Auth gate -->
-        <div id="adminAuthGate" style="">
+        <div id="adminAuthGate">
           <div class="form-group">
             <label>Admin Password</label>
             <div style="display:flex;gap:8px">
