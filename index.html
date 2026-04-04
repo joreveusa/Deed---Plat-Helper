@@ -796,10 +796,17 @@
         </div>
       </div>
 
-      <div class="modal-footer">
-        <div class="text-xs text-text3 flex-1" id="cfgStatus"></div>
-        <button class="btn btn-outline" onclick="closeSettingsModal()">Cancel</button>
-        <button class="btn btn-primary" id="btnSaveConfig" onclick="saveConfig()">🔌 Connect</button>
+      <div class="modal-footer" style="flex-wrap:wrap;gap:8px">
+        <div style="display:flex;gap:6px;flex:1">
+          <button class="btn btn-outline btn-sm" onclick="exportConfig()" title="Download county config as JSON">📤 Export</button>
+          <button class="btn btn-outline btn-sm" onclick="showConfigImport()" title="Import a shared county config JSON">📥 Import</button>
+          <button class="btn btn-outline btn-sm" onclick="showAdminPanel()" title="Open admin panel">🔐 Admin</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="text-xs text-text3" id="cfgStatus"></div>
+          <button class="btn btn-outline" onclick="closeSettingsModal()">Cancel</button>
+          <button class="btn btn-primary" id="btnSaveConfig" onclick="saveConfig()">🔌 Connect</button>
+        </div>
       </div>
     </div>
   </div>
