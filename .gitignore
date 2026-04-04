@@ -8,6 +8,16 @@ __pycache__/
 dist/
 build/
 
+# Environment / secrets — NEVER commit
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
 # App data / generated
 *.ocr.json           # Tesseract OCR cache files alongside cabinet PDFs
 parcel_index.json    # KML index (rebuilt from source KML/KMZ files)

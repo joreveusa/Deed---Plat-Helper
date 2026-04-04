@@ -231,10 +231,35 @@ class TestXmlEndpoints:
 # ANALYZE DEED
 # ══════════════════════════════════════════════════════════════════════════════
 
+@pytest.fixture
+def authed_pro_client(tmp_path, monkeypatch):
+    """Test client with a Pro user session cookie."""
+    import helpers.auth as auth_mod
+    users_file = tmp_path / "users.json"
+    monkeypatch.setattr(auth_mod, "_USERS_FILE", users_file)
+
+    from helpers.auth import create_user, update_user, generate_token
+    user = create_user("testpro@example.com", "password123")
+    update_user(user["id"], tier="pro")
+    token = generate_token(user["id"])
+
+    app_module.app.config['TESTING'] = True
+    with app_module.app.test_client() as c:
+        c.set_cookie('deed_token', token)
+        yield c
+
+
 class TestAnalyzeDeed:
-    def test_analyze_deed_endpoint(self, client):
-        """POST /api/analyze-deed should return a health-check result."""
-        resp = client.post('/api/analyze-deed', json={
+    def test_analyze_deed_requires_auth(self, client):
+        """POST /api/analyze-deed without auth should return 401."""
+        resp = client.post('/api/analyze-deed', json={"detail": {}})
+        assert resp.status_code == 401
+        data = resp.get_json()
+        assert data.get("auth_required") is True
+
+    def test_analyze_deed_endpoint(self, authed_pro_client):
+        """POST /api/analyze-deed with pro auth should return a health-check result."""
+        resp = authed_pro_client.post('/api/analyze-deed', json={
             "detail": {
                 "Grantor": "GARCIA, JUAN",
                 "Grantee": "RAEL, ADELA",
@@ -254,9 +279,9 @@ class TestAnalyzeDeed:
         assert "issues" in result
         assert "categories" in result
 
-    def test_analyze_deed_empty_detail(self, client):
-        """POST /api/analyze-deed with empty detail should still return a result."""
-        resp = client.post('/api/analyze-deed', json={"detail": {}})
+    def test_analyze_deed_empty_detail(self, authed_pro_client):
+        """POST /api/analyze-deed with empty detail should flag missing parties."""
+        resp = authed_pro_client.post('/api/analyze-deed', json={"detail": {}})
         assert resp.status_code == 200
         data = resp.get_json()
         assert data.get("success") is True
@@ -265,9 +290,3 @@ class TestAnalyzeDeed:
             1 for i in data["analysis"]["issues"] if i["severity"] == "critical"
         )
         assert critical_count >= 2
-"""
-Integration tests for critical Flask API routes.
-
-Tests validate route wiring, JSON response shapes, error handling, and session
-isolation via the profile_id cookie.
-"""
