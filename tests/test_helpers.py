@@ -5,7 +5,6 @@ Basic unit tests for the extracted helper modules.
 Run with:  py -m pytest tests/ -v
 """
 
-import pytest
 import math
 
 # ── helpers.metes_bounds ──────────────────────────────────────────────────────
