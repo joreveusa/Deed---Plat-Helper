@@ -2919,3 +2919,20 @@ body, body * {
   box-shadow: 0 4px 16px rgba(79,172,254,.4);
   transform: translateY(-1px);
 }
+
+/* ── Pro feature badge (inline on locked buttons) ─────────── */
+.pro-badge-inline {
+  display: inline-flex;
+  align-items: center;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #e3c55a, #c9a227);
+  color: #1a1200;
+  margin-left: 5px;
+  vertical-align: middle;
+  line-height: 1;
+}
