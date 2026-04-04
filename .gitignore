@@ -18,6 +18,7 @@ profiles/
 
 # Survey data (never commit actual client data)
 Survey Data/
+dev-data/
 
 # OS / editor
 .vscode/settings.json

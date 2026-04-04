@@ -85,10 +85,19 @@ def detect_survey_drive(force: bool = False) -> str | None:
     Caches the result; pass force=True to rescan.
     """
     global _detected_drive
+    # ── Dev mode: DEV_DATA_DIR env var bypasses drive scanning ──────────────
+    dev_dir = os.environ.get("DEV_DATA_DIR", "").strip()
+    if dev_dir and Path(dev_dir).exists():
+        _detected_drive = "__dev__"
+        if not force:
+            return _detected_drive
+        print(f"[drive] DEV MODE — using local data: {dev_dir}", flush=True)
+        return _detected_drive
     if _detected_drive and not force:
         # Verify cached drive is still present
-        if Path(f"{_detected_drive}:\\").exists():
+        if _detected_drive == "__dev__" or Path(f"{_detected_drive}:\\").exists():
             return _detected_drive
+
     # Try config override first
     cfg = load_config()
     override = cfg.get("survey_drive", "").strip().upper()
@@ -116,6 +125,9 @@ def detect_survey_drive(force: bool = False) -> str | None:
 def get_survey_data_path() -> str:
     """Return the current Survey Data path, auto-detecting the drive."""
     drive = detect_survey_drive()
+    if drive == "__dev__":
+        dev_dir = os.environ.get("DEV_DATA_DIR", "").strip()
+        return dev_dir if dev_dir else ""
     if drive:
         return str(Path(f"{drive}:\\") / _SURVEY_RELATIVE)
     return ""  # drive not found — caller should check for empty string and warn user
