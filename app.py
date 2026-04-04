@@ -65,7 +65,28 @@ setup_tesseract()
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
-BASE_URL = "http://records.1stnmtitle.com"
+# Default portal URL — overridden per-user via Settings → URL field.
+# Each user enters the URL for their own county records portal (e.halFILE, etc.).
+_DEFAULT_PORTAL_URL = "http://records.1stnmtitle.com"
+
+def _get_portal_url() -> str:
+    """Return the county records portal base URL for the current request.
+    Reads from the active profile first, falls back to global config, then
+    falls back to the compiled-in default.  Strips trailing slashes."""
+    try:
+        pid = request.cookies.get('profile_id')
+    except RuntimeError:
+        pid = None  # called outside request context
+
+    url = ""
+    if pid:
+        p = get_profile(pid)
+        if p:
+            url = p.get("firstnm_url", "").strip()
+    if not url:
+        cfg = load_config()
+        url = cfg.get("firstnm_url", "").strip()
+    return (url or _DEFAULT_PORTAL_URL).rstrip("/")
 
 # ── Removable-drive detection ───────────────────────────────────────────────────
 # The Survey Data folder lives on a removable drive whose letter changes
@@ -457,11 +478,12 @@ def api_profiles_create():
     if not name:
         return jsonify({"success": False, "error": "display_name is required"})
     p = create_profile(name)
-    # Optionally copy shared credentials into the new profile
+    # Optionally copy shared credentials + portal URL into the new profile
     cfg = load_config()
     if cfg.get("firstnm_user"):
         p["firstnm_user"] = cfg["firstnm_user"]
         p["firstnm_pass"] = cfg.get("firstnm_pass", "")
+        p["firstnm_url"]  = cfg.get("firstnm_url", "")
         save_profile(p)
     return jsonify({"success": True, "profile": p})
 
@@ -571,7 +593,7 @@ def api_login():
 
         # Fetch login page to discover form
         sess = _session()
-        resp = sess.get(BASE_URL + "/", timeout=8)
+        resp = sess.get(_get_portal_url() + "/", timeout=8)
         soup = BeautifulSoup(resp.text, "lxml")
         form = soup.find("form")
         if not form:
@@ -579,7 +601,7 @@ def api_login():
 
         action = form.get("action", "/")
         if not action.startswith("http"):
-            action = BASE_URL + "/" + action.lstrip("/")
+            action = _get_portal_url() + "/" + action.lstrip("/")
 
         form_data = {}
         for inp in form.find_all('input'):
@@ -616,9 +638,10 @@ def api_login():
 
         post_resp = sess.post(action, data=form_data, timeout=8)
         # Success = we landed on the search/welcome page, NOT back on login
+        portal_root = _get_portal_url().lower().rstrip('/')
         landed_url = post_resp.url.lower()
         success = ('hfweb' in landed_url or 'new search' in post_resp.text.lower() or
-                   ('logout' in post_resp.text.lower() and 'records.1stnmtitle.com/' not in landed_url.rstrip('/')))
+                   ('logout' in post_resp.text.lower() and landed_url.rstrip('/') != portal_root))
 
         if success:
             if remember:
@@ -667,13 +690,13 @@ def api_search():
         op_map = {"contains": "contains", "begins with": "begin", "exact match": "exact", "equals": "exact"}
         operator = op_map.get(data.get("operator", "contains"), "contains")
 
-        search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+        search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
         sess = _session()
         resp = sess.get(search_url, timeout=15)
 
         # Detect redirect back to login page
         landed = resp.url.lower().rstrip('/')
-        if landed == BASE_URL.lower().rstrip('/') or 'login' in landed:
+        if landed == _get_portal_url().lower().rstrip('/') or 'login' in landed:
             return jsonify({"success": False, "error": "Session expired — please log in again."})
 
         # The site has malformed HTML (form appears after </html>),
@@ -684,7 +707,7 @@ def api_search():
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # Action is set via JS; we know it's always hflook.asp
-        action = BASE_URL + "/scripts/hflook.asp"
+        action = _get_portal_url() + "/scripts/hflook.asp"
 
 
         form_data = _scrape_form_data(soup)
@@ -877,18 +900,18 @@ def api_search_enriched():
             return jsonify({"success": False, "error": "No search criteria provided"})
 
         sess = _session()
-        search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+        search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
         resp = sess.get(search_url, timeout=15)
 
         landed = resp.url.lower().rstrip('/')
-        if landed == BASE_URL.lower().rstrip('/') or 'login' in landed:
+        if landed == _get_portal_url().lower().rstrip('/') or 'login' in landed:
             return jsonify({"success": False, "error": "Session expired — please log in again."})
 
         if 'CROSSNAMEFIELD' not in resp.text and 'FIELD14' not in resp.text:
             return jsonify({"success": False, "error": "Session expired — please log in again."})
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        action = BASE_URL + "/scripts/hflook.asp"
+        action = _get_portal_url() + "/scripts/hflook.asp"
         form_data = _scrape_form_data(soup)
         if not form_data:
             return jsonify({"success": False, "error": "Search form not found"})
@@ -1026,7 +1049,7 @@ def api_chain_search():
 
         for hop in range(max_hops):
             # Search for current_name as GRANTEE (find deed where they received property)
-            search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+            search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
             try:
                 resp = _session().get(search_url, timeout=15)
             except Exception:
@@ -1049,7 +1072,7 @@ def api_chain_search():
             form_data["CROSSNAMETYPE"] = "begin"
             form_data["CROSSTYPE"] = "GE"  # GE = grantee
 
-            action = BASE_URL + "/scripts/hflook.asp"
+            action = _get_portal_url() + "/scripts/hflook.asp"
             try:
                 post_resp = _session().post(action, data=form_data, timeout=20)
             except Exception:
@@ -1146,7 +1169,7 @@ def api_document(doc_no):
             body = request.get_json(silent=True) or {}
             search_row = body.get("search_result", {})
 
-        url = f"{BASE_URL}/scripts/hfpage.asp?Appl=FNM&Doctype=TP&DocNo={doc_no}&FormUser={username}"
+        url = f"{_get_portal_url()}/scripts/hfpage.asp?Appl=FNM&Doctype=TP&DocNo={doc_no}&FormUser={username}"
         resp = _session().get(url, timeout=15)
         soup = BeautifulSoup(resp.text, "lxml")
 
@@ -1198,10 +1221,10 @@ def api_document(doc_no):
         pdf_link = soup.find("a", string=re.compile(r"pdf all pages", re.I))
         if pdf_link:
             href = pdf_link.get("href", "")
-            detail["pdf_url"] = (BASE_URL + "/" + href.lstrip("/")
+            detail["pdf_url"] = (_get_portal_url() + "/" + href.lstrip("/")
                                  if not href.startswith("http") else href)
         else:
-            detail["pdf_url"] = f"{BASE_URL}/WebTemp/{doc_no}.pdf"
+            detail["pdf_url"] = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
 
         # ── TRS extraction ────────────────────────────────────────────────────
         all_text = page_text + " " + " ".join(str(v) for v in detail.values())
@@ -1242,7 +1265,7 @@ def find_adjoiners_online(location: str, grantor: str, sess: req_lib.Session | N
 
     # Search online by location prefix (book number)
     try:
-        search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+        search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
         _s = sess or _session()
         resp = _s.get(search_url, timeout=12)
         if "FIELD14" not in resp.text and "CROSSNAMEFIELD" not in resp.text:
@@ -1259,7 +1282,7 @@ def find_adjoiners_online(location: str, grantor: str, sess: req_lib.Session | N
         fd["FIELD14"]    = book + "-"
         fd["FIELD14TYPE"] = "begin"
 
-        post = _s.post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=20)
+        post = _s.post(f"{_get_portal_url()}/scripts/hflook.asp", data=fd, timeout=20)
         soup2 = BeautifulSoup(post.text, "html.parser")
 
         # Collect unique grantors/grantees from nearby records (skip our own grantor)
@@ -2139,7 +2162,7 @@ def api_find_plat_online():
             if not name_last or len(name_last) < 2:
                 return
             try:
-                search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+                search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
                 resp = _session().get(search_url, timeout=8)
                 if "CROSSNAMEFIELD" not in resp.text and "FIELD14" not in resp.text:
                     return  # not logged in
@@ -2152,7 +2175,7 @@ def api_find_plat_online():
                 # NOTE: Do NOT set FIELD7="SUR" here — it conflicts with the form
                 # and may suppress all results. Instrument-type filtering is done
                 # by the regex below after results are returned.
-                post  = _session().post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=10)
+                post  = _session().post(f"{_get_portal_url()}/scripts/hflook.asp", data=fd, timeout=10)
                 soup2 = BeautifulSoup(post.text, "html.parser")
                 for row in soup2.find_all("tr"):
                     cells = row.find_all("td")
@@ -2175,7 +2198,7 @@ def api_find_plat_online():
                         "recorded_date":   cells[7].text.strip() if len(cells) > 7 else "",
                         "grantor":         cells[9].text.strip() if len(cells) > 9 else "",
                         "grantee":         cells[10].text.strip() if len(cells) > 10 else "",
-                        "pdf_url":         f"{BASE_URL}/WebTemp/{doc_no}.pdf",
+                        "pdf_url":         f"{_get_portal_url()}/WebTemp/{doc_no}.pdf",
                         "source":          "online",
                         "search_label":    label,
                     })
@@ -2259,7 +2282,7 @@ def api_save_plat():
         if source == "local":
             shutil.copy2(file_path, dest)
         elif source == "online":
-            pdf_url  = data.get("pdf_url", f"{BASE_URL}/WebTemp/{doc_no}.pdf")
+            pdf_url  = data.get("pdf_url", f"{_get_portal_url()}/WebTemp/{doc_no}.pdf")
             pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
             if pdf_resp.status_code != 200:
                 return jsonify({"success": False, "error": f"PDF fetch failed: {pdf_resp.status_code}"})
@@ -2441,7 +2464,7 @@ def api_download():
             })
 
         # Download
-        pdf_url  = f"{BASE_URL}/WebTemp/{doc_no}.pdf"
+        pdf_url  = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
         pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
         if pdf_resp.status_code != 200:
             return jsonify({"success": False, "error": f"PDF fetch failed: {pdf_resp.status_code}"})
@@ -3826,7 +3849,7 @@ def api_extract_deed_description():
         if not full_text.strip() and doc_no:
             # Try to download the PDF from the online source into a temp file
             try:
-                pdf_url  = f"{BASE_URL}/WebTemp/{doc_no}.pdf"
+                pdf_url  = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
                 pdf_resp = _session().get(pdf_url, stream=True, timeout=20)
                 if pdf_resp.status_code == 200:
                     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
