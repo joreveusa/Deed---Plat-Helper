@@ -6138,6 +6138,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initSaasAuth();
   _checkUpgradeSuccess();
   _applyProFeatureLocks();
+  // Show onboarding wizard if no portal URL is configured yet
+  setTimeout(checkOnboarding, 1500);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
