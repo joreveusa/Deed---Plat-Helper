@@ -38,6 +38,12 @@ def _load_users() -> dict:
 
 
 def _save_users(users: dict) -> None:
+    # Create a rotating backup before overwriting
+    try:
+        from helpers.backup import backup_users_file
+        backup_users_file()
+    except Exception:
+        pass   # backup failure must never crash the app
     _USERS_FILE.write_text(
         json.dumps(users, indent=2, ensure_ascii=False), encoding="utf-8"
     )
