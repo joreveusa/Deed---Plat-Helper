@@ -5850,6 +5850,12 @@ function _updateSaasBadge() {
   }
   // Re-apply pro feature locks whenever session state changes
   if (typeof _applyProFeatureLocks === 'function') _applyProFeatureLocks();
+  // Show/hide Team button in Settings footer based on tier
+  if (typeof _applyTeamVisibility === 'function') {
+    const tier = _saasUser?.tier || 'free';
+    const role = _saasUser?.team_role || null;
+    _applyTeamVisibility(tier, role);
+  }
 }
 
 /** Show the auth modal. mode = 'login' | 'register' | 'upgrade' */
@@ -5910,6 +5916,21 @@ async function doAuthSubmit() {
       _updateSaasBadge();
       closeAuthModal();
       showToast(isRegister ? '✅ Account created! Welcome to Deed Helper.' : `Welcome back, ${email.split('@')[0]}!`, 'success');
+      // Load search history so recent queries are ready
+      if (typeof _loadSearchHistory === 'function') _loadSearchHistory();
+      // If user arrived via a team invite link, auto-accept the invite now
+      const pendingTeamToken = sessionStorage.getItem('pendingTeamToken');
+      if (pendingTeamToken) {
+        sessionStorage.removeItem('pendingTeamToken');
+        apiFetch('/api/team/join', 'POST', { token: pendingTeamToken }).then(res => {
+          if (res.success) {
+            showToast('🎉 ' + res.message + ' You now have Team access!', 'success');
+            if (res.user) { _saasUser = res.user; _updateSaasBadge(); }
+          } else {
+            showToast('⚠ Team invite: ' + (res.error || 'Could not join team.'), 'warn');
+          }
+        }).catch(() => {});
+      }
     } else {
       errEl.textContent = data.error || 'Something went wrong.';
       errEl.classList.remove('hidden');
@@ -6833,7 +6854,7 @@ function _renderSearchHistory(inputEl, containerEl) {
 }
 
 function _fillSearch(query) {
-  const nameInput = document.getElementById('searchName');
+  const nameInput = document.getElementById('s2SearchName');
   if (nameInput) {
     nameInput.value = query;
     nameInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -6842,23 +6863,42 @@ function _fillSearch(query) {
   if (hist) hist.style.display = 'none';
 }
 
+function _showSearchHistory() {
+  if (!_searchHistory.length) {
+    // Try loading if not yet populated
+    if (typeof _loadSearchHistory === 'function') _loadSearchHistory().then(() => _showSearchHistory());
+    return;
+  }
+  const containerEl = document.getElementById('searchHistoryDropdown');
+  const inputEl     = document.getElementById('s2SearchName');
+  _renderSearchHistory(inputEl, containerEl);
+}
+
+let _historyHideTimer = null;
+function _hideSearchHistoryDelay() {
+  // Small delay so clicks inside the dropdown register before it disappears
+  _historyHideTimer = setTimeout(() => {
+    const hist = document.getElementById('searchHistoryDropdown');
+    if (hist) hist.style.display = 'none';
+  }, 200);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // FRIENDLY QUOTA MODAL — intercept upgrade_required on search
 // ─────────────────────────────────────────────────────────────────────────────
 
 function handleUpgradeRequired(data) {
-  // If upgrade modal exists, show it; otherwise fall back to upgrade overlay
-  const msg = data.error || 'This feature requires a Pro subscription.';
+  const msg     = data.error || 'This feature requires a Pro subscription.';
   const isQuota = msg.includes('searches');
 
+  // Populate the upgrade modal's message element (id may be upgradeMsg or upgradeModalMsg)
+  const msgEl = document.getElementById('upgradeMsg') || document.getElementById('upgradeModalMsg');
+  if (msgEl) msgEl.textContent = msg;
+
   if (isQuota) {
-    // Show upgrade overlay with a quota-specific message
-    const msgEl = document.getElementById('upgradeModalMsg');
-    if (msgEl) msgEl.textContent = msg;
     const ovl = document.getElementById('upgradeOverlay');
     if (ovl) ovl.classList.remove('hidden');
   } else {
-    // Generic upgrade prompt (pro feature gate)
     showToast('⚡ ' + msg, 'warn');
     setTimeout(() => {
       const ovl = document.getElementById('upgradeOverlay');
@@ -7031,3 +7071,39 @@ function _applyTeamVisibility(userTier, userRole) {
   const teamBtn = document.getElementById('btnSettingsTeam');
   if (teamBtn) teamBtn.style.display = (userTier === 'team') ? '' : 'none';
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ?plan= LANDING PAGE -> APP FLOW
+// Handles users arriving from deedplathelper.netlify.app pricing buttons.
+// ?plan=pro or ?plan=team -> show auth modal, then upgrade modal after login.
+// ─────────────────────────────────────────────────────────────────────────────
+
+(function _handlePlanParam() {
+  const plan = new URLSearchParams(window.location.search).get('plan');
+  if (!plan || !['pro', 'team'].includes(plan)) return;
+  history.replaceState(null, '', window.location.pathname);
+  const planNames = { pro: 'Pro - $29/mo', team: 'Team - $79/mo' };
+  const planMsgs  = {
+    pro:  'Unlock unlimited searches, OCR, live parcel maps, adjoiner discovery, and DXF export.',
+    team: 'Everything in Pro plus 5 seats, shared session library, and priority support.',
+  };
+  function _showUpgradeForPlan() {
+    if (typeof showUpgradeModal === 'function') {
+      showUpgradeModal(planNames[plan], planMsgs[plan]);
+    }
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+      if (_saasUser) {
+        _showUpgradeForPlan();
+      } else {
+        showAuthModal('register');
+        showToast('Create a free account to start your ' + (plan === 'pro' ? 'Pro' : 'Team') + ' trial', 'info');
+        const poll = setInterval(() => {
+          if (_saasUser) { clearInterval(poll); setTimeout(_showUpgradeForPlan, 500); }
+        }, 500);
+        setTimeout(() => clearInterval(poll), 300000);
+      }
+    }, 900);
+  });
+})();
