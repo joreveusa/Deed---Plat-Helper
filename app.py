@@ -43,7 +43,13 @@ from helpers.admin import (
     check_admin_password, list_users_summary, get_user_stats,
     admin_set_tier, admin_toggle_active, admin_reset_searches,
 )
-
+from helpers.rate_limit import rate_limit, rate_limit_ip
+from helpers.backup import list_backups, restore_backup
+from helpers.teams import (
+    get_team_members, get_seat_count, invite_member,
+    accept_invite, remove_member, leave_team,
+    verify_invite_token,
+)
 
 
 # ── Helper modules (extracted from this file for maintainability) ─────────────
@@ -93,6 +99,10 @@ except ImportError:
 setup_tesseract()
 
 app = Flask(__name__, static_folder='.', static_url_path='')
+
+# ── Register Blueprints ───────────────────────────────────────────────────────
+from routes.auth import auth_bp
+app.register_blueprint(auth_bp)
 
 # Default portal URL — overridden per-user via Settings → URL field.
 # Each user enters the URL for their own county records portal (e.halFILE, etc.).
@@ -517,180 +527,7 @@ def add_no_cache(response):
         response.headers["Expires"] = "0"
     return response
 
-# ── SaaS Auth routes ───────────────────────────────────────────────────────────
-
-@app.route("/auth/register", methods=["POST"])
-def auth_register():
-    """Register a new Deed Helper account. Body: {email, password}"""
-    data     = request.get_json(silent=True) or {}
-    email    = (data.get("email") or "").strip()
-    password = data.get("password") or ""
-    try:
-        user  = create_user(email, password, tier="free")
-        token = generate_token(user["id"])
-        resp  = jsonify({"success": True, "user": public_user(user)})
-        resp.set_cookie("deed_token", token, max_age=60*60*24*30,
-                        httponly=True, samesite="Lax")
-        # Send welcome email + notify admin (fire & forget — don't block registration)
-        try:
-            from helpers.email_utils import send_welcome, send_admin_new_user_notification
-            _admin_email = os.environ.get("DEED_ADMIN_EMAIL", "")
-            send_welcome(email)
-            if _admin_email:
-                send_admin_new_user_notification(email, _admin_email)
-        except Exception:
-            pass  # email is best-effort
-        return resp
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/auth/login", methods=["POST"])
-def auth_saas_login():
-    """Login to Deed Helper account. Body: {email, password}"""
-    data     = request.get_json(silent=True) or {}
-    email    = (data.get("email") or "").strip()
-    password = data.get("password") or ""
-    user     = find_user_by_email(email)
-
-    # Always return the same generic error for unknown email (prevent user enumeration)
-    if not user:
-        return jsonify({"success": False, "error": "Invalid email or password."}), 401
-
-    # ── Lockout check ─────────────────────────────────────────────────────────
-    allowed, lock_msg = check_login_allowed(user)
-    if not allowed:
-        return jsonify({"success": False, "error": lock_msg}), 429
-
-    # ── Inactive account ──────────────────────────────────────────────────────
-    if not user.get("active", True):
-        return jsonify({"success": False, "error": "Account is inactive. Contact support."}), 403
-
-    # ── Password check ────────────────────────────────────────────────────────
-    if not verify_password(password, user.get("password_hash", "")):
-        record_failed_login(user["id"])
-        return jsonify({"success": False, "error": "Invalid email or password."}), 401
-
-    # ── Success ───────────────────────────────────────────────────────────────
-    clear_failed_logins(user["id"])
-    token = generate_token(user["id"])
-    resp  = jsonify({"success": True, "user": public_user(user)})
-    resp.set_cookie("deed_token", token, max_age=60*60*24*30,
-                    httponly=True, samesite="Lax")
-    return resp
-
-
-@app.route("/auth/logout", methods=["POST"])
-def auth_saas_logout():
-    resp = jsonify({"success": True})
-    resp.delete_cookie("deed_token")
-    return resp
-
-
-@app.route("/auth/me", methods=["GET"])
-@require_auth
-def auth_me():
-    """Return the currently logged-in user's public info + tier limits."""
-    user   = g.current_user
-    limits = get_tier_limits(user.get("tier", "free"))
-    return jsonify({
-        "success": True,
-        "user":    public_user(user),
-        "limits":  limits,
-    })
-
-
-@app.route("/auth/tier", methods=["GET"])
-@require_auth
-def auth_tier():
-    """Quick tier check endpoint used by the frontend to gate UI elements."""
-    user = g.current_user
-    return jsonify({
-        "success": True,
-        "tier":    user.get("tier", "free"),
-        "limits":  get_tier_limits(user.get("tier", "free")),
-        "usage": {
-            "searches_this_month": user.get("search_count_this_month", 0),
-        },
-    })
-
-
-@app.route("/auth/forgot-password", methods=["POST"])
-def auth_forgot_password():
-    """Request a password-reset email. Body: { email }.
-    Always returns success to prevent email enumeration attacks.
-    """
-    data  = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    if email and "@" in email:
-        user = find_user_by_email(email)
-        if user:
-            token      = generate_reset_token(email)
-            _app_url   = os.environ.get("DEED_APP_URL", "http://localhost:5000")
-            reset_link = f"{_app_url}/reset-password?token={token}"
-            try:
-                from helpers.email_utils import send_password_reset
-                send_password_reset(email, reset_link)
-            except Exception as exc:
-                print(f"[reset] email error: {exc}", flush=True)
-    return jsonify({"success": True,
-                    "message": "If that email has an account, a reset link has been sent."})
-
-
-@app.route("/auth/reset-password", methods=["POST"])
-def auth_reset_password():
-    """Consume a reset token and set a new password. Body: { token, password }"""
-    data     = request.get_json(silent=True) or {}
-    token    = (data.get("token") or "").strip()
-    password = data.get("password") or ""
-    if not token:
-        return jsonify({"success": False, "error": "Token is required."}), 400
-    try:
-        user = reset_user_password(token, password)
-        if not user:
-            return jsonify({"success": False,
-                            "error": "Reset link is invalid or expired. Request a new one."}), 400
-        return jsonify({"success": True, "message": "Password updated. You can now log in."})
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/auth/history", methods=["GET"])
-@require_auth
-def auth_search_history():
-    """Return the current user's recent search history (last 20 queries)."""
-    history = get_search_history(g.current_user["id"])
-    return jsonify({"success": True, "history": history})
-
-
-@app.route("/auth/usage", methods=["GET"])
-@require_auth
-def auth_usage():
-    """Return the current user's search usage stats for the quota widget."""
-    user   = g.current_user
-    tier   = user.get("tier", "free")
-    limits = get_tier_limits(tier)
-    used   = user.get("search_count_this_month", 0)
-    limit  = limits["searches_per_month"]   # None = unlimited
-    return jsonify({
-        "success":    True,
-        "tier":       tier,
-        "used":       used,
-        "limit":      limit,
-        "reset_date": user.get("search_reset_date", ""),
-        "pct":        min(100, round(used / limit * 100)) if limit else 0,
-    })
-
-
-@app.route("/reset-password")
-def reset_password_page():
-    """Serve the SPA for /reset-password?token= links sent in emails."""
-    return send_from_directory(".", "index.html")
+# ── SaaS Auth routes → moved to routes/auth.py Blueprint ─────────────────────
 
 
 # ── Stripe billing ─────────────────────────────────────────────────────

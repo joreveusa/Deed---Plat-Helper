@@ -6038,6 +6038,85 @@ async function openBillingPortal() {
 
 // (upgrade-success detection is handled by _checkUpgradeSuccess in DOMContentLoaded)
 
+// ── Account Detail Modal ───────────────────────────────────────────────────────
+
+async function showAccountDetail() {
+  if (!_saasUser) { showAuthModal('login'); return; }
+  document.getElementById('accountDetailOverlay')?.classList.remove('hidden');
+  document.getElementById('acctDetailLoading').style.display = '';
+  document.getElementById('acctDetailContent').style.display = 'none';
+
+  try {
+    const res = await apiFetch('/auth/me');
+    if (!res.success) throw new Error(res.error || 'Failed to load');
+    _renderAccountDetail(res.user, res.limits);
+  } catch (e) {
+    document.getElementById('acctDetailLoading').textContent = '⚠ ' + e.message;
+  }
+}
+
+function closeAccountDetail() {
+  document.getElementById('accountDetailOverlay')?.classList.add('hidden');
+}
+
+function _renderAccountDetail(user, limits) {
+  const tier   = user.tier  || 'free';
+  const used   = user.search_count_this_month || 0;
+  const max    = limits?.searches_per_month ?? 10;   // null = unlimited
+  const pct    = max ? Math.min(100, Math.round((used / max) * 100)) : 0;
+  const isPaid = tier !== 'free';
+
+  // Plan labels
+  const planNames  = { free: 'Free',     pro: 'Pro',          team: 'Team'    };
+  const planPrices = { free: '$0 / month', pro: '$29 / month', team: '$79 / month' };
+  const badgeColors = {
+    free: 'background:rgba(255,255,255,.08);color:var(--text2)',
+    pro:  'background:linear-gradient(135deg,#e3c55a,#c9a227);color:#1a1200',
+    team: 'background:linear-gradient(135deg,#b080e0,#7a4f9a);color:#fff',
+  };
+  const barColors = {
+    free: 'linear-gradient(90deg,#4facfe,#2563eb)',
+    pro:  'linear-gradient(90deg,#e3c55a,#c9a227)',
+    team: 'linear-gradient(90deg,#b080e0,#7a4f9a)',
+  };
+
+  document.getElementById('acctPlanName').textContent  = planNames[tier]  || tier;
+  document.getElementById('acctPlanPrice').textContent = planPrices[tier] || '';
+  document.getElementById('acctPlanBadge').style.cssText += `;${badgeColors[tier] || ''}`;
+  document.getElementById('acctPlanBadge').textContent = (planNames[tier] || tier).toUpperCase();
+
+  document.getElementById('acctSearchUsed').textContent  = used;
+  document.getElementById('acctSearchLimit').textContent = max === null ? '∞' : max;
+  document.getElementById('acctUsageBar').style.width    = max === null ? '0%' : pct + '%';
+  document.getElementById('acctUsageBar').style.background = barColors[tier] || barColors.free;
+  document.getElementById('acctResetDate').textContent   = (user.search_reset_date || '').slice(0,10) || 'Next month';
+
+  // Stripe badge
+  const stripeRow = document.getElementById('acctStripeRow');
+  if (user.stripe_subscription_id) {
+    stripeRow.style.display = 'flex';
+    document.getElementById('acctStripeId').textContent =
+      'sub: ' + (user.stripe_subscription_id || '').slice(0, 24) + '…';
+  } else {
+    stripeRow.style.display = 'none';
+  }
+
+  // CTA buttons
+  document.getElementById('acctBtnUpgradePro').style.display  = tier === 'free' ? '' : 'none';
+  document.getElementById('acctBtnUpgradeTeam').style.display = tier === 'pro'  ? '' : 'none';
+  document.getElementById('acctBtnPortal').style.display      = isPaid            ? '' : 'none';
+
+  // Security grid
+  document.getElementById('acctDetailEmail').textContent  = user.email || '';
+  const statusEl = document.getElementById('acctDetailStatus');
+  statusEl.textContent = user.active !== false ? '✓ Active' : '✗ Inactive';
+  statusEl.style.color = user.active !== false ? '#56d3a0' : 'var(--danger)';
+  document.getElementById('acctDetailJoined').textContent = (user.created_at || '').slice(0,10) || '—';
+
+  document.getElementById('acctDetailLoading').style.display  = 'none';
+  document.getElementById('acctDetailContent').style.display  = '';
+}
+
 // ── County Registry ──────────────────────────────────────────────────────
 
 let _countySearchTimer = null;

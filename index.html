@@ -966,6 +966,9 @@
       onclick="closeAccountMenu(); openBillingPortal()">
       💳 Manage Billing
     </button>
+    <button class="dropdown-item" onclick="closeAccountMenu(); showAccountDetail()">
+      👤 My Account
+    </button>
     <button class="dropdown-item" onclick="doSaasLogout()">Sign Out</button>
   </div>
 
@@ -1180,6 +1183,107 @@
           <button class="btn btn-outline btn-sm" onclick="closeConfigImport()">Cancel</button>
           <button class="btn btn-accent btn-sm" onclick="doConfigImport()">Import</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ACCOUNT DETAIL MODAL ──────────────────────────────────────────────── -->
+  <div class="modal-overlay hidden" id="accountDetailOverlay" onclick="if(event.target===this)closeAccountDetail()">
+    <div class="modal glass-card" style="max-width:520px;width:95vw" role="dialog" aria-modal="true" aria-labelledby="acctDetailTitle">
+      <div class="modal-header">
+        <h2 id="acctDetailTitle" style="margin:0;font-size:16px">👤 My Account</h2>
+        <button class="modal-close" onclick="closeAccountDetail()" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" style="padding:0">
+
+        <!-- Loading spinner -->
+        <div id="acctDetailLoading" style="padding:32px;text-align:center;color:var(--text3);font-size:13px">
+          Loading account info…
+        </div>
+
+        <!-- Content (shown after load) -->
+        <div id="acctDetailContent" style="display:none">
+
+          <!-- Plan card -->
+          <div style="padding:20px 20px 0">
+            <div id="acctPlanCard" style="border-radius:10px;padding:16px 18px;background:rgba(79,172,254,.06);border:1px solid rgba(79,172,254,.18);margin-bottom:16px">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+                <div>
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--text3);margin-bottom:3px">Current Plan</div>
+                  <div id="acctPlanName" style="font-size:20px;font-weight:800;color:var(--text1)">Free</div>
+                  <div id="acctPlanPrice" style="font-size:12px;color:var(--text3);margin-top:2px">$0 / month</div>
+                </div>
+                <div id="acctPlanBadge" style="padding:4px 10px;border-radius:6px;font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;background:rgba(255,255,255,.08);color:var(--text2)">FREE</div>
+              </div>
+              <!-- Usage bar -->
+              <div style="margin-bottom:4px">
+                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:5px">
+                  <span>Searches used this month</span>
+                  <span><strong id="acctSearchUsed">0</strong> / <span id="acctSearchLimit">10</span></span>
+                </div>
+                <div style="background:rgba(255,255,255,.07);border-radius:4px;height:5px;overflow:hidden">
+                  <div id="acctUsageBar" style="height:100%;border-radius:4px;background:linear-gradient(90deg,#4facfe,#2563eb);transition:width .5s;width:0%"></div>
+                </div>
+                <div style="font-size:10px;color:var(--text3);margin-top:5px">Resets: <span id="acctResetDate">—</span></div>
+              </div>
+            </div>
+
+            <!-- Stripe status -->
+            <div id="acctStripeRow" style="display:none;margin-bottom:16px;padding:10px 12px;background:rgba(86,211,160,.06);border:1px solid rgba(86,211,160,.18);border-radius:8px;font-size:12px;color:var(--text2);display:flex;align-items:center;gap:10px">
+              <span style="font-size:16px">💳</span>
+              <div>
+                <div style="font-weight:600;color:var(--text1)">Active Subscription</div>
+                <div id="acctStripeId" style="font-size:10px;color:var(--text3);font-family:monospace;margin-top:2px"></div>
+              </div>
+            </div>
+          </div>
+
+          <div style="border-top:1px solid var(--border);padding:16px 20px;display:flex;flex-direction:column;gap:8px">
+
+            <!-- Upgrade / Manage actions -->
+            <div id="acctActionsUpgrade" style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-accent btn-sm" id="acctBtnUpgradePro"
+                onclick="closeAccountDetail(); handleUpgradeClick()" style="flex:1">
+                ⚡ Upgrade to Pro — $29/mo
+              </button>
+              <button class="btn btn-outline btn-sm" id="acctBtnUpgradeTeam"
+                onclick="closeAccountDetail(); startCheckout('team')" style="flex:1;display:none">
+                🏢 Upgrade to Team — $79/mo
+              </button>
+            </div>
+
+            <button class="btn btn-outline btn-sm" id="acctBtnPortal" style="display:none"
+              onclick="closeAccountDetail(); openBillingPortal()">
+              💳 Manage Billing &amp; Invoices (Stripe Portal)
+            </button>
+
+            <button class="btn btn-outline btn-sm"
+              onclick="closeAccountDetail(); openSettingsModal()">
+              ⚙️ Open Settings
+            </button>
+          </div>
+
+          <!-- Security section -->
+          <div style="border-top:1px solid var(--border);padding:14px 20px">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:10px;font-weight:700">Account Security</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+              <div style="color:var(--text2)">Email</div>
+              <div id="acctDetailEmail" style="color:var(--text1);font-weight:600;text-align:right;word-break:break-all"></div>
+              <div style="color:var(--text2)">Account status</div>
+              <div id="acctDetailStatus" style="text-align:right;font-weight:700"></div>
+              <div style="color:var(--text2)">Member since</div>
+              <div id="acctDetailJoined" style="color:var(--text1);text-align:right"></div>
+            </div>
+          </div>
+
+          <!-- Sign out -->
+          <div style="border-top:1px solid var(--border);padding:12px 20px;text-align:right">
+            <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger)" onclick="closeAccountDetail(); doSaasLogout()">
+              Sign Out
+            </button>
+          </div>
+
+        </div><!-- /acctDetailContent -->
       </div>
     </div>
   </div>
