@@ -1,7 +1,15 @@
 from flask import Flask, request, jsonify, send_from_directory, Response, make_response, g
 import requests as req_lib
 from bs4 import BeautifulSoup
-import os, re, json, traceback, subprocess, gzip, math, shutil, tempfile
+import os
+import re
+import json
+import traceback
+import subprocess
+import gzip
+import math
+import shutil
+import tempfile
 from collections import Counter
 from pathlib import Path
 import fitz          # PyMuPDF  — PDF → image
@@ -22,6 +30,9 @@ from helpers.auth import (
     create_user, find_user_by_email, get_user as get_saas_user,
     verify_password, generate_token, verify_token,
     increment_search_count, reset_monthly_counts_if_needed, public_user,
+    generate_reset_token, reset_password as reset_user_password,
+    add_search_history, get_search_history,
+    check_login_allowed, record_failed_login, clear_failed_logins,
 )
 from helpers.subscription import (
     require_auth, require_pro, require_team,
@@ -520,6 +531,15 @@ def auth_register():
         resp  = jsonify({"success": True, "user": public_user(user)})
         resp.set_cookie("deed_token", token, max_age=60*60*24*30,
                         httponly=True, samesite="Lax")
+        # Send welcome email + notify admin (fire & forget — don't block registration)
+        try:
+            from helpers.email_utils import send_welcome, send_admin_new_user_notification
+            _admin_email = os.environ.get("DEED_ADMIN_EMAIL", "")
+            send_welcome(email)
+            if _admin_email:
+                send_admin_new_user_notification(email, _admin_email)
+        except Exception:
+            pass  # email is best-effort
         return resp
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
@@ -534,10 +554,27 @@ def auth_saas_login():
     email    = (data.get("email") or "").strip()
     password = data.get("password") or ""
     user     = find_user_by_email(email)
-    if not user or not verify_password(password, user.get("password_hash", "")):
+
+    # Always return the same generic error for unknown email (prevent user enumeration)
+    if not user:
         return jsonify({"success": False, "error": "Invalid email or password."}), 401
+
+    # ── Lockout check ─────────────────────────────────────────────────────────
+    allowed, lock_msg = check_login_allowed(user)
+    if not allowed:
+        return jsonify({"success": False, "error": lock_msg}), 429
+
+    # ── Inactive account ──────────────────────────────────────────────────────
     if not user.get("active", True):
-        return jsonify({"success": False, "error": "Account is inactive."}), 403
+        return jsonify({"success": False, "error": "Account is inactive. Contact support."}), 403
+
+    # ── Password check ────────────────────────────────────────────────────────
+    if not verify_password(password, user.get("password_hash", "")):
+        record_failed_login(user["id"])
+        return jsonify({"success": False, "error": "Invalid email or password."}), 401
+
+    # ── Success ───────────────────────────────────────────────────────────────
+    clear_failed_logins(user["id"])
     token = generate_token(user["id"])
     resp  = jsonify({"success": True, "user": public_user(user)})
     resp.set_cookie("deed_token", token, max_age=60*60*24*30,
@@ -578,6 +615,82 @@ def auth_tier():
             "searches_this_month": user.get("search_count_this_month", 0),
         },
     })
+
+
+@app.route("/auth/forgot-password", methods=["POST"])
+def auth_forgot_password():
+    """Request a password-reset email. Body: { email }.
+    Always returns success to prevent email enumeration attacks.
+    """
+    data  = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if email and "@" in email:
+        user = find_user_by_email(email)
+        if user:
+            token      = generate_reset_token(email)
+            _app_url   = os.environ.get("DEED_APP_URL", "http://localhost:5000")
+            reset_link = f"{_app_url}/reset-password?token={token}"
+            try:
+                from helpers.email_utils import send_password_reset
+                send_password_reset(email, reset_link)
+            except Exception as exc:
+                print(f"[reset] email error: {exc}", flush=True)
+    return jsonify({"success": True,
+                    "message": "If that email has an account, a reset link has been sent."})
+
+
+@app.route("/auth/reset-password", methods=["POST"])
+def auth_reset_password():
+    """Consume a reset token and set a new password. Body: { token, password }"""
+    data     = request.get_json(silent=True) or {}
+    token    = (data.get("token") or "").strip()
+    password = data.get("password") or ""
+    if not token:
+        return jsonify({"success": False, "error": "Token is required."}), 400
+    try:
+        user = reset_user_password(token, password)
+        if not user:
+            return jsonify({"success": False,
+                            "error": "Reset link is invalid or expired. Request a new one."}), 400
+        return jsonify({"success": True, "message": "Password updated. You can now log in."})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/auth/history", methods=["GET"])
+@require_auth
+def auth_search_history():
+    """Return the current user's recent search history (last 20 queries)."""
+    history = get_search_history(g.current_user["id"])
+    return jsonify({"success": True, "history": history})
+
+
+@app.route("/auth/usage", methods=["GET"])
+@require_auth
+def auth_usage():
+    """Return the current user's search usage stats for the quota widget."""
+    user   = g.current_user
+    tier   = user.get("tier", "free")
+    limits = get_tier_limits(tier)
+    used   = user.get("search_count_this_month", 0)
+    limit  = limits["searches_per_month"]   # None = unlimited
+    return jsonify({
+        "success":    True,
+        "tier":       tier,
+        "used":       used,
+        "limit":      limit,
+        "reset_date": user.get("search_reset_date", ""),
+        "pct":        min(100, round(used / limit * 100)) if limit else 0,
+    })
+
+
+@app.route("/reset-password")
+def reset_password_page():
+    """Serve the SPA for /reset-password?token= links sent in emails."""
+    return send_from_directory(".", "index.html")
 
 
 # ── Stripe billing ─────────────────────────────────────────────────────
@@ -1288,8 +1401,11 @@ def api_search():
                 "grantee":          cells[10].text.strip() if len(cells) > 10 else "",
             })
 
-        # Increment monthly search counter for tier tracking
+        # Increment monthly search counter for tier tracking + save to history
         increment_search_count(g.current_user)
+        _query = name or address
+        if _query:
+            add_search_history(g.current_user["id"], _query, len(results))
         return jsonify({"success": True, "results": results, "count": len(results), "count_text": count_text})
     except Exception as e:
         traceback.print_exc()
@@ -1685,6 +1801,7 @@ def api_chain_search():
 # ── document detail ────────────────────────────────────────────────────────────
 
 @app.route("/api/document/<doc_no>", methods=["GET", "POST"])
+@require_auth
 def api_document(doc_no):
     try:
         cfg = load_config()
@@ -2266,6 +2383,7 @@ def search_local_cabinet(cabinet: str, doc_num: str,
 
 
 @app.route("/api/find-plat", methods=["POST"])
+@require_auth
 def api_find_plat():
     """
     INSTANT: Returns parsed cabinet refs from deed text — zero I/O.
@@ -2288,6 +2406,7 @@ def api_find_plat():
 
 
 @app.route("/api/find-plat-kml", methods=["POST"])
+@require_auth
 def api_find_plat_kml():
     """
     KML parcel index cross-reference.
@@ -2352,6 +2471,7 @@ def api_find_plat_kml():
 
 
 @app.route("/api/find-plat-local", methods=["POST"])
+@require_auth
 def api_find_plat_local():
     """
     Targeted cabinet scan — locates plat PDFs by finding the correct cabinet
@@ -2639,7 +2759,7 @@ def api_find_plat_local():
             if local_hits:
                 targeting_reason = broadened_reason
         elif not local_hits and not has_deed_detail:
-            print(f"[local] 0 results (name-only mode — auto-broaden disabled)", flush=True)
+            print("[local] 0 results (name-only mode — auto-broaden disabled)", flush=True)
 
         # ── Sort: doc_number → kml_plat_name → kml_cab_ref → deed_cab_ref → client_name → prior_owner → name_match ─
         # doc_number = exact plat doc number match from file's leading number (highest confidence)
@@ -2672,6 +2792,7 @@ def api_find_plat_local():
 
 
 @app.route("/api/find-plat-online", methods=["POST"])
+@require_auth
 def api_find_plat_online():
     """
     Slow online survey search (separate endpoint so it doesn't block the UI).
@@ -2918,6 +3039,7 @@ def api_next_job():
 # ── create project ─────────────────────────────────────────────────────────────
 
 @app.route("/api/create-project", methods=["POST"])
+@require_auth
 def api_create_project():
     try:
         data = request.get_json()
@@ -3261,6 +3383,7 @@ def api_recent_jobs():
 
 
 @app.route("/api/export-session", methods=["POST"])
+@require_auth
 def api_export_session():
     """Generate a plain-text research summary from the current session."""
     try:
@@ -3270,12 +3393,12 @@ def api_export_session():
             return jsonify({"success": False, "error": "No session provided"})
 
         lines = [
-            f"DEED & PLAT RESEARCH SUMMARY",
+            "DEED & PLAT RESEARCH SUMMARY",
             f"{'='*50}",
             f"Job #:    {rs.get('job_number')}",
             f"Client:   {rs.get('client_name')}",
             f"Type:     {rs.get('job_type')}",
-            f"",
+            "",
         ]
         subjects = rs.get("subjects", [])
         prog     = rs.get("progress", {})
@@ -4054,6 +4177,7 @@ def _nominatim_reverse(lat: float, lon: float) -> dict:
 
 
 @app.route("/api/property-address", methods=["POST"])
+@require_auth
 def api_property_address():
     """Look up property address info.
 
@@ -4101,6 +4225,7 @@ def api_property_address():
 
 
 @app.route("/api/batch-property-address", methods=["POST"])
+@require_auth
 def api_batch_property_address():
     """Look up addresses for up to 10 parcels.
 
@@ -4289,7 +4414,7 @@ def api_arcgis_adjoiners():
             })
 
         # Step 2: Spatial query
-        print(f"[arcgis-adj] Running spatial query for touching parcels...", flush=True)
+        print("[arcgis-adj] Running spatial query for touching parcels...", flush=True)
         raw = _arcgis_find_touching_parcels(geometry)
 
         # Step 3: Filter out the client's own parcel
@@ -4549,7 +4674,7 @@ if __name__ == "__main__":
     _lan = _get_lan_ip()
     print("=" * 60)
     print("  Deed & Plat Helper")
-    print(f"  Local:   http://localhost:5000")
+    print("  Local:   http://localhost:5000")
     print(f"  Network: http://{_lan}:5000")
     print("=" * 60)
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
