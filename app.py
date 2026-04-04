@@ -102,7 +102,21 @@ app = Flask(__name__, static_folder='.', static_url_path='')
 
 # ── Register Blueprints ───────────────────────────────────────────────────────
 from routes.auth import auth_bp
+from routes.stripe import stripe_bp, init_stripe
+from routes.admin import admin_bp
+
 app.register_blueprint(auth_bp)
+app.register_blueprint(stripe_bp)
+app.register_blueprint(admin_bp)
+
+# Inject Stripe functions into the Stripe Blueprint (avoids circular import)
+init_stripe(
+    available=_STRIPE_AVAILABLE,
+    checkout_fn=create_checkout_session,
+    portal_fn=create_customer_portal_session,
+    verify_fn=_stripe_verify,
+    dispatch_fn=_stripe_dispatch,
+)
 
 # Default portal URL — overridden per-user via Settings → URL field.
 # Each user enters the URL for their own county records portal (e.halFILE, etc.).
@@ -498,7 +512,15 @@ def save_research(job_number, client_name, job_type, data: dict):
 # ── static ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
+def landing():
+    """Public marketing/landing page. Authenticated users are redirected to /app by the JS."""
+    resp = make_response(send_from_directory(".", "landing.html"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+@app.route("/app")
 def index():
+    """The main SPA. Served to authenticated users."""
     resp = make_response(send_from_directory(".", "index.html"))
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
@@ -530,200 +552,9 @@ def add_no_cache(response):
 # ── SaaS Auth routes → moved to routes/auth.py Blueprint ─────────────────────
 
 
-# ── Stripe billing ─────────────────────────────────────────────────────
 
-@app.route("/api/stripe/checkout", methods=["POST"])
-@require_auth
-def api_stripe_checkout():
-    """Create a Stripe Checkout Session for a tier upgrade.
-
-    Body: { "tier": "pro" | "team" }
-    Returns: { success, checkout_url } — redirect the user to checkout_url.
-    """
-    if not _STRIPE_AVAILABLE:
-        return jsonify({
-            "success": False,
-            "error": "Stripe is not configured on this server. Set STRIPE_SECRET_KEY."
-        }), 503
-
-    user = g.current_user
-    data = request.get_json() or {}
-    tier = data.get("tier", "pro")
-
-    if tier not in ("pro", "team"):
-        return jsonify({"success": False, "error": "Invalid tier. Choose 'pro' or 'team'."})
-
-    try:
-        url = create_checkout_session(
-            user_email=user["email"],
-            tier=tier,
-            user_id=user["id"],
-        )
-        return jsonify({"success": True, "checkout_url": url})
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)})
-
-
-@app.route("/api/stripe/portal", methods=["POST"])
-@require_auth
-def api_stripe_portal():
-    """Create a Stripe Customer Portal session so the user can manage billing.
-
-    Returns: { success, portal_url }
-    """
-    if not _STRIPE_AVAILABLE:
-        return jsonify({"success": False, "error": "Stripe not configured."}), 503
-
-    user = g.current_user
-    cus_id = user.get("stripe_customer_id")
-    if not cus_id:
-        return jsonify({
-            "success": False,
-            "error": "No Stripe customer found. Subscribe first via the upgrade flow."
-        })
-
-    try:
-        url = create_customer_portal_session(cus_id)
-        return jsonify({"success": True, "portal_url": url})
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)})
-
-
-@app.route("/api/stripe/webhook", methods=["POST"])
-def api_stripe_webhook():
-    """Stripe webhook receiver — verifies signature and dispatches to tier handler.
-
-    Handles: checkout.session.completed, customer.subscription.updated / deleted,
-             invoice.payment_failed
-    """
-    payload    = request.get_data()
-    sig_header = request.headers.get("Stripe-Signature", "")
-
-    try:
-        event = _stripe_verify(payload, sig_header)
-    except ValueError as e:
-        print(f"[stripe-webhook] Bad signature: {e}", flush=True)
-        return jsonify({"error": str(e)}), 400
-
-    status, msg = _stripe_dispatch(event)
-    print(f"[stripe-webhook] {event.get('type','?')} → {status}: {msg}", flush=True)
-    return jsonify({"received": True, "message": msg}), status
-
-
-# ── upgrade success landing page ────────────────────────────────────────────
-
-@app.route("/upgrade-success")
-def upgrade_success():
-    """After Stripe checkout, redirect to the app with upgrade flag."""
-    from flask import redirect
-    return redirect("/?upgraded=1")
-
-
-# ── Admin panel ──────────────────────────────────────────────────────────────
-
-@app.route("/admin")
-def admin_page():
-    """Serve the admin panel HTML — same index, admin UI is unlocked by matching password."""
-    return send_from_directory('.', 'index.html')
-
-
-@app.route("/api/admin/auth", methods=["POST"])
-def api_admin_auth():
-    """Verify admin password. Body: { password }. Returns { success, stats }."""
-    data = request.get_json() or {}
-    pwd  = data.get("password", "")
-    if not check_admin_password(pwd):
-        return jsonify({"success": False, "error": "Invalid admin password."}), 403
-    return jsonify({"success": True, "stats": get_user_stats()})
-
-
-@app.route("/api/admin/users", methods=["GET"])
-def api_admin_users():
-    """List all users. Requires ?password= query param."""
-    pwd = request.args.get("password", "")
-    if not check_admin_password(pwd):
-        return jsonify({"success": False, "error": "Forbidden"}), 403
-    return jsonify({"success": True, "users": list_users_summary(), "stats": get_user_stats()})
-
-
-@app.route("/api/admin/users/<user_id>", methods=["PATCH"])
-def api_admin_update_user(user_id: str):
-    """Update a user (tier, active, reset searches). Body: { password, tier?, active?, reset_searches? }."""
-    data = request.get_json() or {}
-    pwd  = data.get("password", "")
-    if not check_admin_password(pwd):
-        return jsonify({"success": False, "error": "Forbidden"}), 403
-    try:
-        if "tier" in data:
-            admin_set_tier(user_id, data["tier"])
-        if "active" in data:
-            admin_toggle_active(user_id, bool(data["active"]))
-        if data.get("reset_searches"):
-            admin_reset_searches(user_id)
-        return jsonify({"success": True, "users": list_users_summary()})
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ── Config export / import (Team tier) ──────────────────────────────────────
-
-@app.route("/api/config/export", methods=["GET"])
-@require_auth
-def api_config_export():
-    """Export current profile config (ArcGIS URL + field map + portal URL) as JSON.
-    Useful for team members to import the same county setup."""
-    profile_name = request.args.get("profile", "default")
-    try:
-        profile = get_profile(profile_name)
-        export = {
-            "_deed_config_version": 1,
-            "county_name":  profile.get("county_name", ""),
-            "url":          profile.get("url", ""),
-            "arcgis_url":   profile.get("arcgis_url", ""),
-            "arcgis_fields": profile.get("arcgis_fields", {}),
-        }
-        resp = make_response(json.dumps(export, indent=2))
-        safe_name = re.sub(r'[^\w\-]', '_', profile_name or 'config')
-        resp.headers["Content-Disposition"] = f'attachment; filename="deed_config_{safe_name}.json"'
-        resp.headers["Content-Type"] = "application/json"
-        return resp
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/config/import", methods=["POST"])
-@require_auth
-def api_config_import():
-    """Import a previously exported county config JSON.
-    Body: { profile, config: {...} }
-    Only trusted fields are applied (no credential leakage)."""
-    data = request.get_json() or {}
-    profile_name = data.get("profile", "default")
-    cfg = data.get("config", {})
-    if not isinstance(cfg, dict):
-        return jsonify({"success": False, "error": "config must be an object"}), 400
-    try:
-        profile = get_profile(profile_name) or {}
-        # Only allow safe fields
-        if cfg.get("county_name"): profile["county_name"] = str(cfg["county_name"])[:100]
-        if cfg.get("url"):         profile["url"]    = str(cfg["url"])[:500]
-        if cfg.get("arcgis_url"): profile["arcgis_url"] = str(cfg["arcgis_url"])[:500]
-        if cfg.get("arcgis_fields") and isinstance(cfg["arcgis_fields"], dict):
-            profile["arcgis_fields"] = {
-                k: str(v)[:100] for k, v in cfg["arcgis_fields"].items()
-                if isinstance(k, str) and isinstance(v, str)
-            }
-        save_profile(profile_name, profile)
-        return jsonify({"success": True, "message": f"Config imported into profile '{profile_name}'"})
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
-
+# ── Stripe billing → moved to routes/stripe.py Blueprint ─────────────────────
+# ── Admin panel   → moved to routes/admin.py Blueprint ─────────────────────
 
 # ── Team management (Team tier) ─────────────────────────────────────────
 
