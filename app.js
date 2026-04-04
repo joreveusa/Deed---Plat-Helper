@@ -282,6 +282,20 @@ async function loadConfig() {
       if (res.config.firstnm_pass) document.getElementById("cfgPass").value = res.config.firstnm_pass;
       if (res.config.firstnm_url) document.getElementById("cfgUrl").value = res.config.firstnm_url;
       state.lastSession = res.config.last_session;
+
+      // Update the Step 3 badge to show the user's configured portal hostname
+      const badge = document.getElementById("s3OnlineBadge");
+      if (badge && res.config.firstnm_url) {
+        try {
+          const hostname = new URL(res.config.firstnm_url).hostname.replace(/^www\./, '');
+          badge.textContent = hostname;
+        } catch (_) { /* malformed URL, keep default */ }
+      }
+
+      // Populate the ArcGIS parcel layer section
+      if (res.config.arcgis_url !== undefined) {
+        _populateArcgisUI(res.config);
+      }
     }
   } catch (e) {
     console.error("Config load failed", e);
@@ -619,7 +633,7 @@ async function doStep2Search(sortBy) {
   const sort = sortBy || (document.getElementById("s2SortBy")?.value) || "relevance";
 
   if (!state.loggedIn) {
-    showToast("Not connected to 1stNMTitle — click Settings to log in", "warn");
+    showToast("Not connected to County Records portal — click Settings to connect", "warn");
     await checkLogin();
     if (!state.loggedIn) return;
   }
@@ -1890,7 +1904,7 @@ async function doStep3Search() {
   // Set all columns to loading state
   locCards.innerHTML = noDeedBanner + '<div class="loading-state">Identifying target cabinet...</div>';
   if (kmlCards) kmlCards.innerHTML = '<div class="loading-state">Querying KML parcel index...</div>';
-  onlCards.innerHTML = '<div class="loading-state">Searching 1stnmtitle.com...</div>';
+  onlCards.innerHTML = '<div class="loading-state">Searching county records portal...</div>';
 
   // ── A: Instant deed parse (returns cabinet refs, zero I/O) ────────────────
   let cabRefs = [];
@@ -3890,7 +3904,7 @@ async function pinDrive(clear = false) {
 }
 
 async function saveConfig() {
-  const url = document.getElementById("cfgUrl").value.trim();
+  const url  = document.getElementById("cfgUrl").value.trim();
   const user = document.getElementById("cfgUser").value.trim();
   const pass = document.getElementById("cfgPass").value;
   const status = document.getElementById("cfgStatus");
@@ -3902,9 +3916,15 @@ async function saveConfig() {
   btn.innerHTML = "Connecting...";
   status.textContent = "";
 
+  // Collect ArcGIS config (if section is visible/configured)
+  const arcgisUrl    = (document.getElementById('arcgisUrl')?.value || '').trim();
+  const arcgisFields = _collectArcgisFields();
+
   try {
     const res = await apiFetch("/config", "POST", {
-      firstnm_url: url, firstnm_user: user, firstnm_pass: pass
+      firstnm_url: url, firstnm_user: user, firstnm_pass: pass,
+      arcgis_url:    arcgisUrl,
+      arcgis_fields: arcgisFields,
     });
     if (!res.success) { showToast("Config save failed: " + res.error, "error"); return; }
 
@@ -3928,6 +3948,260 @@ async function saveConfig() {
     btn.innerHTML = "Connect";
   }
 }
+
+// ── ArcGIS Parcel Layer config helpers ────────────────────────────────────────
+
+// Tracks the fields discovered from the layer probe
+let _arcgisDiscoveredFields = [];
+// Cache of presets from the server
+let _arcgisPresets = {};
+
+/** Toggle the ArcGIS collapsible section */
+function toggleArcgisSection() {
+  const section  = document.getElementById('arcgisSection');
+  const chevron  = document.getElementById('arcgisSectionChevron');
+  const isOpen   = section.style.display !== 'none';
+  section.style.display = isOpen ? 'none' : 'block';
+  chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
+/** Populate ArcGIS fields in the Settings modal after loadConfig */
+function _populateArcgisUI(cfg) {
+  const urlEl = document.getElementById('arcgisUrl');
+  if (!urlEl) return;
+
+  // Cache presets for applyArcgisPreset
+  if (cfg.arcgis_presets) {
+    for (const p of cfg.arcgis_presets) _arcgisPresets[p.id] = p;
+    // Populate preset dropdown with server presets
+    const sel = document.getElementById('arcgisPreset');
+    if (sel && sel.options.length <= 2) {  // don't duplicate
+      for (const p of cfg.arcgis_presets) {
+        if (!Array.from(sel.options).find(o => o.value === p.id)) {
+          const opt = document.createElement('option');
+          opt.value = p.id; opt.textContent = p.label;
+          sel.appendChild(opt);
+        }
+      }
+    }
+  }
+
+  urlEl.value = cfg.arcgis_url || '';
+  const fields = cfg.arcgis_fields || {};
+
+  // Update the "default" badge
+  const badge = document.getElementById('arcgisDefaultBadge');
+  if (badge) badge.style.display = cfg.arcgis_is_default ? '' : 'none';
+
+  // If fields are already discovered, populate the dropdowns
+  if (_arcgisDiscoveredFields.length) {
+    _fillArcgisDropdowns(fields);
+  } else {
+    // Populate dropdowns with just the currently configured values as single options
+    // so the form is readable without requiring a Discover click
+    _setDropdownToValue('arcgisFieldParcelId', fields.parcel_id  || '');
+    _setDropdownToValue('arcgisFieldOwner',     fields.owner      || '');
+    _setDropdownToValue('arcgisFieldAddress',   fields.address_all|| '');
+    _setDropdownToValue('arcgisFieldSubdiv',    fields.subdivision|| '');
+    _setDropdownToValue('arcgisFieldTownship',  fields.township   || '');
+    _setDropdownToValue('arcgisFieldSection',   fields.section    || '');
+  }
+}
+
+function _setDropdownToValue(id, value) {
+  const sel = document.getElementById(id);
+  if (!sel || !value) return;
+  // If option doesn't exist yet, add it
+  if (!Array.from(sel.options).find(o => o.value === value)) {
+    const opt = document.createElement('option');
+    opt.value = value; opt.textContent = value;
+    sel.appendChild(opt);
+  }
+  sel.value = value;
+}
+
+/** Apply a preset — fills the URL and field dropdowns */
+function applyArcgisPreset(presetId) {
+  if (!presetId) return;
+  const preset = _arcgisPresets[presetId];
+  if (!preset) return;
+  const urlEl = document.getElementById('arcgisUrl');
+  if (urlEl) urlEl.value = preset.url;
+  // Immediately re-run discover to get live fields
+  discoverArcgisFields();
+}
+
+/** Probe the ArcGIS layer URL and auto-populate the dropdowns */
+async function discoverArcgisFields() {
+  const url = (document.getElementById('arcgisUrl')?.value || '').trim();
+  if (!url) { showToast('Paste a layer URL first', 'warn'); return; }
+
+  const btn = document.getElementById('btnArcgisDiscover');
+  const infoEl = document.getElementById('arcgisLayerInfo');
+  btn.disabled = true;
+  btn.textContent = '⏳ Probing...';
+  if (infoEl) { infoEl.style.display = 'none'; infoEl.textContent = ''; }
+
+  try {
+    const res = await apiFetch('/arcgis-discover', 'POST', { url });
+    if (!res.success) {
+      showToast('Discover failed: ' + res.error, 'error');
+      return;
+    }
+
+    _arcgisDiscoveredFields = res.fields || [];
+
+    // Show layer info banner
+    if (infoEl && res.layer_info) {
+      const li = res.layer_info;
+      infoEl.style.display = '';
+      infoEl.innerHTML =
+        `<strong style="color:var(--text1)">${escHtml(li.name || 'Layer')}</strong>` +
+        (li.geometry_type ? ` &nbsp;·&nbsp; <span>${li.geometry_type}</span>` : '') +
+        `<br><span style="color:#56d3a0;font-family:monospace;font-size:10px">${escHtml(res.query_url)}</span>` +
+        `<br>${_arcgisDiscoveredFields.length} fields found.`;
+    }
+
+    // Read current field values to pre-select them
+    const cfg = {
+      parcel_id:   document.getElementById('arcgisFieldParcelId')?.value  || '',
+      owner:       document.getElementById('arcgisFieldOwner')?.value      || '',
+      address_all: document.getElementById('arcgisFieldAddress')?.value   || '',
+      subdivision: document.getElementById('arcgisFieldSubdiv')?.value    || '',
+      township:    document.getElementById('arcgisFieldTownship')?.value   || '',
+      section:     document.getElementById('arcgisFieldSection')?.value    || '',
+    };
+    _fillArcgisDropdowns(cfg);
+    showToast(`✓ Found ${_arcgisDiscoveredFields.length} fields — check the mapping below`, 'success');
+  } catch (e) {
+    showToast('Discover error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🔍 Discover';
+  }
+}
+
+/** Populate the six field-mapping dropdowns from _arcgisDiscoveredFields */
+function _fillArcgisDropdowns(currentValues) {
+  const selectors = {
+    arcgisFieldParcelId: currentValues.parcel_id,
+    arcgisFieldOwner:    currentValues.owner,
+    arcgisFieldAddress:  currentValues.address_all,
+    arcgisFieldSubdiv:   currentValues.subdivision,
+    arcgisFieldTownship: currentValues.township,
+    arcgisFieldSection:  currentValues.section,
+  };
+
+  for (const [selId, curVal] of Object.entries(selectors)) {
+    const sel = document.getElementById(selId);
+    if (!sel) continue;
+    // Rebuild options
+    sel.innerHTML = '<option value="">(none)</option>';
+    for (const f of _arcgisDiscoveredFields) {
+      const opt = document.createElement('option');
+      opt.value = f.name;
+      opt.textContent = f.alias !== f.name ? `${f.name} (${f.alias})` : f.name;
+      sel.appendChild(opt);
+    }
+    // Auto-select best match: exact current value, or heuristic
+    if (curVal && Array.from(sel.options).find(o => o.value === curVal)) {
+      sel.value = curVal;
+    } else {
+      // Heuristic: find a field whose name contains key keywords
+      const hints = {
+        arcgisFieldParcelId: ['parcel', 'apn', 'upc', 'pid', 'id', 'number'],
+        arcgisFieldOwner:    ['owner', 'own', 'name'],
+        arcgisFieldAddress:  ['situs', 'address', 'addr', 'site'],
+        arcgisFieldSubdiv:   ['subdiv', 'sub', 'plat'],
+        arcgisFieldTownship: ['township', 'twp'],
+        arcgisFieldSection:  ['section', 'sec'],
+      };
+      const keywords = hints[selId] || [];
+      const match = _arcgisDiscoveredFields.find(f =>
+        keywords.some(k => f.name.toLowerCase().includes(k))
+      );
+      if (match) sel.value = match.name;
+    }
+  }
+}
+
+/** Collect the current ArcGIS field mapping from the dropdowns */
+function _collectArcgisFields() {
+  return {
+    parcel_id:   document.getElementById('arcgisFieldParcelId')?.value  || '',
+    owner:       document.getElementById('arcgisFieldOwner')?.value      || '',
+    address_all: document.getElementById('arcgisFieldAddress')?.value   || '',
+    subdivision: document.getElementById('arcgisFieldSubdiv')?.value    || '',
+    township:    document.getElementById('arcgisFieldTownship')?.value   || '',
+    section:     document.getElementById('arcgisFieldSection')?.value    || '',
+  };
+}
+
+/** Run a test query against the configured layer */
+async function testArcgisConfig() {
+  const url      = (document.getElementById('arcgisUrl')?.value || '').trim();
+  const sampleId = (document.getElementById('arcgisSampleId')?.value || '').trim();
+  const fields   = _collectArcgisFields();
+  const resultEl = document.getElementById('arcgisTestResult');
+
+  if (!url) { showToast('Enter a layer URL first', 'warn'); return; }
+
+  const btn = document.getElementById('btnArcgisTest');
+  btn.disabled = true; btn.textContent = '⏳';
+  if (resultEl) { resultEl.style.display = 'none'; resultEl.innerHTML = ''; }
+
+  try {
+    const res = await apiFetch('/arcgis-test', 'POST', { url, fields, sample_id: sampleId });
+    if (!resultEl) return;
+    resultEl.style.display = '';
+
+    if (!res.success) {
+      resultEl.style.background = 'rgba(255,123,114,.1)';
+      resultEl.style.border = '1px solid rgba(255,123,114,.3)';
+      resultEl.style.color = '#ff7b72';
+      resultEl.innerHTML = `<strong>✗ Test failed:</strong> ${escHtml(res.error)}`;
+      return;
+    }
+
+    resultEl.style.background = 'rgba(86,211,160,.08)';
+    resultEl.style.border = '1px solid rgba(86,211,160,.25)';
+    resultEl.style.color = 'var(--text2)';
+
+    if (res.sample_result) {
+      // Full parcel lookup result
+      const r = res.sample_result;
+      resultEl.innerHTML =
+        `<strong style="color:#56d3a0">✓ Parcel found!</strong><br>` +
+        `<strong>Owner:</strong> ${escHtml(r.owner_official || '—')}<br>` +
+        `<strong>Address:</strong> ${escHtml(r.short_address || '—')}<br>` +
+        `<strong>TRS:</strong> ${escHtml(r.trs || '—')}<br>` +
+        `<strong>Subdivision:</strong> ${escHtml(r.subdivision || '—')}`;
+    } else if (res.matched_fields) {
+      // Generic field check
+      const rows = res.matched_fields.slice(0, 8).map(f =>
+        `<tr><td style="color:var(--text3);padding-right:8px">${escHtml(f.concept)}</td>` +
+        `<td style="font-family:monospace;color:#4facfe">${escHtml(f.field)}</td>` +
+        `<td style="color:var(--text1)">${escHtml(String(f.value).slice(0, 50))}</td></tr>`
+      ).join('');
+      resultEl.innerHTML =
+        `<strong style="color:#56d3a0">✓ Layer connected!</strong><br>` +
+        `<table style="margin-top:6px;width:100%;font-size:10px;border-collapse:collapse">${rows}</table>`;
+    }
+
+  } catch (e) {
+    if (resultEl) {
+      resultEl.style.display = '';
+      resultEl.style.background = 'rgba(255,123,114,.1)';
+      resultEl.style.border = '1px solid rgba(255,123,114,.3)';
+      resultEl.style.color = '#ff7b72';
+      resultEl.innerHTML = `<strong>✗ Error:</strong> ${escHtml(e.message)}`;
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = '✓ Test';
+  }
+}
+
+
 
 // 
 // LOGIN & CONNECTION
@@ -5503,3 +5777,201 @@ _toastStyle.textContent = `
   .highlight  { color:var(--accent2) !important; }
 `;
 document.head.appendChild(_toastStyle);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SAAS AUTH — Login, Register, Account Badge, Upgrade Modal
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _saasUser = null;   // current logged-in SaaS user, or null
+
+/** Check if we have a valid SaaS session on page load. */
+async function initSaasAuth() {
+  try {
+    const res = await fetch('/auth/me', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) { _saasUser = data.user; _updateSaasBadge(); return; }
+    }
+  } catch (_) { }
+  // Not logged in — show Sign In button
+  _saasUser = null;
+  _updateSaasBadge();
+}
+
+/** Update the nav bar badge to reflect login state. */
+function _updateSaasBadge() {
+  const badge   = document.getElementById('saasBadge');
+  const loginBtn= document.getElementById('btnSaasLogin');
+  if (!badge || !loginBtn) return;
+
+  if (_saasUser) {
+    const email   = _saasUser.email || '';
+    const tier    = _saasUser.tier  || 'free';
+    const initials= email.slice(0,2).toUpperCase();
+    document.getElementById('saasAvatar').textContent   = initials;
+    document.getElementById('saasEmail').textContent    = email;
+    const tierEl = document.getElementById('saasTierBadge');
+    tierEl.textContent  = tier.charAt(0).toUpperCase() + tier.slice(1);
+    tierEl.className    = 'saas-tier-badge' + (tier !== 'free' ? ` tier-${tier}` : '');
+    badge.classList.remove('hidden');
+    loginBtn.style.display = 'none';
+    // Show/hide upgrade button in dropdown
+    const upgradeBtn = document.getElementById('acctMenuUpgrade');
+    if (upgradeBtn) upgradeBtn.style.display = tier === 'free' ? '' : 'none';
+  } else {
+    badge.classList.add('hidden');
+    loginBtn.style.display = '';
+  }
+}
+
+/** Show the auth modal. mode = 'login' | 'register' | 'upgrade' */
+function showAuthModal(mode) {
+  document.getElementById('authOverlay').classList.remove('hidden');
+  switchAuthTab(mode === 'register' ? 'register' : 'login');
+  setTimeout(() => document.getElementById('authEmail')?.focus(), 100);
+}
+
+function closeAuthModal() {
+  document.getElementById('authOverlay').classList.add('hidden');
+  // Clear fields
+  ['authEmail','authPassword','authPasswordConfirm'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  document.getElementById('authError').classList.add('hidden');
+}
+
+function switchAuthTab(tab) {
+  const isRegister = tab === 'register';
+  document.getElementById('authTabLogin').classList.toggle('auth-tab-active', !isRegister);
+  document.getElementById('authTabRegister').classList.toggle('auth-tab-active', isRegister);
+  document.getElementById('authRegisterExtra').style.display = isRegister ? '' : 'none';
+  document.getElementById('btnAuthSubmit').textContent = isRegister ? 'Create Free Account' : 'Sign In';
+  document.getElementById('authModalTitle').textContent = isRegister ? '✨ Create Account' : '🔑 Sign In';
+  document.getElementById('authSwitchText').textContent = isRegister ? 'Already have an account?' : "Don't have an account?";
+  document.getElementById('authSwitchLink').textContent = isRegister ? 'Sign in' : 'Create one free';
+  document.getElementById('authError').classList.add('hidden');
+}
+
+async function doAuthSubmit() {
+  const isRegister = document.getElementById('authTabRegister').classList.contains('auth-tab-active');
+  const email      = (document.getElementById('authEmail')?.value || '').trim();
+  const password   = document.getElementById('authPassword')?.value || '';
+  const confirm    = document.getElementById('authPasswordConfirm')?.value || '';
+  const errEl      = document.getElementById('authError');
+  const btn        = document.getElementById('btnAuthSubmit');
+
+  errEl.classList.add('hidden');
+  if (!email || !password) { errEl.textContent = 'Email and password are required.'; errEl.classList.remove('hidden'); return; }
+  if (isRegister && password !== confirm) { errEl.textContent = 'Passwords do not match.'; errEl.classList.remove('hidden'); return; }
+
+  btn.disabled = true;
+  btn.textContent = isRegister ? 'Creating account…' : 'Signing in…';
+
+  try {
+    const endpoint = isRegister ? '/auth/register' : '/auth/login';
+    const res = await fetch(endpoint, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      _saasUser = data.user;
+      _updateSaasBadge();
+      closeAuthModal();
+      showToast(isRegister ? '✅ Account created! Welcome to Deed Helper.' : `Welcome back, ${email.split('@')[0]}!`, 'success');
+    } else {
+      errEl.textContent = data.error || 'Something went wrong.';
+      errEl.classList.remove('hidden');
+    }
+  } catch (e) {
+    errEl.textContent = 'Network error: ' + e.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = isRegister ? 'Create Free Account' : 'Sign In';
+  }
+}
+
+async function doSaasLogout() {
+  closeAccountMenu();
+  await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
+  _saasUser = null;
+  _updateSaasBadge();
+  showToast('Signed out.', 'info');
+}
+
+// ── Account dropdown ──────────────────────────────────────────────────────────
+function showAccountMenu() {
+  if (!_saasUser) { showAuthModal('login'); return; }
+  const menu = document.getElementById('accountMenu');
+  if (!menu) return;
+
+  // Refresh usage stats
+  document.getElementById('acctMenuEmail').textContent = _saasUser.email || '';
+  const tier = _saasUser.tier || 'free';
+  document.getElementById('acctMenuTier').textContent =
+    tier === 'free' ? 'Free Plan' : tier === 'pro' ? 'Pro Plan — $29/mo' : 'Team Plan — $79/mo';
+  document.getElementById('acctMenuSearches').textContent = _saasUser.search_count_this_month || 0;
+  document.getElementById('acctMenuLimit').textContent    = tier === 'free' ? '10' : '∞';
+
+  menu.classList.remove('hidden');
+  setTimeout(() => document.addEventListener('click', _closeMenuOnClickOutside, { once: true }), 0);
+}
+
+function closeAccountMenu() {
+  document.getElementById('accountMenu')?.classList.add('hidden');
+}
+
+function _closeMenuOnClickOutside(e) {
+  const menu  = document.getElementById('accountMenu');
+  const badge = document.getElementById('saasBadge');
+  if (menu && !menu.contains(e.target) && !badge?.contains(e.target)) {
+    menu.classList.add('hidden');
+  }
+}
+
+// ── Upgrade modal ─────────────────────────────────────────────────────────────
+function showUpgradeModal(featureName, message) {
+  document.getElementById('upgradeFeatureName').textContent = featureName || 'Pro Feature';
+  document.getElementById('upgradeMsg').textContent = message || 'This feature requires a Pro subscription.';
+  document.getElementById('upgradeOverlay').classList.remove('hidden');
+}
+
+function closeUpgradeModal() {
+  document.getElementById('upgradeOverlay').classList.add('hidden');
+}
+
+/** Call this when an API returns upgrade_required: true */
+function handleUpgradeRequired(res, featureName) {
+  const msg = res.error || 'This feature requires a Pro subscription.';
+  if (!_saasUser) {
+    showAuthModal('login');
+    showToast('Please sign in to use this feature.', 'warn');
+  } else {
+    showUpgradeModal(featureName || 'Pro Feature', msg);
+  }
+}
+
+// ── Intercept apiFetch to handle 401/403 upgrade responses ───────────────────
+const _originalApiFetch = apiFetch;
+async function apiFetch(path, method = 'GET', body = null, opts = {}) {
+  const fetchOpts = { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include' };
+  if (body) fetchOpts.body = JSON.stringify(body);
+  if (opts.signal) fetchOpts.signal = opts.signal;
+  const res = await fetch(API + path, fetchOpts);
+  const data = await res.json();
+  // Surface auth/upgrade errors before caller sees them
+  if (!res.ok) {
+    if (data.auth_required) { showAuthModal('login'); }
+    else if (data.upgrade_required) { handleUpgradeRequired(data); }
+  }
+  return data;
+}
+
+// ── Init on page load ─────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  initSaasAuth();
+});

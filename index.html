@@ -31,6 +31,16 @@
     </div>
 
     <div class="topbar-right">
+      <!-- SaaS Account Badge -->
+      <div id="saasBadge" class="saas-badge hidden" onclick="showAccountMenu()" title="Your account">
+        <div class="saas-avatar" id="saasAvatar">?</div>
+        <div class="saas-info">
+          <span class="saas-email" id="saasEmail">—</span>
+          <span class="saas-tier-badge" id="saasTierBadge">Free</span>
+        </div>
+        <span style="font-size:10px;color:var(--text3)">▾</span>
+      </div>
+      <button class="btn btn-accent btn-sm" id="btnSaasLogin" onclick="showAuthModal('login')" style="display:none">🔑 Sign In</button>
       <!-- Profile Switcher Badge -->
       <div class="profile-badge" id="profileBadge" onclick="showProfileSelector()" title="Switch user profile">
         <div class="profile-avatar" id="profileAvatar">?</div>
@@ -281,7 +291,7 @@
 
            <!-- Col 3: Online Survey Records -->
            <div class="flex-col">
-              <h3 class="section-heading">🌐 Online Survey Records <span class="badge badge-online">1stnmtitle.com</span></h3>
+              <h3 class="section-heading">🌐 Online Survey Records <span class="badge badge-online" id="s3OnlineBadge">County Records</span></h3>
               <div class="glass-card plat-list-card flex-1" id="s3OnlinePlats">
                 <div class="loading-state">Searching online...</div>
               </div>
@@ -655,8 +665,8 @@
         </div>
         <!-- Connection credentials -->
         <div class="form-group">
-          <label>URL</label>
-          <input type="text" id="cfgUrl" class="inp" placeholder="https://1stnmtitle.com/records/...">
+          <label>County Records Portal URL <span class="hint" style="font-weight:400;text-transform:none;letter-spacing:0">(e.g. http://records.1stnmtitle.com or your county's e.halFILE site)</span></label>
+          <input type="text" id="cfgUrl" class="inp" placeholder="http://records.yourcounty.com">
         </div>
         <div class="form-group">
           <label>Username</label>
@@ -673,6 +683,92 @@
         <div class="form-check mt-2">
            <input type="checkbox" id="optDarkTheme" checked onchange="toggleTheme()">
            <label>Dark Mode</label>
+        </div>
+
+        <!-- ArcGIS Parcel Layer Section -->
+        <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none"
+               onclick="toggleArcgisSection()" id="arcgisSectionHeader">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:14px">🛰️</span>
+              <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text2)">ArcGIS Parcel Layer</span>
+              <span id="arcgisDefaultBadge" style="font-size:10px;background:rgba(79,172,254,.15);color:#4facfe;border:1px solid rgba(79,172,254,.3);border-radius:4px;padding:1px 6px;font-weight:600">Taos NM Default</span>
+            </div>
+            <span id="arcgisSectionChevron" style="font-size:11px;color:var(--text3);transition:transform .2s">▼</span>
+          </div>
+
+          <div id="arcgisSection" style="display:none;margin-top:12px">
+            <p style="font-size:11px;color:var(--text3);margin:0 0 10px;line-height:1.6">
+              Points the map picker and spatial adjoiner tool at your county's ArcGIS REST parcel layer.
+              Paste the layer URL, click <strong>Discover Fields</strong> to see what's available, then map the key fields.
+            </p>
+
+            <!-- Preset selector -->
+            <div class="form-group" style="margin-bottom:8px">
+              <label style="font-size:11px">Quick Preset</label>
+              <select id="arcgisPreset" class="inp" style="font-size:12px" onchange="applyArcgisPreset(this.value)">
+                <option value="">— Custom / Other County —</option>
+                <option value="taos_nm">Taos County, NM (default)</option>
+              </select>
+            </div>
+
+            <!-- Layer URL -->
+            <div class="form-group" style="margin-bottom:8px">
+              <label style="font-size:11px">Parcel Layer Query URL</label>
+              <div style="display:flex;gap:6px">
+                <input type="text" id="arcgisUrl" class="inp flex-1" style="font-size:12px;font-family:monospace"
+                  placeholder="https://gis.yourcounty.gov/.../MapServer/0/query">
+                <button class="btn btn-outline btn-sm" id="btnArcgisDiscover" onclick="discoverArcgisFields()" title="Probe the layer and auto-populate field selectors">
+                  🔍 Discover
+                </button>
+              </div>
+            </div>
+
+            <!-- Layer info (populated after discover) -->
+            <div id="arcgisLayerInfo" style="display:none;font-size:11px;color:var(--text3);background:rgba(79,172,254,.07);border:1px solid rgba(79,172,254,.2);border-radius:6px;padding:7px 10px;margin-bottom:10px;line-height:1.7"></div>
+
+            <!-- Key field mapping (4 most important) -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px" id="arcgisFieldGrid">
+              <div class="form-group" style="margin:0">
+                <label style="font-size:10px;text-transform:uppercase;letter-spacing:.4px">Parcel ID field <span style="color:#ff7b72">*</span></label>
+                <select id="arcgisFieldParcelId" class="inp" style="font-size:12px"><option value="">select...</option></select>
+              </div>
+              <div class="form-group" style="margin:0">
+                <label style="font-size:10px;text-transform:uppercase;letter-spacing:.4px">Owner Name field <span style="color:#ff7b72">*</span></label>
+                <select id="arcgisFieldOwner" class="inp" style="font-size:12px"><option value="">select...</option></select>
+              </div>
+              <div class="form-group" style="margin:0">
+                <label style="font-size:10px;text-transform:uppercase;letter-spacing:.4px">Address field</label>
+                <select id="arcgisFieldAddress" class="inp" style="font-size:12px"><option value="">select...</option></select>
+              </div>
+              <div class="form-group" style="margin:0">
+                <label style="font-size:10px;text-transform:uppercase;letter-spacing:.4px">Subdivision field</label>
+                <select id="arcgisFieldSubdiv" class="inp" style="font-size:12px"><option value="">select...</option></select>
+              </div>
+              <div class="form-group" style="margin:0">
+                <label style="font-size:10px;text-transform:uppercase;letter-spacing:.4px">Township field</label>
+                <select id="arcgisFieldTownship" class="inp" style="font-size:12px"><option value="">select...</option></select>
+              </div>
+              <div class="form-group" style="margin:0">
+                <label style="font-size:10px;text-transform:uppercase;letter-spacing:.4px">Section field</label>
+                <select id="arcgisFieldSection" class="inp" style="font-size:12px"><option value="">select...</option></select>
+              </div>
+            </div>
+
+            <!-- Sample ID test -->
+            <div style="display:flex;gap:6px;align-items:flex-end;margin-bottom:8px">
+              <div class="form-group flex-1" style="margin:0">
+                <label style="font-size:10px;text-transform:uppercase;letter-spacing:.4px">Sample Parcel ID (optional, for test)</label>
+                <input type="text" id="arcgisSampleId" class="inp" style="font-size:12px;font-family:monospace" placeholder="e.g. 1005003305330">
+              </div>
+              <button class="btn btn-outline btn-sm" id="btnArcgisTest" onclick="testArcgisConfig()" title="Run a sample lookup and verify field mapping">
+                ✓ Test
+              </button>
+            </div>
+
+            <!-- Test result -->
+            <div id="arcgisTestResult" style="display:none;font-size:11px;border-radius:6px;padding:8px 10px;margin-bottom:6px;line-height:1.8"></div>
+          </div>
         </div>
       </div>
 
@@ -735,6 +831,92 @@
     </div>
     <div class="plat-preview-actions" id="platPreviewActions">
       <!-- Populated by JS -->
+    </div>
+  </div>
+
+  <!-- ── SAAS AUTH MODAL ──────────────────────────────────────────────────── -->
+  <div class="modal-overlay hidden" id="authOverlay" onclick="if(event.target===this)closeAuthModal()">
+    <div class="modal glass-card" style="max-width:420px;width:100%">
+      <div class="modal-header">
+        <h2 id="authModalTitle">🔑 Sign In</h2>
+        <button class="close-btn" onclick="closeAuthModal()" aria-label="Close">✕</button>
+      </div>
+      <!-- Tab switcher -->
+      <div style="display:flex;border-bottom:1px solid var(--border);">
+        <button id="authTabLogin" class="auth-tab auth-tab-active" onclick="switchAuthTab('login')">Sign In</button>
+        <button id="authTabRegister" class="auth-tab" onclick="switchAuthTab('register')">Create Account</button>
+      </div>
+      <div class="modal-body" style="padding:24px">
+        <div id="authError" class="auth-error hidden"></div>
+        <div class="form-group">
+          <label for="authEmail">Email</label>
+          <input type="email" id="authEmail" class="inp" placeholder="you@example.com" autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label for="authPassword">Password</label>
+          <input type="password" id="authPassword" class="inp" placeholder="••••••••" autocomplete="current-password"
+            onkeydown="if(event.key==='Enter')doAuthSubmit()">
+        </div>
+        <div id="authRegisterExtra" style="display:none">
+          <div class="form-group">
+            <label for="authPasswordConfirm">Confirm Password</label>
+            <input type="password" id="authPasswordConfirm" class="inp" placeholder="••••••••"
+              onkeydown="if(event.key==='Enter')doAuthSubmit()">
+          </div>
+        </div>
+        <button class="btn btn-primary w-full" id="btnAuthSubmit" onclick="doAuthSubmit()" style="margin-top:8px">
+          Sign In
+        </button>
+        <div style="margin-top:14px;text-align:center;font-size:12px;color:var(--text3)">
+          <span id="authSwitchText">Don't have an account?</span>
+          <a href="#" onclick="switchAuthTab(document.getElementById('authTabRegister').classList.contains('auth-tab-active')?'login':'register');return false"
+            style="color:var(--accent1);font-weight:600;margin-left:4px" id="authSwitchLink">Create one free</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ACCOUNT MENU DROPDOWN ─────────────────────────────────────────────── -->
+  <div class="dropdown-menu hidden" id="accountMenu">
+    <div class="dropdown-header">
+      <div class="dropdown-email" id="acctMenuEmail">—</div>
+      <div class="dropdown-tier" id="acctMenuTier">Free Plan</div>
+    </div>
+    <div class="dropdown-divider"></div>
+    <div class="dropdown-usage">
+      <span>Searches this month:</span>
+      <strong id="acctMenuSearches">0</strong> / <span id="acctMenuLimit">10</span>
+    </div>
+    <div class="dropdown-divider"></div>
+    <button class="dropdown-item upgrade-item" id="acctMenuUpgrade" onclick="closeAccountMenu();showUpgradeModal('Upgrade to Pro','Unlock unlimited searches, OCR text extraction, live parcel maps, adjoiner discovery, and DXF export.')">
+      ⚡ Upgrade to Pro
+    </button>
+    <button class="dropdown-item" onclick="doSaasLogout()">Sign Out</button>
+  </div>
+
+  <!-- ── UPGRADE PROMPT MODAL ──────────────────────────────────────────────── -->
+  <div class="modal-overlay hidden" id="upgradeOverlay" onclick="if(event.target===this)closeUpgradeModal()">
+    <div class="modal glass-card" style="max-width:440px;text-align:center">
+      <div class="modal-header">
+        <h2>⚡ Upgrade to Pro</h2>
+        <button class="close-btn" onclick="closeUpgradeModal()">✕</button>
+      </div>
+      <div class="modal-body" style="padding:28px 28px 20px">
+        <div style="font-size:42px;margin-bottom:12px">🔒</div>
+        <h3 id="upgradeFeatureName" style="font-size:18px;font-weight:800;color:var(--text1);margin-bottom:8px">Pro Feature</h3>
+        <p id="upgradeMsg" style="color:var(--text2);margin-bottom:20px;line-height:1.6">
+          This feature is available on Pro and Team plans.
+        </p>
+        <div style="background:rgba(79,172,254,.08);border:1px solid rgba(79,172,254,.2);border-radius:12px;padding:16px;margin-bottom:20px">
+          <div style="font-size:28px;font-weight:800;color:var(--accent1)">$29<span style="font-size:14px;font-weight:500;color:var(--text3)">/mo</span></div>
+          <div style="font-size:12px;color:var(--text3);margin-top:4px">Unlimited searches · OCR · Maps · Adjoiners · DXF export</div>
+        </div>
+        <a href="https://deedplathelper.netlify.app/#waitlist" target="_blank"
+          class="btn btn-primary w-full" style="font-size:15px;padding:14px">
+          Join Waitlist — Get 30% Off Forever
+        </a>
+        <button class="btn btn-outline w-full" style="margin-top:10px" onclick="closeUpgradeModal()">Maybe Later</button>
+      </div>
     </div>
   </div>
 
