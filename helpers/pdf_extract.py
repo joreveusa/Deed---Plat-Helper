@@ -112,7 +112,7 @@ def ocr_plat_file(pdf_path: str) -> list[str]:
     """
     import fitz
     import pytesseract
-    from PIL import Image, ImageEnhance, ImageFilter
+    from PIL import Image, ImageEnhance
 
     cache = _ocr_cache_path(pdf_path)
     if cache.exists():
