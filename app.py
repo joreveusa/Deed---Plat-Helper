@@ -725,6 +725,136 @@ def api_config_import():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ── Team management (Team tier) ─────────────────────────────────────────
+
+@app.route("/api/team/members", methods=["GET"])
+@require_auth
+def api_team_members():
+    """List team members + seat count for the current user's team."""
+    user    = g.current_user
+    members = get_team_members(user["id"])
+    team_id = user.get("team_id") or ""
+    seats   = get_seat_count(team_id) if team_id else (1 if user.get("team_role") else 0)
+    return jsonify({
+        "success":    True,
+        "members":    members,
+        "seats_used": seats,
+        "seats_max":  5,
+        "team_id":    team_id,
+        "role":       user.get("team_role"),
+    })
+
+
+@app.route("/api/team/invite", methods=["POST"])
+@require_auth
+@require_team
+def api_team_invite():
+    """Invite a member to the team. Body: { email }. Requires team tier."""
+    data  = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip()
+    if not email:
+        return jsonify({"success": False, "error": "Email is required."}), 400
+    try:
+        ok, msg, token = invite_member(g.current_user, email)
+        if not ok:
+            return jsonify({"success": False, "error": msg}), 400
+        # Send invite email
+        if token:
+            _app_url  = os.environ.get("DEED_APP_URL", "http://localhost:5000")
+            join_link = f"{_app_url}/team/join?token={token}"
+            try:
+                from helpers.email_utils import _send_email
+                _send_email(
+                    email,
+                    f"{g.current_user['email']} invited you to Deed & Plat Helper",
+                    f"You've been invited to join a Deed & Plat Helper team.\n\nJoin link (expires in 72 hours):\n{join_link}",
+                    f'<p><strong>{g.current_user["email"]}</strong> invited you to join their Deed &amp; Plat Helper team.</p>'
+                    f'<p><a href="{join_link}" style="background:#4facfe;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">Join Team</a></p>'
+                    f'<p style="color:#999;font-size:11px">Link expires in 72 hours.</p>',
+                )
+            except Exception as exc:
+                print(f"[team] invite email error: {exc}", flush=True)
+        return jsonify({"success": True, "message": msg})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/team/join", methods=["POST"])
+@require_auth
+def api_team_join():
+    """Accept a team invite. Body: { token }."""
+    data  = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return jsonify({"success": False, "error": "Token is required."}), 400
+    ok, msg = accept_invite(token)
+    if ok:
+        # Re-fetch updated user
+        updated = get_saas_user(g.current_user["id"])
+        return jsonify({"success": True, "message": msg,
+                        "user": public_user(updated) if updated else {}})
+    return jsonify({"success": False, "error": msg}), 400
+
+
+@app.route("/api/team/members/<member_id>", methods=["DELETE"])
+@require_auth
+@require_team
+def api_team_remove_member(member_id: str):
+    """Remove a team member (owner only)."""
+    ok, msg = remove_member(g.current_user, member_id)
+    if ok:
+        return jsonify({"success": True, "message": msg})
+    return jsonify({"success": False, "error": msg}), 400
+
+
+@app.route("/api/team/leave", methods=["POST"])
+@require_auth
+def api_team_leave():
+    """Leave the current team (members only, not owner)."""
+    ok, msg = leave_team(g.current_user)
+    if ok:
+        return jsonify({"success": True, "message": msg})
+    return jsonify({"success": False, "error": msg}), 400
+
+
+@app.route("/team/join")
+def team_join_page():
+    """Serve the SPA for /team/join?token= links."""
+    return send_from_directory(".", "index.html")
+
+
+# ── Backup / restore (admin) ───────────────────────────────────────────
+
+@app.route("/api/admin/backups", methods=["GET"])
+def api_admin_backups():
+    """List available users.json backups. Requires ?password=."""
+    pwd = request.args.get("password", "")
+    if not check_admin_password(pwd):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+    return jsonify({"success": True, "backups": list_backups()})
+
+
+@app.route("/api/admin/backups/restore", methods=["POST"])
+def api_admin_restore_backup():
+    """Restore users.json from a named backup. Body: { password, filename }."""
+    data     = request.get_json(silent=True) or {}
+    pwd      = data.get("password", "")
+    filename = data.get("filename", "")
+    if not check_admin_password(pwd):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+    if not filename:
+        return jsonify({"success": False, "error": "filename is required."}), 400
+    try:
+        restore_backup(filename)
+        return jsonify({"success": True, "message": f"Restored from {filename}."})
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": str(e)}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ── profiles ──────────────────────────────────────────────────────
 
 @app.route("/api/profiles", methods=["GET"])
@@ -1145,6 +1275,7 @@ def api_logout():
 
 @app.route("/api/search", methods=["POST"])
 @require_auth
+@rate_limit(requests=30, window=60)   # hard IP throttle: 30 req/min (quota gate is the main limit)
 def api_search():
     # ── Quota gate ──────────────────────────────────────────────────────────
     allowed, quota_msg = check_search_quota(g.current_user)
