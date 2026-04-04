@@ -4000,12 +4000,15 @@ function _populateArcgisUI(cfg) {
   } else {
     // Populate dropdowns with just the currently configured values as single options
     // so the form is readable without requiring a Discover click
-    _setDropdownToValue('arcgisFieldParcelId', fields.parcel_id  || '');
-    _setDropdownToValue('arcgisFieldOwner',     fields.owner      || '');
-    _setDropdownToValue('arcgisFieldAddress',   fields.address_all|| '');
-    _setDropdownToValue('arcgisFieldSubdiv',    fields.subdivision|| '');
-    _setDropdownToValue('arcgisFieldTownship',  fields.township   || '');
-    _setDropdownToValue('arcgisFieldSection',   fields.section    || '');
+    _setDropdownToValue('arcgisFieldParcelId', fields.parcel_id   || '');
+    _setDropdownToValue('arcgisFieldOwner',     fields.owner       || '');
+    _setDropdownToValue('arcgisFieldAddress',   fields.address_all || '');
+    _setDropdownToValue('arcgisFieldSubdiv',    fields.subdivision || '');
+    _setDropdownToValue('arcgisFieldTownship',  fields.township    || '');
+    _setDropdownToValue('arcgisFieldTwpDir',    fields.twp_dir     || '');
+    _setDropdownToValue('arcgisFieldRange',     fields.range       || '');
+    _setDropdownToValue('arcgisFieldRngDir',    fields.rng_dir     || '');
+    _setDropdownToValue('arcgisFieldSection',   fields.section     || '');
   }
 }
 
@@ -4070,6 +4073,9 @@ async function discoverArcgisFields() {
       address_all: document.getElementById('arcgisFieldAddress')?.value   || '',
       subdivision: document.getElementById('arcgisFieldSubdiv')?.value    || '',
       township:    document.getElementById('arcgisFieldTownship')?.value   || '',
+      twp_dir:     document.getElementById('arcgisFieldTwpDir')?.value     || '',
+      range:       document.getElementById('arcgisFieldRange')?.value      || '',
+      rng_dir:     document.getElementById('arcgisFieldRngDir')?.value     || '',
       section:     document.getElementById('arcgisFieldSection')?.value    || '',
     };
     _fillArcgisDropdowns(cfg);
@@ -4082,7 +4088,7 @@ async function discoverArcgisFields() {
   }
 }
 
-/** Populate the six field-mapping dropdowns from _arcgisDiscoveredFields */
+/** Populate the field-mapping dropdowns from _arcgisDiscoveredFields */
 function _fillArcgisDropdowns(currentValues) {
   const selectors = {
     arcgisFieldParcelId: currentValues.parcel_id,
@@ -4090,6 +4096,9 @@ function _fillArcgisDropdowns(currentValues) {
     arcgisFieldAddress:  currentValues.address_all,
     arcgisFieldSubdiv:   currentValues.subdivision,
     arcgisFieldTownship: currentValues.township,
+    arcgisFieldTwpDir:   currentValues.twp_dir,
+    arcgisFieldRange:    currentValues.range,
+    arcgisFieldRngDir:   currentValues.rng_dir,
     arcgisFieldSection:  currentValues.section,
   };
 
@@ -4115,6 +4124,9 @@ function _fillArcgisDropdowns(currentValues) {
         arcgisFieldAddress:  ['situs', 'address', 'addr', 'site'],
         arcgisFieldSubdiv:   ['subdiv', 'sub', 'plat'],
         arcgisFieldTownship: ['township', 'twp'],
+        arcgisFieldTwpDir:   ['twpdir', 'twp_dir', 'townshipdir', 'tdir'],
+        arcgisFieldRange:    ['range', 'rng'],
+        arcgisFieldRngDir:   ['rngdir', 'rng_dir', 'rangedir', 'rdir'],
         arcgisFieldSection:  ['section', 'sec'],
       };
       const keywords = hints[selId] || [];
@@ -4134,6 +4146,9 @@ function _collectArcgisFields() {
     address_all: document.getElementById('arcgisFieldAddress')?.value   || '',
     subdivision: document.getElementById('arcgisFieldSubdiv')?.value    || '',
     township:    document.getElementById('arcgisFieldTownship')?.value   || '',
+    twp_dir:     document.getElementById('arcgisFieldTwpDir')?.value     || '',
+    range:       document.getElementById('arcgisFieldRange')?.value      || '',
+    rng_dir:     document.getElementById('arcgisFieldRngDir')?.value     || '',
     section:     document.getElementById('arcgisFieldSection')?.value    || '',
   };
 }

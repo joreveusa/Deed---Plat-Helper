@@ -45,6 +45,20 @@ exit /b 1
 :py_ok
 echo  [OK] Using Python: %PY%
 
+:: ── Load .env file if present ────────────────────────────────────────
+if exist ".env" (
+    echo  [OK] Loading .env file...
+    for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
+        :: Skip blank lines and comment lines starting with #
+        set _key=%%A
+        if not "!_key!"=="" if not "!_key:~0,1!"=="#" (
+            set "%%A=%%B"
+        )
+    )
+) else (
+    echo  [info] No .env file found ^(copy .env.example to .env to configure Stripe etc.^)
+)
+
 :: ── Ensure virtual environment exists ─────────────────────────────────────
 if not exist ".venv\Scripts\python.exe" (
     echo  Creating virtual environment...

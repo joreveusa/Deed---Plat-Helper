@@ -17,9 +17,14 @@ log = logging.getLogger(__name__)
 
 # ── Stripe price → tier mapping ───────────────────────────────────────────────
 # Add Team price ID when you create it in Stripe
+_PRO_PRICE_ID  = os.environ.get("STRIPE_PRO_PRICE_ID",  "price_1TIZrNR0DNgIZfm7dVBvQuJi")
+_TEAM_PRICE_ID = os.environ.get("STRIPE_TEAM_PRICE_ID", "price_1TIZtZR0DNgIZfm77NN3RBxA")
+_LEGACY_PRO_ID = "price_1TIXykR0DNgIZfm7F3QjUJ92"  # legacy product — still honour it
+
 PRICE_TIER_MAP: dict[str, str] = {
-    "price_1TIXykR0DNgIZfm7F3QjUJ92": "pro",   # Pro Plan  $29/mo
-    # "price_XXXXXXXX": "team",                 # Team Plan $79/mo  ← add when ready
+    _PRO_PRICE_ID:  "pro",
+    _TEAM_PRICE_ID: "team",
+    _LEGACY_PRO_ID: "pro",   # legacy customers keep working
 }
 
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
