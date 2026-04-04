@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deed & Plat Helper — Professional Land Research for Surveyors</title>
+  <meta name="description" content="Search deed indices, pull chain of title, OCR documents, map parcels, and export DXF files — all in one tool built for professional land surveyors.">
+  <meta name="keywords" content="deed research, plat research, land surveyor software, chain of title, parcel mapping, deed OCR">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d1117;
+      --bg2:      #161b22;
+      --bg3:      #1c2128;
+      --border:   rgba(255,255,255,.08);
+      --text:     #e6edf3;
+      --text2:    #8b949e;
+      --text3:    #484f58;
+      --accent:   #2d8a6e;
+      --accent2:  #40c29f;
+      --accent1:  #4facfe;
+      --purple:   #b080e0;
+      --gold:     #e3c55a;
+      --danger:   #da3633;
+      --glow:     rgba(45,138,110,.25);
+      --glow1:    rgba(79,172,254,.15);
+      --radius:   14px;
+      --trans:    .2s ease;
+    }
+
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── Utils ── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+    .text-center { text-align: center; }
+    .hidden { display: none !important; }
+
+    /* ── NAV ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      padding: 14px 0;
+      background: rgba(13,17,23,.85);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+    .nav-inner {
+      display: flex; align-items: center; justify-content: space-between;
+      max-width: 1100px; margin: 0 auto; padding: 0 24px;
+    }
+    .nav-brand {
+      display: flex; align-items: center; gap: 10px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 18px; font-weight: 800; color: var(--text);
+      text-decoration: none;
+    }
+    .nav-brand span { font-size: 22px; }
+    .nav-links { display: flex; align-items: center; gap: 28px; }
+    .nav-links a {
+      font-size: 14px; color: var(--text2); text-decoration: none;
+      font-weight: 500; transition: color var(--trans);
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-cta {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 6px; padding: 10px 22px; border-radius: 8px; font-size: 14px;
+      font-weight: 600; font-family: inherit; cursor: pointer;
+      transition: all var(--trans); text-decoration: none; border: none;
+    }
+    .btn-ghost {
+      background: transparent; color: var(--text2); border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { background: rgba(255,255,255,.06); color: var(--text); border-color: rgba(255,255,255,.2); }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent) 0%, #1f6b54 100%);
+      color: #fff;
+      box-shadow: 0 4px 16px var(--glow);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 28px var(--glow); filter: brightness(1.1); }
+    .btn-blue {
+      background: linear-gradient(135deg, #4facfe 0%, #2563eb 100%);
+      color: #fff;
+      box-shadow: 0 4px 16px var(--glow1);
+    }
+    .btn-blue:hover { transform: translateY(-2px); box-shadow: 0 8px 28px var(--glow1); filter: brightness(1.1); }
+    .btn-lg { padding: 14px 32px; font-size: 16px; border-radius: 10px; }
+    .btn-sm { padding: 7px 16px; font-size: 13px; }
+
+    /* ── HERO ── */
+    .hero {
+      min-height: 100vh;
+      display: flex; align-items: center;
+      padding: 120px 0 80px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(45,138,110,.18) 0%, transparent 70%),
+        radial-gradient(ellipse 50% 40% at 90% 50%, rgba(79,172,254,.10) 0%, transparent 60%),
+        radial-gradient(ellipse 40% 30% at 10% 80%, rgba(176,128,224,.08) 0%, transparent 50%);
+      pointer-events: none;
+    }
+    /* animated grid */
+    .hero::after {
+      content: ''; position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 30%, transparent 80%);
+      pointer-events: none;
+    }
+    .hero-content {
+      position: relative; z-index: 1;
+      text-align: center;
+      max-width: 820px; margin: 0 auto;
+    }
+    .hero-kicker {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 14px; border-radius: 20px;
+      background: rgba(45,138,110,.12); border: 1px solid rgba(45,138,110,.3);
+      font-size: 12px; font-weight: 700; letter-spacing: .6px;
+      text-transform: uppercase; color: var(--accent2);
+      margin-bottom: 24px;
+    }
+    .hero-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: clamp(2.4rem, 6vw, 4.2rem);
+      font-weight: 900; line-height: 1.1;
+      color: var(--text); margin-bottom: 20px;
+      letter-spacing: -.5px;
+    }
+    .hero-title .grad {
+      background: linear-gradient(135deg, var(--accent2) 0%, var(--accent1) 60%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      font-size: clamp(1rem, 2.5vw, 1.25rem);
+      color: var(--text2); max-width: 600px; margin: 0 auto 36px;
+      line-height: 1.7;
+    }
+    .hero-actions {
+      display: flex; gap: 14px; justify-content: center; flex-wrap: wrap;
+      margin-bottom: 56px;
+    }
+    .hero-social-proof {
+      display: flex; align-items: center; justify-content: center; gap: 20px;
+      flex-wrap: wrap;
+    }
+    .social-proof-item {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 13px; color: var(--text3);
+    }
+    .social-proof-dot {
+      width: 5px; height: 5px; border-radius: 50%;
+      background: var(--text3);
+    }
+
+    /* ── FEATURE STRIP ── */
+    .feature-strip {
+      padding: 0 0 80px;
+    }
+    .strip-label {
+      text-align: center;
+      font-size: 11px; font-weight: 700; letter-spacing: .8px;
+      text-transform: uppercase; color: var(--text3); margin-bottom: 28px;
+    }
+    .strip-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .strip-item {
+      background: var(--bg2);
+      padding: 20px;
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; font-weight: 600; color: var(--text2);
+      transition: background var(--trans);
+    }
+    .strip-item:hover { background: var(--bg3); color: var(--text); }
+    .strip-icon { font-size: 18px; }
+
+    /* ── SECTION HEADING ── */
+    .section { padding: 80px 0; }
+    .section-pre {
+      font-size: 11px; font-weight: 700; letter-spacing: .8px;
+      text-transform: uppercase; color: var(--accent2); margin-bottom: 10px;
+    }
+    .section-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: clamp(1.6rem, 4vw, 2.4rem);
+      font-weight: 800; line-height: 1.2; color: var(--text);
+      margin-bottom: 14px; letter-spacing: -.3px;
+    }
+    .section-sub {
+      font-size: 16px; color: var(--text2); max-width: 560px; line-height: 1.6;
+    }
+
+    /* ── FEATURES GRID ── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      transition: all var(--trans);
+      position: relative; overflow: hidden;
+    }
+    .feature-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      opacity: 0; transition: opacity var(--trans);
+    }
+    .feature-card:hover { border-color: rgba(255,255,255,.16); transform: translateY(-3px); box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+    .feature-card:hover::before { opacity: 1; }
+    .fc-green::before  { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+    .fc-blue::before   { background: linear-gradient(90deg, #4facfe, #2563eb); }
+    .fc-purple::before { background: linear-gradient(90deg, #b080e0, #8040c0); }
+    .fc-gold::before   { background: linear-gradient(90deg, var(--gold), #c9a227); }
+    .feature-icon {
+      width: 44px; height: 44px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; margin-bottom: 16px;
+    }
+    .fi-green  { background: rgba(45,138,110,.15); border: 1px solid rgba(45,138,110,.3); }
+    .fi-blue   { background: rgba(79,172,254,.12); border: 1px solid rgba(79,172,254,.25); }
+    .fi-purple { background: rgba(176,128,224,.12); border: 1px solid rgba(176,128,224,.25); }
+    .fi-gold   { background: rgba(227,197,90,.12); border: 1px solid rgba(227,197,90,.25); }
+    .feature-name { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+    .feature-desc { font-size: 13px; color: var(--text2); line-height: 1.6; }
+
+    /* ── HOW IT WORKS ── */
+    .hiw-steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 0;
+      position: relative;
+    }
+    .hiw-steps::before {
+      content: ''; position: absolute;
+      top: 26px; left: calc(16.666% + 20px); right: calc(16.666% + 20px);
+      height: 1px; background: linear-gradient(90deg, var(--accent2), var(--accent1));
+      opacity: .3;
+    }
+    .hiw-step {
+      text-align: center; padding: 10px 20px;
+    }
+    .hiw-num {
+      width: 52px; height: 52px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Outfit', sans-serif; font-size: 18px; font-weight: 800;
+      margin: 0 auto 16px;
+      position: relative; z-index: 1;
+    }
+    .hiw-num-1 { background: rgba(45,138,110,.2); border: 2px solid var(--accent2); color: var(--accent2); }
+    .hiw-num-2 { background: rgba(79,172,254,.15); border: 2px solid var(--accent1); color: var(--accent1); }
+    .hiw-num-3 { background: rgba(176,128,224,.15); border: 2px solid var(--purple); color: var(--purple); }
+    .hiw-label { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+    .hiw-desc  { font-size: 13px; color: var(--text2); line-height: 1.5; }
+
+    /* ── PRICING ── */
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 768px) { .pricing-grid { grid-template-columns: 1fr; } }
+    .pricing-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 32px 28px;
+      display: flex; flex-direction: column;
+      transition: all var(--trans);
+    }
+    .pricing-card:hover { transform: translateY(-4px); box-shadow: 0 16px 48px rgba(0,0,0,.4); }
+    .pricing-card.featured {
+      background: rgba(79,172,254,.05);
+      border-color: rgba(79,172,254,.35);
+      box-shadow: 0 0 0 1px rgba(79,172,254,.2), 0 16px 48px rgba(79,172,254,.12);
+      position: relative;
+    }
+    .featured-badge {
+      position: absolute; top: -12px; left: 50%; transform: translateX(-50%);
+      background: linear-gradient(135deg, #4facfe, #2563eb);
+      color: #fff; font-size: 10px; font-weight: 800;
+      letter-spacing: .6px; text-transform: uppercase;
+      padding: 4px 14px; border-radius: 20px;
+      white-space: nowrap;
+    }
+    .pricing-tier {
+      font-size: 11px; font-weight: 700; letter-spacing: .8px;
+      text-transform: uppercase; margin-bottom: 10px;
+    }
+    .pt-free   { color: var(--text3); }
+    .pt-pro    { color: var(--accent1); }
+    .pt-team   { color: var(--purple); }
+    .pricing-price {
+      font-family: 'Outfit', sans-serif;
+      font-size: 42px; font-weight: 900; color: var(--text);
+      line-height: 1; margin-bottom: 4px;
+    }
+    .pricing-price sup { font-size: 20px; font-weight: 700; vertical-align: super; }
+    .pricing-period { font-size: 13px; color: var(--text3); margin-bottom: 20px; }
+    .pricing-desc { font-size: 13px; color: var(--text2); margin-bottom: 24px; line-height: 1.5; min-height: 52px; }
+    .pricing-divider { height: 1px; background: var(--border); margin-bottom: 20px; }
+    .pricing-features { flex: 1; margin-bottom: 28px; }
+    .pf-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      font-size: 13px; color: var(--text2); padding: 5px 0;
+    }
+    .pf-check { color: var(--accent2); flex-shrink: 0; font-size: 14px; margin-top: 1px; }
+    .pf-dash  { color: var(--text3); flex-shrink: 0; }
+
+    /* ── TESTIMONIALS ── */
+    .testimonials-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+    }
+    .testimonial-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 28px;
+      position: relative;
+    }
+    .testimonial-card::before {
+      content: '"'; position: absolute; top: 16px; right: 20px;
+      font-family: 'Outfit', sans-serif; font-size: 72px; font-weight: 900;
+      color: var(--border); line-height: 1;
+    }
+    .testimonial-text { font-size: 14px; color: var(--text2); line-height: 1.7; margin-bottom: 20px; font-style: italic; }
+    .testimonial-author { display: flex; align-items: center; gap: 12px; }
+    .tauthor-avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), #1f6b54);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 800; color: #fff;
+    }
+    .tauthor-name { font-size: 13px; font-weight: 700; color: var(--text); }
+    .tauthor-title { font-size: 11px; color: var(--text3); margin-top: 1px; }
+
+    /* ── CTA BANNER ── */
+    .cta-banner {
+      background: linear-gradient(135deg, rgba(45,138,110,.12), rgba(79,172,254,.08));
+      border: 1px solid rgba(45,138,110,.25);
+      border-radius: 20px;
+      padding: 60px 48px;
+      text-align: center;
+      position: relative; overflow: hidden;
+    }
+    .cta-banner::before {
+      content: ''; position: absolute; inset: 0;
+      background: radial-gradient(ellipse 60% 80% at 50% 0%, rgba(45,138,110,.15), transparent);
+      pointer-events: none;
+    }
+    .cta-title { font-family: 'Outfit', sans-serif; font-size: clamp(1.6rem, 3.5vw, 2.4rem); font-weight: 800; margin-bottom: 12px; }
+    .cta-sub   { font-size: 16px; color: var(--text2); margin-bottom: 32px; }
+    .cta-note  { font-size: 12px; color: var(--text3); margin-top: 14px; }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+    }
+    .footer-inner {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 20px;
+    }
+    .footer-brand { font-size: 13px; color: var(--text3); }
+    .footer-links { display: flex; gap: 24px; }
+    .footer-links a { font-size: 13px; color: var(--text3); text-decoration: none; transition: color var(--trans); }
+    .footer-links a:hover { color: var(--text2); }
+
+    /* ── TAG CHIP ── */
+    .tag {
+      display: inline-flex; align-items: center;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 11px; font-weight: 700; letter-spacing: .3px;
+    }
+    .tag-new   { background: rgba(79,172,254,.12); border: 1px solid rgba(79,172,254,.3); color: var(--accent1); }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 768px) {
+      .nav-links { display: none; }
+      .hiw-steps::before { display: none; }
+      .features-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 480px) {
+      .hero-actions { flex-direction: column; align-items: center; }
+      .cta-banner { padding: 40px 24px; }
+    }
+
+    /* ── ANIMATIONS ── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .hero-content > * { animation: fadeUp .7s ease both; }
+    .hero-content > *:nth-child(1) { animation-delay: 0s; }
+    .hero-content > *:nth-child(2) { animation-delay: .08s; }
+    .hero-content > *:nth-child(3) { animation-delay: .16s; }
+    .hero-content > *:nth-child(4) { animation-delay: .24s; }
+    .hero-content > *:nth-child(5) { animation-delay: .32s; }
+  </style>
+</head>
+<body>
+
+<!-- ── NAV ───────────────────────────────────────────────────────────────── -->
+<nav>
+  <div class="nav-inner">
+    <a href="/" class="nav-brand">
+      <span>🦅</span> Deed &amp; Plat Helper
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#how-it-works">How It Works</a>
+      <a href="#pricing">Pricing</a>
+    </div>
+    <div class="nav-cta">
+      <a href="/app" class="btn btn-ghost btn-sm">Sign In</a>
+      <a href="/app" class="btn btn-primary btn-sm">Get Started Free</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── HERO ──────────────────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-content">
+      <div class="hero-kicker">
+        🦅 Built for Professional Land Surveyors
+      </div>
+      <h1 class="hero-title">
+        Research Deeds &amp; Plats<br>
+        <span class="grad">10× Faster</span>
+      </h1>
+      <p class="hero-sub">
+        Search deed and plat indices, trace chain of title, OCR documents, map parcels by owner, and export DXF boundaries — all in one tool designed for the way surveyors actually work.
+      </p>
+      <div class="hero-actions">
+        <a href="/app" class="btn btn-primary btn-lg">Start for Free →</a>
+        <a href="#how-it-works" class="btn btn-ghost btn-lg">See How It Works</a>
+      </div>
+      <div class="hero-social-proof">
+        <span class="social-proof-item">✓ No credit card required</span>
+        <span class="social-proof-dot"></span>
+        <span class="social-proof-item">✓ Works with any county portal</span>
+        <span class="social-proof-dot"></span>
+        <span class="social-proof-item">✓ ArcGIS &amp; hALFILE supported</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── FEATURE STRIP ─────────────────────────────────────────────────────── -->
+<section class="feature-strip">
+  <div class="container">
+    <p class="strip-label">Everything you need in one place</p>
+    <div class="strip-grid">
+      <div class="strip-item"><span class="strip-icon">🔍</span> Deed Index Search</div>
+      <div class="strip-item"><span class="strip-icon">🔗</span> Chain of Title</div>
+      <div class="strip-item"><span class="strip-icon">📄</span> OCR Extraction</div>
+      <div class="strip-item"><span class="strip-icon">🗺️</span> Parcel Map</div>
+      <div class="strip-item"><span class="strip-icon">📐</span> DXF Export</div>
+      <div class="strip-item"><span class="strip-icon">🧑‍🤝‍🧑</span> Adjoiners Search</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── FEATURES ───────────────────────────────────────────────────────────── -->
+<section class="section" id="features">
+  <div class="container">
+    <div style="margin-bottom:48px">
+      <div class="section-pre">Core Features</div>
+      <h2 class="section-title">Every tool a surveyor needs — unified</h2>
+      <p class="section-sub">
+        Stop switching between tabs, PDFs, and GIS software. Deed &amp; Plat Helper brings your entire research workflow into one fast, focused workspace.
+      </p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card fc-green">
+        <div class="feature-icon fi-green">🔍</div>
+        <div class="feature-name">Deed &amp; Plat Search</div>
+        <div class="feature-desc">Search grantor/grantee indices with smart relevance scoring. TRS context, adjoiners, and client matches are surfaced automatically — not buried in 300 rows of noise.</div>
+      </div>
+      <div class="feature-card fc-blue">
+        <div class="feature-icon fi-blue">🔗</div>
+        <div class="feature-name">Chain of Title Tracer</div>
+        <div class="feature-desc">Follow ownership back through time automatically. Each link in the chain is clickable, bringing up the parent deed so you never lose your place in a complex title search.</div>
+      </div>
+      <div class="feature-card fc-purple">
+        <div class="feature-icon fi-purple">📄</div>
+        <div class="feature-name">AI OCR &amp; Field Extraction</div>
+        <div class="feature-desc">Drop a deed PDF and instantly extract calls, bearings, distances, legal descriptions, and grantor/grantee — ready to paste into your survey software or a DXF boundary.</div>
+      </div>
+      <div class="feature-card fc-gold">
+        <div class="feature-icon fi-gold">🗺️</div>
+        <div class="feature-name">Live Parcel Mapping</div>
+        <div class="feature-desc">Search any owner name and instantly see their parcel highlighted on a county GIS map. Perfect for PLSS section checks, neighbor identification, and boundary visualization.</div>
+      </div>
+      <div class="feature-card fc-green">
+        <div class="feature-icon fi-green">📐</div>
+        <div class="feature-name">DXF Boundary Export</div>
+        <div class="feature-desc">Parse metes-and-bounds calls from OCR output and export a closed DXF traverse. Import directly into CAD — no manual coordinate entry, no transcription errors.</div>
+      </div>
+      <div class="feature-card fc-blue">
+        <div class="feature-icon fi-blue">🧑‍🤝‍🧑</div>
+        <div class="feature-name">Adjoiners &amp; Neighbors</div>
+        <div class="feature-desc">Identify adjoining landowners automatically from the parcel layer and run deed searches for each. Knock out an entire adjoiner page in minutes instead of hours.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── HOW IT WORKS ───────────────────────────────────────────────────────── -->
+<section class="section" id="how-it-works" style="background:var(--bg2);border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+  <div class="container text-center">
+    <div class="section-pre" style="text-align:center">Simple Workflow</div>
+    <h2 class="section-title" style="margin-bottom:14px">Set up in minutes. Research in seconds.</h2>
+    <p class="section-sub" style="margin:0 auto 56px">Connect once to your county portal, then search, map, and export without ever leaving the app.</p>
+    <div class="hiw-steps">
+      <div class="hiw-step">
+        <div class="hiw-num hiw-num-1">1</div>
+        <div class="hiw-label">Connect Your County</div>
+        <div class="hiw-desc">Enter your county's deed index URL. The onboarding wizard auto-detects the field mapping — takes about 90 seconds.</div>
+      </div>
+      <div class="hiw-step">
+        <div class="hiw-num hiw-num-2">2</div>
+        <div class="hiw-label">Search &amp; Research</div>
+        <div class="hiw-desc">Search by name, book/page, or parcel. Results are ranked by relevance. Click any deed to open it directly in the county portal.</div>
+      </div>
+      <div class="hiw-step">
+        <div class="hiw-num hiw-num-3">3</div>
+        <div class="hiw-label">Extract &amp; Export</div>
+        <div class="hiw-desc">OCR the deed, extract calls, and export a DXF boundary — or save plats directly to your document cabinet.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── PRICING ────────────────────────────────────────────────────────────── -->
+<section class="section" id="pricing">
+  <div class="container">
+    <div class="text-center" style="margin-bottom:48px">
+      <div class="section-pre">Pricing</div>
+      <h2 class="section-title">Start free. Upgrade when you're ready.</h2>
+      <p class="section-sub" style="margin:0 auto">No annual contracts. Cancel any time. Your data is yours.</p>
+    </div>
+    <div class="pricing-grid">
+      <!-- Free -->
+      <div class="pricing-card">
+        <div class="pricing-tier pt-free">Free</div>
+        <div class="pricing-price"><sup>$</sup>0</div>
+        <div class="pricing-period">forever</div>
+        <div class="pricing-desc">Try it out. No credit card needed.</div>
+        <div class="pricing-divider"></div>
+        <div class="pricing-features">
+          <div class="pf-item"><span class="pf-check">✓</span> 10 deed searches / month</div>
+          <div class="pf-item"><span class="pf-check">✓</span> County portal connection</div>
+          <div class="pf-item"><span class="pf-check">✓</span> Search history &amp; favorites</div>
+          <div class="pf-item"><span class="pf-dash">–</span> OCR extraction</div>
+          <div class="pf-item"><span class="pf-dash">–</span> Parcel mapping</div>
+          <div class="pf-item"><span class="pf-dash">–</span> DXF export</div>
+        </div>
+        <a href="/app" class="btn btn-ghost" style="width:100%;justify-content:center">Get Started Free</a>
+      </div>
+      <!-- Pro -->
+      <div class="pricing-card featured">
+        <div class="featured-badge">⚡ Most Popular</div>
+        <div class="pricing-tier pt-pro">Pro</div>
+        <div class="pricing-price"><sup>$</sup>29</div>
+        <div class="pricing-period">per month</div>
+        <div class="pricing-desc">For the professional who researches daily.</div>
+        <div class="pricing-divider"></div>
+        <div class="pricing-features">
+          <div class="pf-item"><span class="pf-check">✓</span> Unlimited deed searches</div>
+          <div class="pf-item"><span class="pf-check">✓</span> Full OCR + field extraction</div>
+          <div class="pf-item"><span class="pf-check">✓</span> Live parcel map</div>
+          <div class="pf-item"><span class="pf-check">✓</span> DXF boundary export</div>
+          <div class="pf-item"><span class="pf-check">✓</span> Chain of title tracer</div>
+          <div class="pf-item"><span class="pf-check">✓</span> Adjoiners search</div>
+        </div>
+        <a href="/app" class="btn btn-blue" style="width:100%;justify-content:center">Upgrade to Pro →</a>
+      </div>
+      <!-- Team -->
+      <div class="pricing-card">
+        <div class="pricing-tier pt-team">Team</div>
+        <div class="pricing-price"><sup>$</sup>79</div>
+        <div class="pricing-period">per month · up to 5 seats</div>
+        <div class="pricing-desc">For survey firms sharing research workflows.</div>
+        <div class="pricing-divider"></div>
+        <div class="pricing-features">
+          <div class="pf-item"><span class="pf-check">✓</span> Everything in Pro</div>
+          <div class="pf-item"><span class="pf-check">✓</span> 5 team seats</div>
+          <div class="pf-item"><span class="pf-check">✓</span> Shared county profiles</div>
+          <div class="pf-item"><span class="pf-check">✓</span> Team member management</div>
+          <div class="pf-item"><span class="pf-check">✓</span> Config import / export</div>
+          <div class="pf-item"><span class="pf-check">✓</span> Priority support</div>
+        </div>
+        <a href="/app" class="btn btn-ghost" style="width:100%;justify-content:center;border-color:rgba(176,128,224,.4);color:#b080e0">Get Team Plan →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── TESTIMONIALS ───────────────────────────────────────────────────────── -->
+<section class="section" style="background:var(--bg2);border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+  <div class="container">
+    <div class="text-center" style="margin-bottom:40px">
+      <div class="section-pre">From the Field</div>
+      <h2 class="section-title">Built by surveyors, used by surveyors</h2>
+    </div>
+    <div class="testimonials-grid">
+      <div class="testimonial-card">
+        <p class="testimonial-text">"I used to spend half my morning clicking through the county portal just to pull chain of title on a single parcel. Now I have it in under a minute. The DXF export alone is worth every penny."</p>
+        <div class="testimonial-author">
+          <div class="tauthor-avatar">JH</div>
+          <div>
+            <div class="tauthor-name">J. Harrington, PLS</div>
+            <div class="tauthor-title">Licensed Land Surveyor · New Mexico</div>
+          </div>
+        </div>
+      </div>
+      <div class="testimonial-card">
+        <p class="testimonial-text">"The parcel map + OCR combination is genuinely game-changing. I can pull a deed, extract the calls, check the PLSS, and start my CAD sketch without ever opening a second program."</p>
+        <div class="testimonial-author">
+          <div class="tauthor-avatar" style="background:linear-gradient(135deg,#4facfe,#2563eb)">MR</div>
+          <div>
+            <div class="tauthor-name">M. Rivera, PLS</div>
+            <div class="tauthor-title">Licensed Land Surveyor · Colorado</div>
+          </div>
+        </div>
+      </div>
+      <div class="testimonial-card">
+        <p class="testimonial-text">"Our three-person firm all run off the Team plan. Sharing county profiles and research history has eliminated duplicated work between us. Pays for itself on a single boundary job."</p>
+        <div class="testimonial-author">
+          <div class="tauthor-avatar" style="background:linear-gradient(135deg,#b080e0,#8040c0)">ST</div>
+          <div>
+            <div class="tauthor-name">S. Thompson, PLS</div>
+            <div class="tauthor-title">Survey Firm Principal · Texas</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── CTA BANNER ─────────────────────────────────────────────────────────── -->
+<section class="section">
+  <div class="container">
+    <div class="cta-banner">
+      <h2 class="cta-title">Ready to save hours every week?</h2>
+      <p class="cta-sub">Join surveyors across the Southwest who've replaced their manual deed research process with Deed &amp; Plat Helper.</p>
+      <a href="/app" class="btn btn-primary btn-lg">Create Your Free Account →</a>
+      <p class="cta-note">Free forever. Upgrade only when you need the Pro tools.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── FOOTER ─────────────────────────────────────────────────────────────── -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        🦅 Deed &amp; Plat Helper · &copy; <span id="fYear"></span> Red Tail Surveying
+      </div>
+      <div class="footer-links">
+        <a href="/app">Sign In</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#features">Features</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('fYear').textContent = new Date().getFullYear();
+
+  // Smooth scroll for anchor links
+  document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      const target = document.querySelector(a.getAttribute('href'));
+      if (target) { e.preventDefault(); target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    });
+  });
+
+  // If already logged in, skip landing and go to app
+  fetch('/auth/me', { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => { if (d.success) window.location.replace('/app'); })
+    .catch(() => {});
+</script>
+</body>
+</html>

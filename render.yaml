@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: deed-plat-helper
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+
+    # Environment variables — set secret values in the Render dashboard
+    envVars:
+      - key: DEED_SECRET_KEY
+        generateValue: true          # Render auto-generates a secure random value
+      - key: DEED_ADMIN_PASSWORD
+        sync: false                  # Set manually in dashboard
+      - key: STRIPE_SECRET_KEY
+        sync: false                  # Set manually in dashboard
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false                  # Set manually in dashboard (from Render webhook endpoint)
+      - key: STRIPE_PRO_PRICE_ID
+        value: price_1TIZrNR0DNgIZfm7dVBvQuJi
+      - key: STRIPE_TEAM_PRICE_ID
+        value: price_1TIZtZR0DNgIZfm77NN3RBxA
+      - key: DEED_APP_URL
+        fromService:
+          name: deed-plat-helper
+          type: web
+          property: host
+      - key: USERS_JSON_PATH
+        value: /data/users.json      # Persistent disk path
+
+    # Persistent disk — keeps users.json across deploys ($7/mo on paid plan)
+    disk:
+      name: deed-data
+      mountPath: /data
+      sizeGB: 1

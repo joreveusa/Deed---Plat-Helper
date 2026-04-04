@@ -43,7 +43,13 @@ from helpers.admin import (
     check_admin_password, list_users_summary, get_user_stats,
     admin_set_tier, admin_toggle_active, admin_reset_searches,
 )
-
+from helpers.rate_limit import rate_limit, rate_limit_ip
+from helpers.backup import list_backups, restore_backup
+from helpers.teams import (
+    get_team_members, get_seat_count, invite_member,
+    accept_invite, remove_member, leave_team,
+    verify_invite_token,
+)
 
 
 # ── Helper modules (extracted from this file for maintainability) ─────────────
@@ -93,6 +99,24 @@ except ImportError:
 setup_tesseract()
 
 app = Flask(__name__, static_folder='.', static_url_path='')
+
+# ── Register Blueprints ───────────────────────────────────────────────────────
+from routes.auth import auth_bp
+from routes.stripe import stripe_bp, init_stripe
+from routes.admin import admin_bp
+
+app.register_blueprint(auth_bp)
+app.register_blueprint(stripe_bp)
+app.register_blueprint(admin_bp)
+
+# Inject Stripe functions into the Stripe Blueprint (avoids circular import)
+init_stripe(
+    available=_STRIPE_AVAILABLE,
+    checkout_fn=create_checkout_session,
+    portal_fn=create_customer_portal_session,
+    verify_fn=_stripe_verify,
+    dispatch_fn=_stripe_dispatch,
+)
 
 # Default portal URL — overridden per-user via Settings → URL field.
 # Each user enters the URL for their own county records portal (e.halFILE, etc.).
@@ -488,7 +512,15 @@ def save_research(job_number, client_name, job_type, data: dict):
 # ── static ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
+def landing():
+    """Public marketing/landing page. Authenticated users are redirected to /app by the JS."""
+    resp = make_response(send_from_directory(".", "landing.html"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+@app.route("/app")
 def index():
+    """The main SPA. Served to authenticated users."""
     resp = make_response(send_from_directory(".", "index.html"))
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
@@ -517,372 +549,138 @@ def add_no_cache(response):
         response.headers["Expires"] = "0"
     return response
 
-# ── SaaS Auth routes ───────────────────────────────────────────────────────────
-
-@app.route("/auth/register", methods=["POST"])
-def auth_register():
-    """Register a new Deed Helper account. Body: {email, password}"""
-    data     = request.get_json(silent=True) or {}
-    email    = (data.get("email") or "").strip()
-    password = data.get("password") or ""
-    try:
-        user  = create_user(email, password, tier="free")
-        token = generate_token(user["id"])
-        resp  = jsonify({"success": True, "user": public_user(user)})
-        resp.set_cookie("deed_token", token, max_age=60*60*24*30,
-                        httponly=True, samesite="Lax")
-        # Send welcome email + notify admin (fire & forget — don't block registration)
-        try:
-            from helpers.email_utils import send_welcome, send_admin_new_user_notification
-            _admin_email = os.environ.get("DEED_ADMIN_EMAIL", "")
-            send_welcome(email)
-            if _admin_email:
-                send_admin_new_user_notification(email, _admin_email)
-        except Exception:
-            pass  # email is best-effort
-        return resp
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+# ── SaaS Auth routes → moved to routes/auth.py Blueprint ─────────────────────
 
 
-@app.route("/auth/login", methods=["POST"])
-def auth_saas_login():
-    """Login to Deed Helper account. Body: {email, password}"""
-    data     = request.get_json(silent=True) or {}
-    email    = (data.get("email") or "").strip()
-    password = data.get("password") or ""
-    user     = find_user_by_email(email)
 
-    # Always return the same generic error for unknown email (prevent user enumeration)
-    if not user:
-        return jsonify({"success": False, "error": "Invalid email or password."}), 401
+# ── Stripe billing → moved to routes/stripe.py Blueprint ─────────────────────
+# ── Admin panel   → moved to routes/admin.py Blueprint ─────────────────────
 
-    # ── Lockout check ─────────────────────────────────────────────────────────
-    allowed, lock_msg = check_login_allowed(user)
-    if not allowed:
-        return jsonify({"success": False, "error": lock_msg}), 429
+# ── Team management (Team tier) ─────────────────────────────────────────
 
-    # ── Inactive account ──────────────────────────────────────────────────────
-    if not user.get("active", True):
-        return jsonify({"success": False, "error": "Account is inactive. Contact support."}), 403
-
-    # ── Password check ────────────────────────────────────────────────────────
-    if not verify_password(password, user.get("password_hash", "")):
-        record_failed_login(user["id"])
-        return jsonify({"success": False, "error": "Invalid email or password."}), 401
-
-    # ── Success ───────────────────────────────────────────────────────────────
-    clear_failed_logins(user["id"])
-    token = generate_token(user["id"])
-    resp  = jsonify({"success": True, "user": public_user(user)})
-    resp.set_cookie("deed_token", token, max_age=60*60*24*30,
-                    httponly=True, samesite="Lax")
-    return resp
-
-
-@app.route("/auth/logout", methods=["POST"])
-def auth_saas_logout():
-    resp = jsonify({"success": True})
-    resp.delete_cookie("deed_token")
-    return resp
-
-
-@app.route("/auth/me", methods=["GET"])
+@app.route("/api/team/members", methods=["GET"])
 @require_auth
-def auth_me():
-    """Return the currently logged-in user's public info + tier limits."""
-    user   = g.current_user
-    limits = get_tier_limits(user.get("tier", "free"))
+def api_team_members():
+    """List team members + seat count for the current user's team."""
+    user    = g.current_user
+    members = get_team_members(user["id"])
+    team_id = user.get("team_id") or ""
+    seats   = get_seat_count(team_id) if team_id else (1 if user.get("team_role") else 0)
     return jsonify({
-        "success": True,
-        "user":    public_user(user),
-        "limits":  limits,
+        "success":    True,
+        "members":    members,
+        "seats_used": seats,
+        "seats_max":  5,
+        "team_id":    team_id,
+        "role":       user.get("team_role"),
     })
 
 
-@app.route("/auth/tier", methods=["GET"])
+@app.route("/api/team/invite", methods=["POST"])
 @require_auth
-def auth_tier():
-    """Quick tier check endpoint used by the frontend to gate UI elements."""
-    user = g.current_user
-    return jsonify({
-        "success": True,
-        "tier":    user.get("tier", "free"),
-        "limits":  get_tier_limits(user.get("tier", "free")),
-        "usage": {
-            "searches_this_month": user.get("search_count_this_month", 0),
-        },
-    })
-
-
-@app.route("/auth/forgot-password", methods=["POST"])
-def auth_forgot_password():
-    """Request a password-reset email. Body: { email }.
-    Always returns success to prevent email enumeration attacks.
-    """
+@require_team
+def api_team_invite():
+    """Invite a member to the team. Body: { email }. Requires team tier."""
     data  = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    if email and "@" in email:
-        user = find_user_by_email(email)
-        if user:
-            token      = generate_reset_token(email)
-            _app_url   = os.environ.get("DEED_APP_URL", "http://localhost:5000")
-            reset_link = f"{_app_url}/reset-password?token={token}"
-            try:
-                from helpers.email_utils import send_password_reset
-                send_password_reset(email, reset_link)
-            except Exception as exc:
-                print(f"[reset] email error: {exc}", flush=True)
-    return jsonify({"success": True,
-                    "message": "If that email has an account, a reset link has been sent."})
-
-
-@app.route("/auth/reset-password", methods=["POST"])
-def auth_reset_password():
-    """Consume a reset token and set a new password. Body: { token, password }"""
-    data     = request.get_json(silent=True) or {}
-    token    = (data.get("token") or "").strip()
-    password = data.get("password") or ""
-    if not token:
-        return jsonify({"success": False, "error": "Token is required."}), 400
+    email = (data.get("email") or "").strip()
+    if not email:
+        return jsonify({"success": False, "error": "Email is required."}), 400
     try:
-        user = reset_user_password(token, password)
-        if not user:
-            return jsonify({"success": False,
-                            "error": "Reset link is invalid or expired. Request a new one."}), 400
-        return jsonify({"success": True, "message": "Password updated. You can now log in."})
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
+        ok, msg, token = invite_member(g.current_user, email)
+        if not ok:
+            return jsonify({"success": False, "error": msg}), 400
+        # Send invite email
+        if token:
+            _app_url  = os.environ.get("DEED_APP_URL", "http://localhost:5000")
+            join_link = f"{_app_url}/team/join?token={token}"
+            try:
+                from helpers.email_utils import _send_email
+                _send_email(
+                    email,
+                    f"{g.current_user['email']} invited you to Deed & Plat Helper",
+                    f"You've been invited to join a Deed & Plat Helper team.\n\nJoin link (expires in 72 hours):\n{join_link}",
+                    f'<p><strong>{g.current_user["email"]}</strong> invited you to join their Deed &amp; Plat Helper team.</p>'
+                    f'<p><a href="{join_link}" style="background:#4facfe;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">Join Team</a></p>'
+                    f'<p style="color:#999;font-size:11px">Link expires in 72 hours.</p>',
+                )
+            except Exception as exc:
+                print(f"[team] invite email error: {exc}", flush=True)
+        return jsonify({"success": True, "message": msg})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route("/auth/history", methods=["GET"])
+@app.route("/api/team/join", methods=["POST"])
 @require_auth
-def auth_search_history():
-    """Return the current user's recent search history (last 20 queries)."""
-    history = get_search_history(g.current_user["id"])
-    return jsonify({"success": True, "history": history})
+def api_team_join():
+    """Accept a team invite. Body: { token }."""
+    data  = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return jsonify({"success": False, "error": "Token is required."}), 400
+    ok, msg = accept_invite(token)
+    if ok:
+        # Re-fetch updated user
+        updated = get_saas_user(g.current_user["id"])
+        return jsonify({"success": True, "message": msg,
+                        "user": public_user(updated) if updated else {}})
+    return jsonify({"success": False, "error": msg}), 400
 
 
-@app.route("/auth/usage", methods=["GET"])
+@app.route("/api/team/members/<member_id>", methods=["DELETE"])
 @require_auth
-def auth_usage():
-    """Return the current user's search usage stats for the quota widget."""
-    user   = g.current_user
-    tier   = user.get("tier", "free")
-    limits = get_tier_limits(tier)
-    used   = user.get("search_count_this_month", 0)
-    limit  = limits["searches_per_month"]   # None = unlimited
-    return jsonify({
-        "success":    True,
-        "tier":       tier,
-        "used":       used,
-        "limit":      limit,
-        "reset_date": user.get("search_reset_date", ""),
-        "pct":        min(100, round(used / limit * 100)) if limit else 0,
-    })
+@require_team
+def api_team_remove_member(member_id: str):
+    """Remove a team member (owner only)."""
+    ok, msg = remove_member(g.current_user, member_id)
+    if ok:
+        return jsonify({"success": True, "message": msg})
+    return jsonify({"success": False, "error": msg}), 400
 
 
-@app.route("/reset-password")
-def reset_password_page():
-    """Serve the SPA for /reset-password?token= links sent in emails."""
+@app.route("/api/team/leave", methods=["POST"])
+@require_auth
+def api_team_leave():
+    """Leave the current team (members only, not owner)."""
+    ok, msg = leave_team(g.current_user)
+    if ok:
+        return jsonify({"success": True, "message": msg})
+    return jsonify({"success": False, "error": msg}), 400
+
+
+@app.route("/team/join")
+def team_join_page():
+    """Serve the SPA for /team/join?token= links."""
     return send_from_directory(".", "index.html")
 
 
-# ── Stripe billing ─────────────────────────────────────────────────────
+# ── Backup / restore (admin) ───────────────────────────────────────────
 
-@app.route("/api/stripe/checkout", methods=["POST"])
-@require_auth
-def api_stripe_checkout():
-    """Create a Stripe Checkout Session for a tier upgrade.
-
-    Body: { "tier": "pro" | "team" }
-    Returns: { success, checkout_url } — redirect the user to checkout_url.
-    """
-    if not _STRIPE_AVAILABLE:
-        return jsonify({
-            "success": False,
-            "error": "Stripe is not configured on this server. Set STRIPE_SECRET_KEY."
-        }), 503
-
-    user = g.current_user
-    data = request.get_json() or {}
-    tier = data.get("tier", "pro")
-
-    if tier not in ("pro", "team"):
-        return jsonify({"success": False, "error": "Invalid tier. Choose 'pro' or 'team'."})
-
-    try:
-        url = create_checkout_session(
-            user_email=user["email"],
-            tier=tier,
-            user_id=user["id"],
-        )
-        return jsonify({"success": True, "checkout_url": url})
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)})
-
-
-@app.route("/api/stripe/portal", methods=["POST"])
-@require_auth
-def api_stripe_portal():
-    """Create a Stripe Customer Portal session so the user can manage billing.
-
-    Returns: { success, portal_url }
-    """
-    if not _STRIPE_AVAILABLE:
-        return jsonify({"success": False, "error": "Stripe not configured."}), 503
-
-    user = g.current_user
-    cus_id = user.get("stripe_customer_id")
-    if not cus_id:
-        return jsonify({
-            "success": False,
-            "error": "No Stripe customer found. Subscribe first via the upgrade flow."
-        })
-
-    try:
-        url = create_customer_portal_session(cus_id)
-        return jsonify({"success": True, "portal_url": url})
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)})
-
-
-@app.route("/api/stripe/webhook", methods=["POST"])
-def api_stripe_webhook():
-    """Stripe webhook receiver — verifies signature and dispatches to tier handler.
-
-    Handles: checkout.session.completed, customer.subscription.updated / deleted,
-             invoice.payment_failed
-    """
-    payload    = request.get_data()
-    sig_header = request.headers.get("Stripe-Signature", "")
-
-    try:
-        event = _stripe_verify(payload, sig_header)
-    except ValueError as e:
-        print(f"[stripe-webhook] Bad signature: {e}", flush=True)
-        return jsonify({"error": str(e)}), 400
-
-    status, msg = _stripe_dispatch(event)
-    print(f"[stripe-webhook] {event.get('type','?')} → {status}: {msg}", flush=True)
-    return jsonify({"received": True, "message": msg}), status
-
-
-# ── upgrade success landing page ────────────────────────────────────────────
-
-@app.route("/upgrade-success")
-def upgrade_success():
-    """After Stripe checkout, redirect to the app with upgrade flag."""
-    from flask import redirect
-    return redirect("/?upgraded=1")
-
-
-# ── Admin panel ──────────────────────────────────────────────────────────────
-
-@app.route("/admin")
-def admin_page():
-    """Serve the admin panel HTML — same index, admin UI is unlocked by matching password."""
-    return send_from_directory('.', 'index.html')
-
-
-@app.route("/api/admin/auth", methods=["POST"])
-def api_admin_auth():
-    """Verify admin password. Body: { password }. Returns { success, stats }."""
-    data = request.get_json() or {}
-    pwd  = data.get("password", "")
-    if not check_admin_password(pwd):
-        return jsonify({"success": False, "error": "Invalid admin password."}), 403
-    return jsonify({"success": True, "stats": get_user_stats()})
-
-
-@app.route("/api/admin/users", methods=["GET"])
-def api_admin_users():
-    """List all users. Requires ?password= query param."""
+@app.route("/api/admin/backups", methods=["GET"])
+def api_admin_backups():
+    """List available users.json backups. Requires ?password=."""
     pwd = request.args.get("password", "")
     if not check_admin_password(pwd):
         return jsonify({"success": False, "error": "Forbidden"}), 403
-    return jsonify({"success": True, "users": list_users_summary(), "stats": get_user_stats()})
+    return jsonify({"success": True, "backups": list_backups()})
 
 
-@app.route("/api/admin/users/<user_id>", methods=["PATCH"])
-def api_admin_update_user(user_id: str):
-    """Update a user (tier, active, reset searches). Body: { password, tier?, active?, reset_searches? }."""
-    data = request.get_json() or {}
-    pwd  = data.get("password", "")
+@app.route("/api/admin/backups/restore", methods=["POST"])
+def api_admin_restore_backup():
+    """Restore users.json from a named backup. Body: { password, filename }."""
+    data     = request.get_json(silent=True) or {}
+    pwd      = data.get("password", "")
+    filename = data.get("filename", "")
     if not check_admin_password(pwd):
         return jsonify({"success": False, "error": "Forbidden"}), 403
+    if not filename:
+        return jsonify({"success": False, "error": "filename is required."}), 400
     try:
-        if "tier" in data:
-            admin_set_tier(user_id, data["tier"])
-        if "active" in data:
-            admin_toggle_active(user_id, bool(data["active"]))
-        if data.get("reset_searches"):
-            admin_reset_searches(user_id)
-        return jsonify({"success": True, "users": list_users_summary()})
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ── Config export / import (Team tier) ──────────────────────────────────────
-
-@app.route("/api/config/export", methods=["GET"])
-@require_auth
-def api_config_export():
-    """Export current profile config (ArcGIS URL + field map + portal URL) as JSON.
-    Useful for team members to import the same county setup."""
-    profile_name = request.args.get("profile", "default")
-    try:
-        profile = get_profile(profile_name)
-        export = {
-            "_deed_config_version": 1,
-            "county_name":  profile.get("county_name", ""),
-            "url":          profile.get("url", ""),
-            "arcgis_url":   profile.get("arcgis_url", ""),
-            "arcgis_fields": profile.get("arcgis_fields", {}),
-        }
-        resp = make_response(json.dumps(export, indent=2))
-        safe_name = re.sub(r'[^\w\-]', '_', profile_name or 'config')
-        resp.headers["Content-Disposition"] = f'attachment; filename="deed_config_{safe_name}.json"'
-        resp.headers["Content-Type"] = "application/json"
-        return resp
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/config/import", methods=["POST"])
-@require_auth
-def api_config_import():
-    """Import a previously exported county config JSON.
-    Body: { profile, config: {...} }
-    Only trusted fields are applied (no credential leakage)."""
-    data = request.get_json() or {}
-    profile_name = data.get("profile", "default")
-    cfg = data.get("config", {})
-    if not isinstance(cfg, dict):
-        return jsonify({"success": False, "error": "config must be an object"}), 400
-    try:
-        profile = get_profile(profile_name) or {}
-        # Only allow safe fields
-        if cfg.get("county_name"): profile["county_name"] = str(cfg["county_name"])[:100]
-        if cfg.get("url"):         profile["url"]    = str(cfg["url"])[:500]
-        if cfg.get("arcgis_url"): profile["arcgis_url"] = str(cfg["arcgis_url"])[:500]
-        if cfg.get("arcgis_fields") and isinstance(cfg["arcgis_fields"], dict):
-            profile["arcgis_fields"] = {
-                k: str(v)[:100] for k, v in cfg["arcgis_fields"].items()
-                if isinstance(k, str) and isinstance(v, str)
-            }
-        save_profile(profile_name, profile)
-        return jsonify({"success": True, "message": f"Config imported into profile '{profile_name}'"})
+        restore_backup(filename)
+        return jsonify({"success": True, "message": f"Restored from {filename}."})
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": str(e)}), 404
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1308,6 +1106,7 @@ def api_logout():
 
 @app.route("/api/search", methods=["POST"])
 @require_auth
+@rate_limit(requests=30, window=60)   # hard IP throttle: 30 req/min (quota gate is the main limit)
 def api_search():
     # ── Quota gate ──────────────────────────────────────────────────────────
     allowed, quota_msg = check_search_quota(g.current_user)
