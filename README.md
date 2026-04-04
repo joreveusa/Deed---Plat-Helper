@@ -1,5 +1,7 @@
 # Deed & Plat Helper
 
+[![Tests](https://github.com/joreveusa/Deed---Plat-Helper/actions/workflows/test.yml/badge.svg)](https://github.com/joreveusa/Deed---Plat-Helper/actions/workflows/test.yml)
+
 A local research assistant for **Red Tail Surveying** that streamlines the deed and plat research process for land boundary surveys.
 
 ---
@@ -21,7 +23,7 @@ Guides surveyors through a 6-step research workflow:
 
 ## Prerequisites
 
-- **Python 3.11** — [python.org](https://python.org)
+- **Python 3.11+** — [python.org](https://python.org)
 - **Tesseract OCR** — [UB Mannheim installer](https://github.com/UB-Mannheim/tesseract/wiki)  
   Install to the default path: `C:\Program Files\Tesseract-OCR\`
 - **Survey Data drive** — The app expects to find an `AI DATA CENTER\Survey Data` folder on a removable drive (auto-detected at startup). Drive letter is configurable in Settings.
@@ -58,6 +60,21 @@ Then open **http://localhost:5000** in your browser.
 
 ---
 
+## Testing
+
+```sh
+# Run the full test suite (137 tests)
+python -m pytest tests/ -v
+
+# Run just the unit tests (no Flask app needed)
+python -m pytest tests/test_helpers.py tests/test_xml_processor.py -v
+
+# Lint check
+ruff check helpers/ tests/
+```
+
+---
+
 ## Configuration
 
 On first run, click **⚙️ Settings** to enter:
@@ -81,20 +98,52 @@ The index build takes ~60–90 seconds once; subsequent searches are instant.
 
 ---
 
-## File Structure
+## Architecture
 
 ```
 Deed & Plat Helper/
-├── app.py              # Flask backend — all API routes
-├── app.js              # Frontend JavaScript
-├── index.html          # Single-page HTML shell
-├── style.css           # Dark glassmorphism theme
-├── xml_processor.py    # KML/KMZ parcel data engine
-├── config.json         # Local settings (credentials — not in git)
-├── requirements.txt    # Python dependencies
-├── Launch Deed & Plat Helper.bat
-└── scripts/            # Development utility scripts (not part of app)
+├── app.py                # Flask backend — API routes + server
+├── app.js                # Frontend JavaScript (SPA)
+├── index.html            # Single-page HTML shell
+├── style.css             # Dark glassmorphism theme
+├── xml_processor.py      # KML/KMZ parcel data engine
+│
+├── helpers/              # Extracted business logic modules
+│   ├── metes_bounds.py   #   Bearing parser, coordinate chaining, TRS
+│   ├── deed_analysis.py  #   Deed health-check engine
+│   ├── cabinet.py        #   Cabinet file search + reference parsing
+│   ├── auth.py           #   SaaS auth (register, login, tokens)
+│   ├── dxf.py            #   DXF boundary drawing generation
+│   ├── ocr_correct.py    #   OCR post-processing / correction
+│   ├── pdf_extract.py    #   PDF text extraction (native + OCR)
+│   ├── adjoiner.py       #   Adjoiner name parsing
+│   ├── profiles.py       #   Multi-user profile management
+│   └── subscription.py   #   Tier / quota management
+│
+├── tests/                # Automated test suite (137 tests)
+│   ├── test_helpers.py       # Metes/bounds, TRS, area, adjoiners
+│   ├── test_api_routes.py    # Flask route integration tests
+│   ├── test_xml_processor.py # KML parsing, parcel filtering
+│   ├── test_ocr_correct.py   # OCR correction engine
+│   ├── test_dxf.py           # DXF generation
+│   └── test_pdf_extract.py   # PDF extraction, Tesseract setup
+│
+├── .github/workflows/    # CI/CD
+│   └── test.yml          #   Run tests + lint on every push
+├── ruff.toml             # Linter configuration
+├── requirements.txt      # Python dependencies
+└── Launch Deed & Plat Helper.bat
 ```
+
+---
+
+## SaaS Tiers
+
+| Tier | Price | Searches/mo | Features |
+|------|-------|-------------|----------|
+| **Free** | $0 | 10 | Basic search, single profile |
+| **Pro** | $29/mo | Unlimited | All features, multi-profile, DXF export |
+| **Team** | $79/mo | Unlimited | Everything in Pro + team accounts |
 
 ---
 
