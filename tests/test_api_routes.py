@@ -11,10 +11,6 @@ Run with:  py -m pytest tests/test_api_routes.py -v
 """
 
 import pytest
-import json
-import os
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 # Import the Flask app
 import app as app_module
@@ -156,21 +152,22 @@ class TestDriveStatus:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestSearch:
-    def test_search_missing_name(self, client):
-        """POST /api/search with empty name should handle gracefully."""
+    def test_search_requires_auth(self, client):
+        """POST /api/search without auth should return 401."""
         resp = client.post('/api/search', json={"name": "", "operator": "contains"})
-        assert resp.status_code == 200
+        assert resp.status_code == 401
         data = resp.get_json()
-        # May fail (no network) but should always return JSON with success key
-        assert "success" in data
+        assert data.get("success") is False
 
-    def test_search_returns_json(self, client):
-        """POST /api/search should always return valid JSON, never crash."""
+    def test_search_unauthenticated_returns_json(self, client):
+        """POST /api/search without auth should still return valid JSON, never crash."""
         resp = client.post('/api/search', json={
             "name": "GARCIA", "operator": "begins with"
         })
-        assert resp.status_code == 200
+        assert resp.status_code == 401
         assert resp.content_type.startswith('application/json')
+        data = resp.get_json()
+        assert "success" in data
 
 
 # ══════════════════════════════════════════════════════════════════════════════
