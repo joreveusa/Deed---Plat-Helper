@@ -5816,13 +5816,19 @@ function _updateSaasBadge() {
     tierEl.className    = 'saas-tier-badge' + (tier !== 'free' ? ` tier-${tier}` : '');
     badge.classList.remove('hidden');
     loginBtn.style.display = 'none';
-    // Show/hide upgrade button in dropdown
-    const upgradeBtn = document.getElementById('acctMenuUpgrade');
-    if (upgradeBtn) upgradeBtn.style.display = tier === 'free' ? '' : 'none';
+    // Account dropdown — show the right action buttons based on tier
+    const upgradeBtn     = document.getElementById('acctMenuUpgrade');
+    const teamBtn        = document.getElementById('acctMenuTeamUpgrade');
+    const manageBillBtn  = document.getElementById('acctMenuManageBilling');
+    if (upgradeBtn)    upgradeBtn.style.display    = tier === 'free' ? '' : 'none';
+    if (teamBtn)       teamBtn.style.display       = tier === 'pro'  ? '' : 'none';
+    if (manageBillBtn) manageBillBtn.style.display = tier !== 'free' ? '' : 'none';
   } else {
     badge.classList.add('hidden');
     loginBtn.style.display = '';
   }
+  // Re-apply pro feature locks whenever session state changes
+  if (typeof _applyProFeatureLocks === 'function') _applyProFeatureLocks();
 }
 
 /** Show the auth modal. mode = 'login' | 'register' | 'upgrade' */
@@ -5959,7 +5965,140 @@ function handleUpgradeRequired(res, featureName) {
     showAuthModal('login');
     showToast('Please sign in to use this feature.', 'warn');
   } else {
-    showUpgradeModal(featureName || 'Pro Feature', msg);
+    handleUpgradeClick();
+  }
+}
+
+// ── Stripe Checkout & Billing Portal ─────────────────────────────────────
+
+/** Route the upgrade button based on current tier */
+function handleUpgradeClick() {
+  const tier = _saasUser?.tier || 'free';
+  if (tier === 'free') {
+    startCheckout('pro');
+  } else if (tier === 'pro') {
+    startCheckout('team');
+  } else {
+    openBillingPortal();
+  }
+}
+
+/** Redirect to Stripe Checkout for the given tier */
+async function startCheckout(tier) {
+  if (!_saasUser) { showAuthModal('login'); return; }
+  showToast('Opening secure checkout…', 'info');
+  try {
+    const res = await apiFetch('/stripe/checkout', 'POST', { tier });
+    if (res.success && res.checkout_url) {
+      window.location.href = res.checkout_url;  // redirect to Stripe Hosted Checkout
+    } else {
+      showToast('Checkout error: ' + (res.error || 'Unknown error'), 'error');
+    }
+  } catch (e) {
+    showToast('Checkout failed: ' + e.message, 'error');
+  }
+}
+
+/** Open the Stripe Customer Portal so the user can manage / cancel their subscription */
+async function openBillingPortal() {
+  if (!_saasUser) return;
+  showToast('Opening billing portal…', 'info');
+  try {
+    const res = await apiFetch('/stripe/portal', 'POST');
+    if (res.success && res.portal_url) {
+      window.open(res.portal_url, '_blank');
+    } else {
+      showToast('Portal error: ' + (res.error || 'Unknown error'), 'error');
+    }
+  } catch (e) {
+    showToast('Portal failed: ' + e.message, 'error');
+  }
+}
+
+// (upgrade-success detection is handled by _checkUpgradeSuccess in DOMContentLoaded)
+
+// ── County Registry ──────────────────────────────────────────────────────
+
+let _countySearchTimer = null;
+
+/** Debounced search of the county registry — called on oninput */
+function searchCountyRegistry(q) {
+  clearTimeout(_countySearchTimer);
+  const resultsEl = document.getElementById('countyResults');
+  const selectedEl = document.getElementById('countySelected');
+  if (!q || q.trim().length < 2) {
+    if (resultsEl) resultsEl.style.display = 'none';
+    return;
+  }
+  _countySearchTimer = setTimeout(async () => {
+    try {
+      const res = await apiFetch('/county-registry?q=' + encodeURIComponent(q.trim()));
+      if (!res.success || !resultsEl) return;
+      const counties = res.counties || [];
+      if (!counties.length) {
+        resultsEl.style.display = '';
+        resultsEl.innerHTML = '<div style="padding:6px 8px;font-size:11px;color:var(--text3)">No counties found. Try a different search term.</div>';
+        return;
+      }
+      resultsEl.style.display = '';
+      resultsEl.innerHTML = counties.slice(0, 12).map(c => `
+        <div onclick="applyCountyConfig('${escHtml(c.fips)}')"
+          style="padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between;align-items:center"
+          onmouseover="this.style.background='rgba(79,172,254,.1)'" onmouseout="this.style.background=''"
+        >
+          <span>${escHtml(c.name)}</span>
+          <span style="font-size:10px;color:var(--text3);margin-left:8px">${escHtml(c.portal_type)}</span>
+        </div>
+      `).join('');
+    } catch(e) {
+      console.warn('County registry search failed', e);
+    }
+  }, 280);
+}
+
+/** Fetch a county's full config and apply portal URL + ArcGIS URL to the Settings form */
+async function applyCountyConfig(fips) {
+  try {
+    const res = await apiFetch('/county-registry/' + fips);
+    if (!res.success || !res.county) return;
+    const c = res.county;
+
+    // Fill portal URL
+    const portalEl = document.getElementById('cfgUrl');
+    if (portalEl && c.portal_url) portalEl.value = c.portal_url;
+
+    // Fill ArcGIS URL (expand the section automatically)
+    const arcgisEl = document.getElementById('arcgisUrl');
+    if (arcgisEl && c.arcgis_url) {
+      arcgisEl.value = c.arcgis_url;
+      // Auto-expand ArcGIS section so the user can see it filled in
+      const section = document.getElementById('arcgisSection');
+      const chevron = document.getElementById('arcgisSectionChevron');
+      if (section && section.style.display === 'none') {
+        section.style.display = 'block';
+        if (chevron) chevron.style.transform = 'rotate(180deg)';
+      }
+      // Pre-fill field dropdowns with the registry's known fields
+      if (c.arcgis_fields) {
+        _populateArcgisUI({ arcgis_url: c.arcgis_url, arcgis_fields: c.arcgis_fields, arcgis_is_default: false });
+      }
+    }
+
+    // Show confirmation
+    const resultsEl  = document.getElementById('countyResults');
+    const selectedEl = document.getElementById('countySelected');
+    if (resultsEl)  resultsEl.style.display  = 'none';
+    if (selectedEl) {
+      selectedEl.style.display = '';
+      selectedEl.innerHTML = `✓ ${escHtml(c.name)} applied`
+        + (c.notes ? ` &nbsp;<span style="font-weight:400;color:var(--text3);font-size:10px">${escHtml(c.notes)}</span>` : '');
+    }
+    const searchEl = document.getElementById('countySearch');
+    if (searchEl) searchEl.value = '';
+
+    showToast(`✓ ${c.name} config loaded — review URLs below then click Connect`, 'success');
+  } catch(e) {
+    showToast('Failed to load county config: ' + e.message, 'error');
   }
 }
 
@@ -5982,4 +6121,150 @@ async function apiFetch(path, method = 'GET', body = null, opts = {}) {
 // ── Init on page load ─────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initSaasAuth();
+  _checkUpgradeSuccess();
+  _applyProFeatureLocks();
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRO FEATURE GATING — UI locks and Stripe Checkout launch
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Check ?upgraded=1 query param set by /upgrade-success redirect */
+function _checkUpgradeSuccess() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('upgraded') === '1') {
+    showToast('🎉 Welcome to Pro! Your account has been upgraded.', 'success');
+    // Remove param from URL without reloading
+    history.replaceState(null, '', window.location.pathname);
+    // Refresh session to get new tier
+    initSaasAuth();
+  }
+}
+
+/**
+ * Returns true if the current SaaS user has Pro or Team.
+ * Falls back to false (free) if not logged in.
+ */
+function _hasPro() {
+  if (!_saasUser) return false;
+  const tier = _saasUser.tier || 'free';
+  return tier === 'pro' || tier === 'team';
+}
+
+/**
+ * Guard a pro-only action.
+ * If user has pro → call fn(). Otherwise show auth/upgrade modal.
+ * @param {string} featureName  - Display name for the feature
+ * @param {string} featureKey   - Key from UPGRADE_MESSAGES ('ocr', 'dxf_export', etc.)
+ * @param {Function} fn         - The action to run if allowed
+ */
+function requirePro(featureName, featureKey, fn) {
+  if (!_saasUser) {
+    showAuthModal('login');
+    showToast('Sign in to use ' + featureName, 'warn');
+    return;
+  }
+  if (!_hasPro()) {
+    const msgs = {
+      ocr:        'OCR text extraction is a Pro feature. Upgrade to extract text from scanned deeds.',
+      dxf_export: 'DXF boundary export requires a Pro subscription.',
+      adjoiners:  'Adjoiner auto-discovery requires a Pro subscription.',
+      parcel_map: 'Live parcel maps require a Pro subscription.',
+      chain:      'Chain of title tracing requires a Pro subscription.',
+    };
+    const msg = msgs[featureKey] || 'This feature requires a Pro subscription.';
+    showUpgradeModal(featureName, msg);
+    return;
+  }
+  fn();
+}
+
+/** Apply visual pro-locks to buttons that require upgrade */
+function _applyProFeatureLocks() {
+  // Re-run whenever tier changes
+  const isPro = _hasPro();
+
+  // DXF Generate button
+  const dxfBtn = document.getElementById('btnGenerateDxf');
+  if (dxfBtn) {
+    if (!isPro) {
+      dxfBtn.setAttribute('data-original-onclick', dxfBtn.getAttribute('onclick') || 'doGenerateDxf()');
+      dxfBtn.setAttribute('onclick', "requirePro('DXF Export','dxf_export',doGenerateDxf)");
+      if (!dxfBtn.querySelector('.pro-lock-icon')) {
+        dxfBtn.innerHTML = '<span class="btn-icon">🔒</span> Generate & Save DXF <span class="pro-badge-inline">PRO</span>';
+      }
+    } else {
+      // Restore if they just upgraded
+      const orig = dxfBtn.getAttribute('data-original-onclick');
+      if (orig) { dxfBtn.setAttribute('onclick', orig); dxfBtn.removeAttribute('data-original-onclick'); }
+      if (!dxfBtn.querySelector('.btn-icon')) {
+        dxfBtn.innerHTML = '<span class="btn-icon">💾</span> Generate & Save DXF';
+      }
+    }
+  }
+
+  // Adjoiner Discovery button
+  const adjBtn = document.getElementById('btnDiscoverAdjoiners');
+  if (adjBtn && !isPro) {
+    adjBtn.setAttribute('onclick', "requirePro('Adjoiner Discovery','adjoiners',runAdjoinerDiscovery)");
+  } else if (adjBtn && isPro) {
+    adjBtn.setAttribute('onclick', 'runAdjoinerDiscovery()');
+  }
+
+  // ArcGIS Spatial button
+  const arcBtn = document.getElementById('btnArcgisSpatial');
+  if (arcBtn && !isPro) {
+    arcBtn.setAttribute('onclick', "requirePro('ArcGIS Spatial Discovery','adjoiners',runArcgisSpatialDiscovery)");
+  } else if (arcBtn && isPro) {
+    arcBtn.setAttribute('onclick', 'runArcgisSpatialDiscovery()');
+  }
+
+  // Bulk Search button (Step 5)
+  const bulkBtn = document.querySelector('[onclick="bulkSearchAdjoiners()"]');
+  if (bulkBtn && !isPro) {
+    bulkBtn.setAttribute('onclick', "requirePro('Bulk Adjoiner Search','adjoiners',bulkSearchAdjoiners)");
+  } else if (bulkBtn && isPro) {
+    bulkBtn.setAttribute('onclick', 'bulkSearchAdjoiners()');
+  }
+
+  // Add PRO badge to relevant section headings
+  const s6Tabs = document.getElementById('s6Tabs');
+  if (s6Tabs && !isPro) {
+    const dxfTab = [...s6Tabs.querySelectorAll('.tab-btn')].find(b => b.textContent.includes('DXF'));
+    if (dxfTab && !dxfTab.querySelector('.pro-badge-inline')) {
+      dxfTab.innerHTML += ' <span class="pro-badge-inline">PRO</span>';
+    }
+  }
+}
+
+/**
+ * Launch Stripe Checkout for upgrading.
+ * Called from the upgrade modal "Join Waitlist" area when Stripe is configured.
+ */
+async function launchStripeCheckout(tier = 'pro') {
+  if (!_saasUser) { showAuthModal('login'); return; }
+
+  const btn = event?.target;
+  if (btn) { btn.textContent = 'Redirecting to Stripe…'; btn.disabled = true; }
+
+  try {
+    const res = await fetch('/api/stripe/checkout', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tier }),
+    });
+    const data = await res.json();
+    if (data.success && data.checkout_url) {
+      window.location.href = data.checkout_url;
+    } else {
+      showToast(data.error || 'Checkout failed. Please try again.', 'error');
+      if (btn) { btn.textContent = 'Upgrade to Pro'; btn.disabled = false; }
+    }
+  } catch (e) {
+    showToast('Network error: ' + e.message, 'error');
+    if (btn) { btn.textContent = 'Upgrade to Pro'; btn.disabled = false; }
+  }
+}
+
+// _applyProFeatureLocks is called inside _updateSaasBadge (see definition above)
+

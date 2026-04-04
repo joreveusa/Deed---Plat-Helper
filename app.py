@@ -27,6 +27,8 @@ from helpers.subscription import (
     require_auth, require_pro, require_team,
     check_search_quota, has_feature, get_tier_limits,
 )
+from helpers.stripe_webhook import verify_and_parse as _stripe_verify, dispatch_event as _stripe_dispatch
+
 
 
 # ── Helper modules (extracted from this file for maintainability) ─────────────
@@ -59,6 +61,18 @@ from helpers.deed_analysis import (
     isolate_legal_description as _isolate_legal_description_impl,
 )
 from helpers.dxf import generate_boundary_dxf as _generate_dxf_impl
+from helpers.county_registry import search_counties, get_county, get_all_counties
+
+# Stripe billing (optional — import gracefully so app works without stripe installed)
+try:
+    from helpers.stripe_billing import (
+        create_checkout_session, create_customer_portal_session, handle_webhook,
+        STRIPE_SECRET_KEY as _STRIPE_KEY_SET,
+    )
+    _STRIPE_AVAILABLE = bool(_STRIPE_KEY_SET)
+except ImportError:
+    _STRIPE_AVAILABLE = False
+    create_checkout_session = create_customer_portal_session = handle_webhook = None
 
 # Point pytesseract at the Tesseract binary (delegated to helpers/pdf_extract.py)
 setup_tesseract()
@@ -562,7 +576,100 @@ def auth_tier():
     })
 
 
-# ── profiles ───────────────────────────────────────────────────────────────────
+# ── Stripe billing ─────────────────────────────────────────────────────
+
+@app.route("/api/stripe/checkout", methods=["POST"])
+@require_auth
+def api_stripe_checkout():
+    """Create a Stripe Checkout Session for a tier upgrade.
+
+    Body: { "tier": "pro" | "team" }
+    Returns: { success, checkout_url } — redirect the user to checkout_url.
+    """
+    if not _STRIPE_AVAILABLE:
+        return jsonify({
+            "success": False,
+            "error": "Stripe is not configured on this server. Set STRIPE_SECRET_KEY."
+        }), 503
+
+    user = g.current_user
+    data = request.get_json() or {}
+    tier = data.get("tier", "pro")
+
+    if tier not in ("pro", "team"):
+        return jsonify({"success": False, "error": "Invalid tier. Choose 'pro' or 'team'."})
+
+    try:
+        url = create_checkout_session(
+            user_email=user["email"],
+            tier=tier,
+            user_id=user["id"],
+        )
+        return jsonify({"success": True, "checkout_url": url})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/stripe/portal", methods=["POST"])
+@require_auth
+def api_stripe_portal():
+    """Create a Stripe Customer Portal session so the user can manage billing.
+
+    Returns: { success, portal_url }
+    """
+    if not _STRIPE_AVAILABLE:
+        return jsonify({"success": False, "error": "Stripe not configured."}), 503
+
+    user = g.current_user
+    cus_id = user.get("stripe_customer_id")
+    if not cus_id:
+        return jsonify({
+            "success": False,
+            "error": "No Stripe customer found. Subscribe first via the upgrade flow."
+        })
+
+    try:
+        url = create_customer_portal_session(cus_id)
+        return jsonify({"success": True, "portal_url": url})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/stripe/webhook", methods=["POST"])
+def api_stripe_webhook():
+    """Stripe webhook receiver — verifies signature and dispatches to tier handler.
+
+    Handles: checkout.session.completed, customer.subscription.updated / deleted,
+             invoice.payment_failed
+    """
+    payload    = request.get_data()
+    sig_header = request.headers.get("Stripe-Signature", "")
+
+    try:
+        event = _stripe_verify(payload, sig_header)
+    except ValueError as e:
+        print(f"[stripe-webhook] Bad signature: {e}", flush=True)
+        return jsonify({"error": str(e)}), 400
+
+    status, msg = _stripe_dispatch(event)
+    print(f"[stripe-webhook] {event.get('type','?')} → {status}: {msg}", flush=True)
+    return jsonify({"received": True, "message": msg}), status
+
+
+# ── upgrade success landing page ────────────────────────────────────────────
+
+@app.route("/upgrade-success")
+def upgrade_success():
+    """Simple redirect target after successful Stripe checkout.
+    The real tier update happens via the webhook.  This just sends the user
+    back to the app with a flag so the frontend shows a success toast.
+    """
+    return send_from_directory('.', 'index.html')
+
+
+# ── profiles ──────────────────────────────────────────────────────
 
 @app.route("/api/profiles", methods=["GET"])
 def api_profiles_list():
@@ -721,6 +828,8 @@ def api_config():
 # ── ArcGIS discover & test ──────────────────────────────────────────────────────
 
 @app.route("/api/arcgis-discover", methods=["POST"])
+@require_auth
+@require_pro
 def api_arcgis_discover():
     """Probe an ArcGIS REST layer URL and return all available field names.
 
@@ -868,7 +977,29 @@ def api_arcgis_test():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
 
-# ── login ──────────────────────────────────────────────────────────────────────
+# ── County Registry ──────────────────────────────────────────────────────────
+
+@app.route("/api/county-registry", methods=["GET"])
+def api_county_registry():
+    """Return all counties in the registry (lightweight list for search UI)."""
+    q = request.args.get("q", "").strip()
+    if q:
+        results = search_counties(q)
+    else:
+        results = get_all_counties()
+    return jsonify({"success": True, "counties": results, "count": len(results)})
+
+
+@app.route("/api/county-registry/<fips>", methods=["GET"])
+def api_county_detail(fips: str):
+    """Return the full county entry (including ArcGIS URL + field map) by FIPS."""
+    county = get_county(fips)
+    if not county:
+        return jsonify({"success": False, "error": f"County FIPS {fips!r} not in registry"})
+    return jsonify({"success": True, "county": county})
+
+
+# ── login ──────────────────────────────────────────────────────
 
 @app.route("/api/login", methods=["POST"])
 def api_login():
@@ -1157,6 +1288,8 @@ def _score_search_result(
 
 
 @app.route("/api/search-enriched", methods=["POST"])
+@require_auth
+@require_pro
 def api_search_enriched():
     """Enriched search: standard 1stNMTitle search + ArcGIS relevance scoring.
 
@@ -1312,6 +1445,8 @@ def api_search_enriched():
 # ── chain-of-title search ─────────────────────────────────────────────────────
 
 @app.route("/api/chain-search", methods=["POST"])
+@require_auth
+@require_pro
 def api_chain_search():
     """
     Trace ownership backward by recursively searching the grantor as grantee.
@@ -1624,6 +1759,8 @@ def ocr_plat_file(pdf_path: str) -> list[str]:
 
 
 @app.route("/api/find-adjoiners", methods=["POST"])
+@require_auth
+@require_pro
 def api_find_adjoiners():
     """
     Automatically discover adjoiner names from:
@@ -3185,6 +3322,8 @@ def api_extract_calls_from_pdf():
 # ── /api/generate-dxf ─────────────────────────────────────────────────────────
 
 @app.route("/api/generate-dxf", methods=["POST"])
+@require_auth
+@require_pro
 def api_generate_dxf():
     """
     Generate a DXF file from one or more parcel call-lists.
@@ -3996,6 +4135,8 @@ def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> li
 
 
 @app.route("/api/arcgis-adjoiners", methods=["POST"])
+@require_auth
+@require_pro
 def api_arcgis_adjoiners():
     """Find adjacent parcels using ArcGIS spatial queries.
 
@@ -4088,6 +4229,8 @@ def analyze_deed(detail: dict, pdf_path: str = "") -> dict:
 
 
 @app.route("/api/extract-deed-description", methods=["POST"])
+@require_auth
+@require_pro
 def api_extract_deed_description():
     """
     Extract the full property description from a deed PDF.
@@ -4257,6 +4400,8 @@ def _isolate_legal_description(text: str) -> str:
 
 
 @app.route("/api/analyze-deed", methods=["POST"])
+@require_auth
+@require_pro
 def api_analyze_deed():
     """
     Deep deed analysis endpoint.

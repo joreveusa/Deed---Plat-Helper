@@ -1,0 +1,66 @@
+name: CI — Test & Lint
+
+on:
+  push:
+    branches: [main, ml-dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Python Tests & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          # Install test dependencies
+          pip install pytest pytest-cov flake8
+
+      - name: Lint with flake8
+        run: |
+          # Fail on serious errors (syntax, undefined names); ignore line-length style
+          flake8 helpers/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Warn on style issues (don't fail CI)
+          flake8 helpers/ --count --exit-zero --max-line-length=120 --statistics
+
+      - name: Run auth & subscription tests
+        env:
+          DEED_SECRET_KEY: ci-test-secret-key-12345
+          DEED_DEV_MODE: "1"
+        run: |
+          python -m pytest tests/ -v --tb=short --cov=helpers --cov-report=term-missing
+        continue-on-error: false
+
+      - name: Verify app imports cleanly
+        env:
+          DEED_SECRET_KEY: ci-test-secret-key-12345
+          DEED_DEV_MODE: "1"
+          FLASK_ENV: testing
+        run: |
+          python -c "
+          import sys, os
+          os.environ.setdefault('DEED_DEV_MODE', '1')
+          # Verify core helper imports
+          from helpers.auth import create_user, find_user_by_email, generate_token, verify_token
+          from helpers.subscription import require_auth, require_pro, check_search_quota
+          from helpers.stripe_webhook import dispatch_event, verify_and_parse
+          print('✅ All helper imports OK')
+          "
