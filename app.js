@@ -6283,3 +6283,276 @@ async function launchStripeCheckout(tier = 'pro') {
 
 // _applyProFeatureLocks is called inside _updateSaasBadge (see definition above)
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ONBOARDING WIZARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _obSelectedCounty = null;
+let _obSearchTimer    = null;
+
+/** Check if onboarding is needed and show if so. */
+function checkOnboarding() {
+  if (sessionStorage.getItem('ob_done')) return;
+  fetch(API + '/config', { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.url || d.url.length < 5) {
+        setTimeout(() => document.getElementById('onboardingOverlay')?.classList.remove('hidden'), 800);
+      }
+    }).catch(() => {});
+}
+
+function closeOnboarding() {
+  document.getElementById('onboardingOverlay')?.classList.add('hidden');
+  sessionStorage.setItem('ob_done', '1');
+}
+
+function obGoStep(n) {
+  for (let i = 1; i <= 4; i++) {
+    const step = document.getElementById('obStep' + i);
+    const tab  = document.getElementById('obTab'  + i);
+    if (!step || !tab) continue;
+    step.style.display = i === n ? '' : 'none';
+    tab.style.color = i <= n ? 'var(--accent)' : 'var(--text3)';
+    tab.style.borderBottom = i === n ? '2px solid var(--accent)' : '2px solid transparent';
+  }
+}
+
+function obSearchCounty(q) {
+  clearTimeout(_obSearchTimer);
+  const resultsEl  = document.getElementById('obCountyResults');
+  const noCountyEl = document.getElementById('obNoCounty');
+  if (!q || q.trim().length < 2) { if (resultsEl) resultsEl.style.display = 'none'; return; }
+  _obSearchTimer = setTimeout(async () => {
+    try {
+      const res = await apiFetch('/county-registry?q=' + encodeURIComponent(q.trim()));
+      if (!res.success || !resultsEl) return;
+      const counties = res.counties || [];
+      if (noCountyEl) noCountyEl.style.display = counties.length ? 'none' : '';
+      if (!counties.length) { resultsEl.style.display = 'none'; return; }
+      resultsEl.style.display = '';
+      resultsEl.innerHTML = counties.slice(0, 10).map(c => `
+        <div onclick="obSelectCounty('${escHtml(c.fips)}')"
+          style="padding:7px 10px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between"
+          onmouseover="this.style.background='rgba(79,172,254,.1)'" onmouseout="this.style.background=''">
+          <span>${escHtml(c.name)}</span><span style="font-size:10px;color:var(--text3)">${escHtml(c.portal_type)}</span>
+        </div>`).join('');
+    } catch(e) { console.warn('ob search', e); }
+  }, 280);
+}
+
+async function obSelectCounty(fips) {
+  const res = await apiFetch('/county-registry/' + fips);
+  if (!res.success) return;
+  const c = res.county;
+  _obSelectedCounty = c;
+  document.getElementById('obCountyResults').style.display = 'none';
+  const selEl = document.getElementById('obCountySelected');
+  if (selEl) { selEl.style.display = ''; selEl.textContent = '✓ ' + c.name + ' selected'; }
+  if (c.portal_url) {
+    const pEl = document.getElementById('obPortalUrl');
+    if (pEl) pEl.value = c.portal_url;
+    const lbl = document.getElementById('obCountyUrlLabel');
+    if (lbl) lbl.textContent = c.portal_url;
+    const row = document.getElementById('obCountyUrlRow');
+    if (row) row.style.display = '';
+  }
+  const nextBtn = document.getElementById('obNextCounty');
+  if (nextBtn) nextBtn.disabled = false;
+}
+
+async function obTestConnection() {
+  const url  = (document.getElementById('obPortalUrl')?.value || '').trim();
+  const user = (document.getElementById('obUsername')?.value || '').trim();
+  const pass = (document.getElementById('obPassword')?.value || '').trim();
+  const resultEl = document.getElementById('obConnectResult');
+  const btn = document.getElementById('btnObTest');
+  if (!url) { showToast('Enter a portal URL first', 'warn'); return; }
+  if (btn) { btn.textContent = 'Testing…'; btn.disabled = true; }
+  try {
+    const res = await apiFetch('/test-connection', 'POST', { url, username: user, password: pass });
+    if (resultEl) {
+      resultEl.style.display = '';
+      resultEl.style.background = res.success ? 'rgba(86,211,160,.12)' : 'rgba(255,107,107,.12)';
+      resultEl.style.color = res.success ? '#56d3a0' : 'var(--danger)';
+      resultEl.textContent = res.success ? '✓ Connection successful!' : '✗ ' + (res.error || 'Connection failed');
+    }
+  } catch(e) {
+    if (resultEl) { resultEl.style.display=''; resultEl.textContent='Error: '+e.message; }
+  } finally {
+    if (btn) { btn.textContent='Test Connection'; btn.disabled=false; }
+  }
+}
+
+async function obSaveAndFinish() {
+  const url  = (document.getElementById('obPortalUrl')?.value || '').trim();
+  const user = (document.getElementById('obUsername')?.value || '').trim();
+  const pass = (document.getElementById('obPassword')?.value || '').trim();
+  const btn  = document.getElementById('btnObSave');
+  if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+  try {
+    const payload = { url, username: user, password: pass };
+    if (_obSelectedCounty?.arcgis_url) {
+      payload.arcgis_url    = _obSelectedCounty.arcgis_url;
+      payload.arcgis_fields = _obSelectedCounty.arcgis_fields || {};
+    }
+    const res = await apiFetch('/config', 'POST', payload);
+    if (res.success) {
+      obGoStep(4);
+    } else {
+      showToast('Save failed: ' + (res.error || 'Unknown'), 'error');
+      if (btn) { btn.textContent='Save & Finish'; btn.disabled=false; }
+    }
+  } catch(e) {
+    showToast('Error: '+e.message, 'error');
+    if (btn) { btn.textContent='Save & Finish'; btn.disabled=false; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _adminPassword = '';
+
+function showAdminPanel() {
+  document.getElementById('adminOverlay')?.classList.remove('hidden');
+  document.getElementById('adminAuthGate').style.display = '';
+  document.getElementById('adminDashboard').style.display = 'none';
+  document.getElementById('adminAuthError').style.display = 'none';
+  document.getElementById('adminPwdInput').value = '';
+  setTimeout(() => document.getElementById('adminPwdInput')?.focus(), 100);
+}
+function closeAdminPanel() {
+  document.getElementById('adminOverlay')?.classList.add('hidden');
+  _adminPassword = '';
+}
+
+async function adminLogin() {
+  const pwd   = document.getElementById('adminPwdInput')?.value || '';
+  const errEl = document.getElementById('adminAuthError');
+  try {
+    const res = await apiFetch('/admin/auth', 'POST', { password: pwd });
+    if (res.success) {
+      _adminPassword = pwd;
+      document.getElementById('adminAuthGate').style.display = 'none';
+      document.getElementById('adminDashboard').style.display = '';
+      errEl.style.display = 'none';
+      _renderAdminStats(res.stats);
+      await _loadAdminUsers();
+    } else {
+      errEl.style.display = '';
+      errEl.textContent = res.error || 'Invalid password';
+    }
+  } catch(e) {
+    errEl.style.display = '';
+    errEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+function _renderAdminStats(stats) {
+  if (!stats) return;
+  const grid = document.getElementById('adminStatsGrid');
+  if (!grid) return;
+  const items = [
+    { label: 'Total Users', value: stats.total_users  || 0, color: 'var(--accent)' },
+    { label: 'Active',      value: stats.active_users || 0, color: '#56d3a0' },
+    { label: 'MRR',         value: '$' + (stats.mrr_usd || 0), color: '#e3c55a' },
+    { label: 'Pro / Team',  value: (stats.by_tier?.pro||0) + ' / ' + (stats.by_tier?.team||0), color: '#b080e0' },
+  ];
+  grid.innerHTML = items.map(it => `
+    <div style="background:var(--surface2);border-radius:8px;padding:12px 10px;text-align:center">
+      <div style="font-size:22px;font-weight:700;color:${it.color}">${it.value}</div>
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-top:2px">${it.label}</div>
+    </div>`).join('');
+}
+
+async function _loadAdminUsers() {
+  const res = await apiFetch('/admin/users?password=' + encodeURIComponent(_adminPassword));
+  if (!res.success) return;
+  _renderAdminStats(res.stats);
+  const tbody = document.getElementById('adminUserRows');
+  if (!tbody) return;
+  const tierColors = { free:'var(--text3)', pro:'#e3c55a', team:'#b080e0' };
+  tbody.innerHTML = (res.users || []).map(u => `
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:6px 8px">${escHtml(u.email)}</td>
+      <td style="padding:6px 8px">
+        <span style="font-weight:700;color:${tierColors[u.tier]||'var(--text2)'}">${u.tier}</span>
+        <select onchange="adminChangeTier('${u.id}',this.value)" style="margin-left:6px;font-size:10px;background:var(--surface2);color:var(--text1);border:1px solid var(--border);border-radius:3px;padding:1px">
+          <option value="">change…</option>
+          <option value="free">→ Free</option>
+          <option value="pro">→ Pro</option>
+          <option value="team">→ Team</option>
+        </select>
+      </td>
+      <td style="padding:6px 8px;text-align:center">${u.searches_used}${u.search_limit===null?' / ∞':' / '+u.search_limit}</td>
+      <td style="padding:6px 8px;font-size:10px;font-family:monospace;color:var(--text3)">${u.stripe_cus_id ? u.stripe_cus_id.slice(0,18)+'…' : '—'}</td>
+      <td style="padding:6px 8px;font-size:10px;color:var(--text3)">${(u.created_at||'').slice(0,10)}</td>
+      <td style="padding:6px 8px;white-space:nowrap">
+        <button onclick="adminResetSearches('${u.id}')" class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 5px">↺ Reset</button>
+        <button onclick="adminToggleActive('${u.id}',${!u.active})" class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 5px;margin-left:3px">${u.active?'Disable':'Enable'}</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function adminChangeTier(userId, tier) {
+  if (!tier) return;
+  await apiFetch('/admin/users/'+userId, 'PATCH', { password: _adminPassword, tier });
+  showToast('Tier updated → ' + tier, 'success');
+  await _loadAdminUsers();
+}
+async function adminResetSearches(userId) {
+  await apiFetch('/admin/users/'+userId, 'PATCH', { password: _adminPassword, reset_searches: true });
+  showToast('Search counter reset', 'success');
+  await _loadAdminUsers();
+}
+async function adminToggleActive(userId, active) {
+  await apiFetch('/admin/users/'+userId, 'PATCH', { password: _adminPassword, active });
+  showToast(active ? 'Account enabled' : 'Account disabled', 'success');
+  await _loadAdminUsers();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG EXPORT / IMPORT
+// ─────────────────────────────────────────────────────────────────────────────
+
+function exportConfig() {
+  const profile = state.researchSession?.profile || 'default';
+  const a = document.createElement('a');
+  a.href = API + '/config/export?profile=' + encodeURIComponent(profile);
+  a.download = 'deed_config.json';
+  a.click();
+  showToast('County config saved as deed_config.json', 'success');
+}
+
+function showConfigImport() {
+  document.getElementById('configImportOverlay')?.classList.remove('hidden');
+  document.getElementById('configImportJson').value = '';
+  document.getElementById('configImportResult').style.display = 'none';
+}
+function closeConfigImport() {
+  document.getElementById('configImportOverlay')?.classList.add('hidden');
+}
+
+async function doConfigImport() {
+  const raw = (document.getElementById('configImportJson')?.value || '').trim();
+  const resultEl = document.getElementById('configImportResult');
+  let cfg;
+  try { cfg = JSON.parse(raw); } catch {
+    resultEl.style.display=''; resultEl.style.background='rgba(255,107,107,.12)';
+    resultEl.style.color='var(--danger)'; resultEl.textContent='✗ Invalid JSON'; return;
+  }
+  const profile = state.researchSession?.profile || 'default';
+  const res = await apiFetch('/config/import', 'POST', { profile, config: cfg });
+  resultEl.style.display = '';
+  if (res.success) {
+    resultEl.style.background='rgba(86,211,160,.12)'; resultEl.style.color='#56d3a0';
+    resultEl.textContent = '✓ ' + (res.message || 'Imported');
+    setTimeout(closeConfigImport, 1200);
+    showToast('Config imported — reload Settings to confirm', 'success');
+  } else {
+    resultEl.style.background='rgba(255,107,107,.12)'; resultEl.style.color='var(--danger)';
+    resultEl.textContent = '✗ ' + (res.error || 'Import failed');
+  }
+}
