@@ -18,8 +18,10 @@ import bcrypt
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 # ── Config ────────────────────────────────────────────────────────────────────
-_HERE       = Path(__file__).parent.parent          # repo root
-_USERS_FILE = _HERE / "users.json"
+_HERE = Path(__file__).parent.parent          # repo root
+# USERS_JSON_PATH lets Render (or any host) persist users.json to a mounted disk.
+# Falls back to repo root for local dev.
+_USERS_FILE = Path(os.environ["USERS_JSON_PATH"]) if os.environ.get("USERS_JSON_PATH") else _HERE / "users.json"
 _SECRET_KEY = os.environ.get("DEED_SECRET_KEY", "dev-secret-change-in-production-!!!")
 _TOKEN_MAX_AGE = 60 * 60 * 24 * 30                 # 30 days in seconds
 

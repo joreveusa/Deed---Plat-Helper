@@ -5946,8 +5946,29 @@ function showAccountMenu(e) {
   const tier = _saasUser.tier || 'free';
   document.getElementById('acctMenuTier').textContent =
     tier === 'free' ? 'Free Plan' : tier === 'pro' ? 'Pro Plan — $29/mo' : 'Team Plan — $79/mo';
-  document.getElementById('acctMenuSearches').textContent = _saasUser.search_count_this_month || 0;
-  document.getElementById('acctMenuLimit').textContent    = tier === 'free' ? '10' : '∞';
+
+  const used  = _saasUser.search_count_this_month || 0;
+  const limit = tier === 'free' ? 10 : null;
+  document.getElementById('acctMenuSearches').textContent = used;
+  document.getElementById('acctMenuLimit').textContent    = limit === null ? '∞' : limit;
+
+  // Usage bar
+  const bar = document.getElementById('acctMenuUsageBar');
+  if (bar) bar.style.width = limit ? Math.min(100, Math.round((used / limit) * 100)) + '%' : '0%';
+
+  // Show/hide Manage Team (team tier only)
+  const teamBtn = document.getElementById('acctMenuTeamManage');
+  if (teamBtn) teamBtn.style.display = (tier === 'team') ? '' : 'none';
+
+  // Show/hide Manage Billing (paid tiers)
+  const billingBtn = document.getElementById('acctMenuManageBilling');
+  if (billingBtn) billingBtn.style.display = (tier !== 'free') ? '' : 'none';
+
+  // Show/hide Upgrade
+  const upgradeBtn = document.getElementById('acctMenuUpgrade');
+  if (upgradeBtn) upgradeBtn.style.display = (tier === 'free') ? '' : 'none';
+  const teamUpBtn = document.getElementById('acctMenuTeamUpgrade');
+  if (teamUpBtn) teamUpBtn.style.display = (tier === 'pro') ? '' : 'none';
 
   menu.classList.remove('hidden');
   // Delay registering the outside-click listener so this click doesn't immediately close it
@@ -6105,6 +6126,8 @@ function _renderAccountDetail(user, limits) {
   document.getElementById('acctBtnUpgradePro').style.display  = tier === 'free' ? '' : 'none';
   document.getElementById('acctBtnUpgradeTeam').style.display = tier === 'pro'  ? '' : 'none';
   document.getElementById('acctBtnPortal').style.display      = isPaid            ? '' : 'none';
+  const teamManageBtn = document.getElementById('acctBtnTeamManage');
+  if (teamManageBtn) teamManageBtn.style.display = (tier === 'team') ? '' : 'none';
 
   // Security grid
   document.getElementById('acctDetailEmail').textContent  = user.email || '';
@@ -6851,3 +6874,160 @@ window.switchAuthTab = function(tab) {
   const forgotRow = document.getElementById('authForgotRow');
   if (forgotRow) forgotRow.style.display = tab === 'login' ? '' : 'none';
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEAM MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _teamData = null;
+
+async function showTeamPanel() {
+  document.getElementById('teamOverlay')?.classList.remove('hidden');
+  await _loadTeamData();
+}
+function closeTeamPanel() {
+  document.getElementById('teamOverlay')?.classList.add('hidden');
+}
+
+async function _loadTeamData() {
+  const listEl = document.getElementById('teamMemberList');
+  if (listEl) listEl.innerHTML = '<div style="font-size:12px;color:var(--text3);text-align:center;padding:20px 0">Loading…</div>';
+
+  try {
+    const res = await apiFetch('/api/team/members');
+    if (!res.success) {
+      if (listEl) listEl.innerHTML = `<div style="color:var(--danger);font-size:12px;padding:8px">${escHtml(res.error||'Error loading team.')}</div>`;
+      return;
+    }
+    _teamData = res;
+    _renderTeamPanel(res);
+  } catch(e) {
+    if (listEl) listEl.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:8px">Failed to load team data.</div>';
+  }
+}
+
+function _renderTeamPanel(data) {
+  // Update seat counter
+  const su = document.getElementById('teamSeatsUsed');
+  const sm = document.getElementById('teamSeatsMax');
+  if (su) su.textContent = data.seats_used ?? '—';
+  if (sm) sm.textContent = data.seats_max ?? 5;
+
+  const isOwner = data.role === 'owner';
+  const isTeamMember = data.role === 'member';
+
+  // Show/hide invite section (owners only)
+  const inviteSection = document.getElementById('teamInviteSection');
+  if (inviteSection) inviteSection.style.display = isOwner ? '' : 'none';
+
+  // Show/hide leave section (members only, not owner)
+  const leaveSection = document.getElementById('teamLeaveSection');
+  if (leaveSection) leaveSection.style.display = isTeamMember ? '' : 'none';
+
+  // Member list
+  const listEl = document.getElementById('teamMemberList');
+  if (!listEl) return;
+
+  if (!data.members || !data.members.length) {
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--text3);text-align:center;padding:20px 0">No team members yet. Invite someone above.</div>';
+    return;
+  }
+
+  listEl.innerHTML = data.members.map(m => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:600;color:var(--text1)">${escHtml(m.email)}</div>
+        <div style="font-size:10px;color:var(--text3)">
+          ${m.role === 'owner' ? '👑 Owner' : '👤 Member'}
+          ${m.joined_at ? ' · Joined ' + (m.joined_at||'').slice(0,10) : ''}
+          ${m.active === false ? ' · <span style="color:var(--danger)">Inactive</span>' : ''}
+        </div>
+      </div>
+      ${isOwner && m.role !== 'owner' ? `
+        <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);font-size:11px"
+          onclick="doRemoveTeamMember('${m.id}', '${escHtml(m.email)}')">Remove</button>
+      ` : ''}
+    </div>
+  `).join('');
+}
+
+async function doTeamInvite() {
+  const email    = (document.getElementById('teamInviteEmail')?.value || '').trim();
+  const resultEl = document.getElementById('teamInviteResult');
+  if (!email) { showToast('Enter an email address', 'warn'); return; }
+
+  const btn = document.getElementById('btnTeamInvite');
+  if (btn) { btn.textContent = 'Sending…'; btn.disabled = true; }
+
+  const res = await apiFetch('/api/team/invite', 'POST', { email });
+
+  if (resultEl) {
+    resultEl.style.display    = '';
+    resultEl.style.background = res.success ? 'rgba(86,211,160,.12)' : 'rgba(255,107,107,.12)';
+    resultEl.style.color      = res.success ? '#56d3a0' : 'var(--danger)';
+    resultEl.textContent      = res.success ? `✓ ${res.message}` : `✗ ${res.error || 'Invite failed.'}`;
+  }
+  if (btn) { btn.textContent = 'Send Invite'; btn.disabled = false; }
+  if (res.success) {
+    document.getElementById('teamInviteEmail').value = '';
+    await _loadTeamData();
+  }
+}
+
+async function doRemoveTeamMember(memberId, email) {
+  if (!confirm(`Remove ${email} from the team? They will be downgraded to Free.`)) return;
+  const res = await apiFetch(`/api/team/members/${memberId}`, 'DELETE');
+  if (res.success) {
+    showToast(`✓ ${res.message}`, 'success');
+    await _loadTeamData();
+  } else {
+    showToast(`✗ ${res.error || 'Remove failed.'}`, 'error');
+  }
+}
+
+async function doLeaveTeam() {
+  if (!confirm('Leave this team? You will be downgraded to Free immediately.')) return;
+  const res = await apiFetch('/api/team/leave', 'POST');
+  if (res.success) {
+    showToast('✓ ' + res.message, 'success');
+    closeTeamPanel();
+    initSaasAuth();  // re-check auth state / update badge
+  } else {
+    showToast('✗ ' + (res.error || 'Failed to leave team.'), 'error');
+  }
+}
+
+/** Auto-detect /team/join?token= URL on page load and accept invitation */
+async function _checkTeamJoinToken() {
+  if (!window.location.pathname.includes('team/join')) return;
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (!token) return;
+
+  // User must be logged in first — require auth
+  const user = await apiFetch('/auth/me');
+  if (!user?.success) {
+    // Store token and show login
+    sessionStorage.setItem('pendingTeamToken', token);
+    showAuthModal('login');
+    showToast('Log in to accept your team invitation', 'info');
+    return;
+  }
+
+  // Accept the invite
+  const res = await apiFetch('/api/team/join', 'POST', { token });
+  history.replaceState(null, '', '/');  // clean URL
+  if (res.success) {
+    showToast('🎉 ' + res.message + ' You now have Team access!', 'success');
+    initSaasAuth();
+  } else {
+    showToast('✗ ' + (res.error || 'Could not join team.'), 'error');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', _checkTeamJoinToken);
+
+/** Show Team button in Settings footer when user has team tier */
+function _applyTeamVisibility(userTier, userRole) {
+  const teamBtn = document.getElementById('btnSettingsTeam');
+  if (teamBtn) teamBtn.style.display = (userTier === 'team') ? '' : 'none';
+}

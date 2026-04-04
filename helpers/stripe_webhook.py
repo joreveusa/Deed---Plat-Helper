@@ -140,6 +140,14 @@ def handle_subscription_deleted(event_data: dict) -> tuple[bool, str]:
         return False, "User not found"
 
     _downgrade_user(user["id"])
+
+    # Notify the user by email
+    try:
+        from helpers.email_utils import send_subscription_cancelled
+        send_subscription_cancelled(user["email"])
+    except Exception as e:
+        log.warning(f"[Stripe] cancellation email failed: {e}")
+
     return True, f"Downgraded {user['email']} → free (subscription canceled)"
 
 
