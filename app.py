@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, Response, make_response
+from flask import Flask, request, jsonify, send_from_directory, Response, make_response, g
 import requests as req_lib
 from bs4 import BeautifulSoup
 import os, re, json, traceback, subprocess, gzip, math, shutil, tempfile
@@ -16,6 +16,18 @@ from helpers.profiles import (
     list_profiles, get_profile, save_profile, create_profile,
     delete_profile, update_profile_field, migrate_from_config,
 )
+
+# ── SaaS auth & subscription gating ───────────────────────────────────────────
+from helpers.auth import (
+    create_user, find_user_by_email, get_user as get_saas_user,
+    verify_password, generate_token, verify_token,
+    increment_search_count, reset_monthly_counts_if_needed, public_user,
+)
+from helpers.subscription import (
+    require_auth, require_pro, require_team,
+    check_search_quota, has_feature, get_tier_limits,
+)
+
 
 # ── Helper modules (extracted from this file for maintainability) ─────────────
 from helpers.metes_bounds import (
@@ -349,6 +361,80 @@ def add_no_cache(response):
         response.headers["Expires"] = "0"
     return response
 
+# ── SaaS Auth routes ───────────────────────────────────────────────────────────
+
+@app.route("/auth/register", methods=["POST"])
+def auth_register():
+    """Register a new Deed Helper account. Body: {email, password}"""
+    data     = request.get_json(silent=True) or {}
+    email    = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    try:
+        user  = create_user(email, password, tier="free")
+        token = generate_token(user["id"])
+        resp  = jsonify({"success": True, "user": public_user(user)})
+        resp.set_cookie("deed_token", token, max_age=60*60*24*30,
+                        httponly=True, samesite="Lax")
+        return resp
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/auth/login", methods=["POST"])
+def auth_saas_login():
+    """Login to Deed Helper account. Body: {email, password}"""
+    data     = request.get_json(silent=True) or {}
+    email    = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    user     = find_user_by_email(email)
+    if not user or not verify_password(password, user.get("password_hash", "")):
+        return jsonify({"success": False, "error": "Invalid email or password."}), 401
+    if not user.get("active", True):
+        return jsonify({"success": False, "error": "Account is inactive."}), 403
+    token = generate_token(user["id"])
+    resp  = jsonify({"success": True, "user": public_user(user)})
+    resp.set_cookie("deed_token", token, max_age=60*60*24*30,
+                    httponly=True, samesite="Lax")
+    return resp
+
+
+@app.route("/auth/logout", methods=["POST"])
+def auth_saas_logout():
+    resp = jsonify({"success": True})
+    resp.delete_cookie("deed_token")
+    return resp
+
+
+@app.route("/auth/me", methods=["GET"])
+@require_auth
+def auth_me():
+    """Return the currently logged-in user's public info + tier limits."""
+    user   = g.current_user
+    limits = get_tier_limits(user.get("tier", "free"))
+    return jsonify({
+        "success": True,
+        "user":    public_user(user),
+        "limits":  limits,
+    })
+
+
+@app.route("/auth/tier", methods=["GET"])
+@require_auth
+def auth_tier():
+    """Quick tier check endpoint used by the frontend to gate UI elements."""
+    user = g.current_user
+    return jsonify({
+        "success": True,
+        "tier":    user.get("tier", "free"),
+        "limits":  get_tier_limits(user.get("tier", "free")),
+        "usage": {
+            "searches_this_month": user.get("search_count_this_month", 0),
+        },
+    })
+
+
 # ── profiles ───────────────────────────────────────────────────────────────────
 
 @app.route("/api/profiles", methods=["GET"])
@@ -561,7 +647,17 @@ def api_logout():
 # ── search ─────────────────────────────────────────────────────────────────────
 
 @app.route("/api/search", methods=["POST"])
+@require_auth
 def api_search():
+    # ── Quota gate ──────────────────────────────────────────────────────────
+    allowed, quota_msg = check_search_quota(g.current_user)
+    if not allowed:
+        return jsonify({
+            "success":        False,
+            "error":          quota_msg,
+            "upgrade_required": True,
+            "current_tier":   g.current_user.get("tier", "free"),
+        }), 403
     try:
         data = request.get_json()
         name      = data.get("name", "").strip()
@@ -645,6 +741,8 @@ def api_search():
                 "grantee":          cells[10].text.strip() if len(cells) > 10 else "",
             })
 
+        # Increment monthly search counter for tier tracking
+        increment_search_count(g.current_user)
         return jsonify({"success": True, "results": results, "count": len(results), "count_text": count_text})
     except Exception as e:
         traceback.print_exc()
