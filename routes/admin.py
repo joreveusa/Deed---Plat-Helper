@@ -11,7 +11,7 @@ import traceback
 
 from flask import Blueprint, request, jsonify, send_from_directory, make_response
 
-from helpers.auth import (
+from helpers.admin import (
     check_admin_password, list_users_summary, get_user_stats,
     admin_set_tier, admin_toggle_active, admin_reset_searches,
 )
