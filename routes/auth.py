@@ -20,6 +20,7 @@ from helpers.auth import (
 from helpers.subscription import (
     require_auth, get_tier_limits,
 )
+from helpers.rate_limit import rate_limit
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -27,6 +28,7 @@ auth_bp = Blueprint("auth", __name__)
 # ── Registration ──────────────────────────────────────────────────────────────
 
 @auth_bp.route("/auth/register", methods=["POST"])
+@rate_limit(requests=5, window=3600, key="register")  # 5 signups/hour per IP (anti-spam)
 def register():
     """Register a new Deed Helper account. Body: {email, password}"""
     data     = request.get_json(silent=True) or {}
@@ -57,6 +59,7 @@ def register():
 # ── Login / Logout ────────────────────────────────────────────────────────────
 
 @auth_bp.route("/auth/login", methods=["POST"])
+@rate_limit(requests=10, window=60, key="login")   # 10 attempts/minute per IP (brute force guard)
 def login():
     """Login to Deed Helper account. Body: {email, password}"""
     data     = request.get_json(silent=True) or {}

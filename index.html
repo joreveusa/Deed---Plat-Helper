@@ -186,7 +186,14 @@
               <div class="form-row">
                 <div class="form-group" style="flex:2">
                   <label>Search Name / Grantor / Grantee</label>
-                  <input type="text" id="s2SearchName" class="inp" placeholder="e.g. Rael, Carlos" onkeyup="if(event.key==='Enter') doStep2Search()">
+                  <div style="position:relative">
+                    <input type="text" id="s2SearchName" class="inp" placeholder="e.g. Rael, Carlos"
+                      onkeyup="if(event.key==='Enter') doStep2Search()"
+                      onfocus="_showSearchHistory()" onblur="_hideSearchHistoryDelay()">
+                    <div id="searchHistoryDropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:2000;
+                      background:rgba(22,27,34,.98);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;
+                      box-shadow:0 8px 24px rgba(0,0,0,.5);max-height:220px;overflow-y:auto"></div>
+                  </div>
                 </div>
                 <div class="form-group" style="flex:1">
                   <label>Operator</label>
