@@ -1,0 +1,39 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Pre-commit hooks — run automatically before every commit
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+# ──────────────────────────────────────────────────────────────────────────────
+
+repos:
+  # ── Ruff: lint + format ───────────────────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.4
+    hooks:
+      - id: ruff
+        args: [--fix, --select, "E,F,W", --ignore, "E501,E402,E701,E702,E731,F841"]
+        types_or: [python]
+
+  # ── Standard hooks ────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: detect-private-key
+      - id: check-merge-conflict
+
+  # ── Pytest (fast subset) ──────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: pytest-quick
+        name: pytest (unit tests only)
+        entry: python -m pytest tests/test_helpers.py tests/test_ocr_correct.py -x -q --tb=line
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
