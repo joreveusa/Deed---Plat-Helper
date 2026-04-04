@@ -8,7 +8,6 @@ settings (survey_drive, server_name).
 """
 
 import json
-import os
 import re
 import uuid
 from pathlib import Path

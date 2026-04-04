@@ -11,7 +11,9 @@ Extracted from app.py to enable unit testing and reduce monolith size.
 All regex and helper references are resolved via imports from sibling modules.
 """
 
-import os, re, math
+import os
+import re
+import math
 from datetime import datetime
 
 from helpers.metes_bounds import (
@@ -19,8 +21,6 @@ from helpers.metes_bounds import (
     detect_monuments, shoelace_area, has_pob,
     _LOT_BLOCK_RE, _TRACT_RE,
 )
-from helpers.adjoiner import parse_adjoiner_names
-from helpers.cabinet import parse_cabinet_refs
 
 
 # ── Legal-description isolator ────────────────────────────────────────────────

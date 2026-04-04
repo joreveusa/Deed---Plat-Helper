@@ -88,6 +88,112 @@ def _get_portal_url() -> str:
         url = cfg.get("firstnm_url", "").strip()
     return (url or _DEFAULT_PORTAL_URL).rstrip("/")
 
+
+# ── ArcGIS Parcel Layer — configurable per user ────────────────────────────────
+# The app uses an ArcGIS REST FeatureService/MapServer layer for:
+#   • Parcel geometry  (map picker + spatial adjoiner discovery)
+#   • Owner name       (relevance scoring)
+#   • TRS (Township/Range/Section)  (relevance scoring)
+#   • Property address (address lookup)
+#
+# Each county organises its ArcGIS layer differently.  The user configures:
+#   arcgis_url   — full query URL, e.g. .../MapServer/29/query
+#   arcgis_fields — dict mapping concept → actual attribute field name
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Built-in preset: NM OSE statewide parcel service, Taos County layer
+_ARCGIS_PRESETS = {
+    "taos_nm": {
+        "label": "Taos County, NM (default)",
+        "url": "https://gis.ose.nm.gov/server_s/rest/services/Parcels/County_Parcels_2025/MapServer/29/query",
+        "fields": {
+            "parcel_id":   "UPC",
+            "owner":       "OwnerAll",
+            "address_all": "SitusAddressAll",
+            "address1":    "SitusAddress1",
+            "street_no":   "SitusStreetNumber",
+            "street_name": "SitusStreetName",
+            "city":        "SitusCity",
+            "zipcode":     "SitusZipCode",
+            "legal":       "LegalDescription",
+            "area":        "LandArea",
+            "subdivision": "Subdivision",
+            "zoning":      "ZoningDescription",
+            "land_use":    "LandUseDescription",
+            "township":    "Township",
+            "twp_dir":     "TownshipDirection",
+            "range":       "Range",
+            "rng_dir":     "RangeDirection",
+            "section":     "Section",
+            "struct_count":"StructureCount",
+            "struct_type": "StructureType",
+            "owner_type":  "OwnerType",
+            "mail_addr":   "MailAddressAll",
+        },
+    },
+}
+
+# Concepts that are optional — silently skipped if the field is not configured
+_ARCGIS_OPTIONAL_FIELDS = {
+    "address1", "street_no", "street_name", "city", "zipcode",
+    "zoning", "land_use", "struct_count", "struct_type", "owner_type",
+    "mail_addr", "twp_dir", "rng_dir",
+}
+
+
+def _get_arcgis_config() -> dict:
+    """Return the ArcGIS layer config for the current request.
+
+    Reads from active profile → global config → Taos NM default.
+    Returns dict: { url, fields: { concept: field_name } }
+    """
+    try:
+        pid = request.cookies.get('profile_id')
+    except RuntimeError:
+        pid = None
+
+    stored = None
+    if pid:
+        p = get_profile(pid)
+        if p and p.get('arcgis_url'):
+            stored = p
+    if not stored:
+        cfg = load_config()
+        if cfg.get('arcgis_url'):
+            stored = cfg
+
+    if stored:
+        # Merge user-supplied fields over the default field map
+        default_fields = dict(_ARCGIS_PRESETS['taos_nm']['fields'])
+        user_fields = stored.get('arcgis_fields') or {}
+        default_fields.update({k: v for k, v in user_fields.items() if v})
+        return {
+            'url':    stored['arcgis_url'].rstrip('/'),
+            'fields': default_fields,
+        }
+
+    # No user config — use built-in Taos NM default
+    preset = _ARCGIS_PRESETS['taos_nm']
+    return {'url': preset['url'], 'fields': dict(preset['fields'])}
+
+
+def _arcgis_field(cfg: dict, concept: str) -> str:
+    """Return the actual ArcGIS attribute field name for a logical concept.
+    Falls back to the Taos default if not configured."""
+    return cfg['fields'].get(concept) or _ARCGIS_PRESETS['taos_nm']['fields'].get(concept, '')
+
+
+def _arcgis_out_fields(cfg: dict, concepts: list) -> str:
+    """Build a comma-separated outFields string for a given list of concepts."""
+    fields = []
+    for c in concepts:
+        f = _arcgis_field(cfg, c)
+        if f and f not in fields:
+            fields.append(f)
+    return ','.join(fields)
+
+
 # ── Removable-drive detection ───────────────────────────────────────────────────
 # The Survey Data folder lives on a removable drive whose letter changes
 # between computers.  We scan all available drive letters at startup and
@@ -543,6 +649,8 @@ def api_config():
             user = cfg.get("firstnm_user") or cfg.get("username", "")
             pwd  = cfg.get("firstnm_pass") or cfg.get("password", "")
             sess = cfg.get("last_session")
+        # ArcGIS layer — prefer profile, fall back to global config, then default
+        arcgis_cfg = _get_arcgis_config()
         return jsonify({
             "success": True,
             "config": {
@@ -550,6 +658,18 @@ def api_config():
                 "firstnm_pass": pwd,
                 "firstnm_url":  cfg.get("firstnm_url", ""),
                 "last_session": sess,
+                # ArcGIS layer config
+                "arcgis_url":    arcgis_cfg["url"],
+                "arcgis_fields": arcgis_cfg["fields"],
+                "arcgis_is_default": not bool(
+                    (profile and profile.get("arcgis_url")) or cfg.get("arcgis_url")
+                ),
+                # Expose presets so the frontend can offer a selector
+                "arcgis_presets": [
+                    {"id": k, "label": v["label"], "url": v["url"],
+                     "fields": v["fields"]}
+                    for k, v in _ARCGIS_PRESETS.items()
+                ],
             }
         })
     data = request.get_json()
@@ -561,6 +681,12 @@ def api_config():
             profile["firstnm_pass"] = data.get("firstnm_pass", data.get("password", ""))
         if "last_session" in data:
             profile["last_session"] = data["last_session"]
+        if "arcgis_url" in data:
+            profile["arcgis_url"] = (data["arcgis_url"] or "").strip()
+        if "arcgis_fields" in data and isinstance(data["arcgis_fields"], dict):
+            profile["arcgis_fields"] = data["arcgis_fields"]
+        if "firstnm_url" in data:
+            profile["firstnm_url"] = data["firstnm_url"]
         save_profile(profile)
     else:
         cfg = load_config()
@@ -574,12 +700,169 @@ def api_config():
             cfg["firstnm_pass"] = data["password"]
         if "firstnm_url" in data:
             cfg["firstnm_url"] = data["firstnm_url"]
+        if "arcgis_url" in data:
+            cfg["arcgis_url"] = (data["arcgis_url"] or "").strip()
+        if "arcgis_fields" in data and isinstance(data["arcgis_fields"], dict):
+            cfg["arcgis_fields"] = data["arcgis_fields"]
         if "last_session" in data:
             cfg["last_session"] = data["last_session"]
         cfg.pop("username", None)
         cfg.pop("password", None)
         save_config(cfg)
+    # Invalidate ArcGIS address cache so new settings take effect immediately
+    _address_cache.clear()
     return jsonify({"success": True})
+
+
+# ── ArcGIS discover & test ──────────────────────────────────────────────────────
+
+@app.route("/api/arcgis-discover", methods=["POST"])
+def api_arcgis_discover():
+    """Probe an ArcGIS REST layer URL and return all available field names.
+
+    Body: { "url": "https://...query" }  (or just the base layer URL)
+    Returns: { success, fields: [{name, type, alias}], layer_info: {...} }
+    """
+    try:
+        data = request.get_json() or {}
+        raw_url = (data.get("url") or "").strip().rstrip("/")
+        if not raw_url:
+            return jsonify({"success": False, "error": "No URL provided"})
+
+        # Strip /query suffix if present so we hit the layer metadata endpoint
+        base_url = raw_url[:-6] if raw_url.lower().endswith("/query") else raw_url
+
+        resp = req_lib.get(
+            base_url,
+            params={"f": "json"},
+            headers={"User-Agent": "DeedPlatHelper/1.0"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return jsonify({"success": False, "error": f"HTTP {resp.status_code} from ArcGIS server"})
+
+        info = resp.json()
+        if "error" in info:
+            msg = info["error"].get("message", str(info["error"]))
+            return jsonify({"success": False, "error": f"ArcGIS error: {msg}"})
+
+        raw_fields = info.get("fields", [])
+        if not raw_fields:
+            return jsonify({"success": False,
+                           "error": "No fields found. Make sure the URL points to a specific layer (ending in /0, /1, /29, etc.) not the service root."})
+
+        fields = [
+            {
+                "name":  f.get("name", ""),
+                "alias": f.get("alias") or f.get("name", ""),
+                "type":  f.get("type", ""),
+            }
+            for f in raw_fields
+            if f.get("name")
+        ]
+
+        return jsonify({
+            "success": True,
+            "fields":  fields,
+            "layer_info": {
+                "name":        info.get("name", ""),
+                "description": info.get("description", ""),
+                "geometry_type": info.get("geometryType", ""),
+                "feature_count": info.get("maxRecordCount"),
+            },
+            "query_url": base_url + "/query",
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/arcgis-test", methods=["POST"])
+def api_arcgis_test():
+    """Run a sample parcel lookup with the provided ArcGIS config.
+
+    Body: {
+        "url":    "https://.../query",
+        "fields": { concept: field_name, ... },   // field mapping to test
+        "sample_id": "ABC123",                     // optional parcel ID to look up
+    }
+    Returns: { success, sample_result: {...}, matched_fields: [...] }
+    """
+    try:
+        data = request.get_json() or {}
+        url    = (data.get("url") or "").strip().rstrip("/")
+        fields = data.get("fields") or {}
+        sample_id = (data.get("sample_id") or "").strip()
+
+        if not url:
+            return jsonify({"success": False, "error": "No URL provided"})
+
+        # Ensure URL ends with /query
+        query_url = url if url.lower().endswith("/query") else url + "/query"
+
+        # Build a test config
+        test_cfg = {
+            "url":    query_url,
+            "fields": {
+                **_ARCGIS_PRESETS["taos_nm"]["fields"],  # defaults
+                **{k: v for k, v in fields.items() if v},   # user overrides
+            },
+        }
+
+        pid_field = _arcgis_field(test_cfg, "parcel_id")
+
+        if sample_id:
+            # Try to look up the provided parcel ID
+            result = _arcgis_lookup_upc(sample_id, arcgis_cfg=test_cfg)
+            if result:
+                return jsonify({"success": True, "sample_result": result,
+                               "tested_with": sample_id})
+            return jsonify({"success": False,
+                           "error": f"Parcel '{sample_id}' not found using field '{pid_field}'. Try a different sample ID."})
+
+        # No sample ID — fetch the first record from the layer to verify connectivity
+        out_fields = _arcgis_out_fields(test_cfg, list(test_cfg["fields"].keys()))
+        resp = req_lib.get(
+            query_url,
+            params={
+                "where":             "1=1",
+                "outFields":         out_fields,
+                "returnGeometry":    "false",
+                "resultRecordCount": "1",
+                "f":                 "json",
+            },
+            headers={"User-Agent": "DeedPlatHelper/1.0"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return jsonify({"success": False, "error": f"HTTP {resp.status_code} from ArcGIS"})
+
+        resp_data = resp.json()
+        if "error" in resp_data:
+            return jsonify({"success": False,
+                           "error": resp_data["error"].get("message", "ArcGIS query error")})
+
+        features = resp_data.get("features", [])
+        if not features:
+            return jsonify({"success": False, "error": "Layer returned no features. Check the URL and ensure the layer has data."})
+
+        sample_attrs = features[0].get("attributes", {})
+        # Show which configured fields actually have data
+        matched_fields = [
+            {"concept": c, "field": f, "value": str(sample_attrs.get(f, "(not found)"))[:80]}
+            for c, f in test_cfg["fields"].items()
+            if f
+        ]
+        return jsonify({
+            "success":        True,
+            "sample_attrs":   {k: str(v)[:80] for k, v in sample_attrs.items()},
+            "matched_fields": matched_fields,
+            "record_count":   resp_data.get("exceededTransferLimit", False),
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
 
 # ── login ──────────────────────────────────────────────────────────────────────
 
@@ -3306,25 +3589,9 @@ def api_xml_map_geojson():
 _address_cache: dict = {}
 _nominatim_last_call: float = 0.0   # monotonic timestamp of last Nominatim call
 
-# ── NM State ArcGIS Parcel Service (primary) ──────────────────────────────────
-# Free, no API key needed, returns official situs addresses tied to UPC
-ARCGIS_TAOS_QUERY_URL = (
-    "https://gis.ose.nm.gov/server_s/rest/services/"
-    "Parcels/County_Parcels_2025/MapServer/29/query"
-)
-ARCGIS_OUT_FIELDS = (
-    "UPC,OwnerAll,SitusAddressAll,SitusAddress1,SitusAddress2,"
-    "SitusStreetNumber,SitusStreetName,SitusCity,SitusZipCode,"
-    "LegalDescription,LandArea,Subdivision,ZoningDescription,"
-    "Township,TownshipDirection,Range,RangeDirection,Section,"
-    "StructureCount,StructureType,OwnerType,MailAddressAll,LandUseDescription"
-)
-
-# Fields returned for spatial adjoiner queries (lighter payload)
-ARCGIS_ADJOINER_FIELDS = (
-    "UPC,OwnerAll,LandArea,Subdivision,LegalDescription,"
-    "SitusAddressAll,Township,TownshipDirection,Range,RangeDirection,Section"
-)
+# ArcGIS config is now fully dynamic — see _get_arcgis_config() above.
+# All queries use _get_arcgis_config() at request time so each user/profile
+# can point to their own county's ArcGIS REST layer.
 
 # ── Nominatim (fallback) ─────────────────────────────────────────────────────
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
@@ -3334,10 +3601,12 @@ NOMINATIM_HEADERS = {
 }
 
 
-def _arcgis_lookup_upc(upc: str) -> dict:
-    """Query the NM ArcGIS parcel service by UPC.
+def _arcgis_lookup_upc(upc: str, arcgis_cfg: dict = None) -> dict:
+    """Query the configured ArcGIS parcel layer by parcel ID.
 
-    Returns a dict with address fields, or None on failure.
+    Uses the dynamic ArcGIS config (URL + field mapping) so any county's
+    layer works, not just Taos NM.
+    Returns a normalised dict with address fields, or None on failure.
     """
     if not upc:
         return None
@@ -3346,96 +3615,110 @@ def _arcgis_lookup_upc(upc: str) -> dict:
     if cache_key in _address_cache:
         return _address_cache[cache_key]
 
+    cfg = arcgis_cfg or _get_arcgis_config()
+    fld = lambda c: _arcgis_field(cfg, c)  # shorthand
+
+    pid_field = fld('parcel_id')
+    out_concepts = [
+        'parcel_id', 'owner',
+        'address_all', 'address1', 'street_no', 'street_name', 'city', 'zipcode',
+        'legal', 'area', 'subdivision', 'zoning', 'land_use',
+        'township', 'twp_dir', 'range', 'rng_dir', 'section',
+        'struct_count', 'struct_type', 'owner_type', 'mail_addr',
+    ]
+    out_fields = _arcgis_out_fields(cfg, out_concepts)
+
     try:
         resp = req_lib.get(
-            ARCGIS_TAOS_QUERY_URL,
+            cfg['url'],
             params={
-                "where":            f"UPC='{upc}'",
-                "outFields":        ARCGIS_OUT_FIELDS,
-                "returnGeometry":   "false",
-                "f":                "json",
+                "where":          f"{pid_field}='{upc}'",
+                "outFields":      out_fields,
+                "returnGeometry": "false",
+                "f":              "json",
             },
             headers={"User-Agent": "DeedPlatHelper/1.0"},
             timeout=15,
         )
         if resp.status_code != 200:
-            print(f"[address] ArcGIS returned {resp.status_code} for UPC {upc}", flush=True)
+            print(f"[address] ArcGIS returned {resp.status_code} for {pid_field}={upc}", flush=True)
             return None
 
         data = resp.json()
         features = data.get("features", [])
         if not features:
-            print(f"[address] ArcGIS: no features for UPC {upc}", flush=True)
+            print(f"[address] ArcGIS: no features for {pid_field}={upc}", flush=True)
             return None
 
         attrs = features[0].get("attributes", {})
+        g = lambda c: (attrs.get(fld(c)) or "").strip() if isinstance(attrs.get(fld(c)), str) else (attrs.get(fld(c)) or "")
 
-        # Build short_address from official situs fields
-        situs_all = (attrs.get("SitusAddressAll") or "").strip()
-        situs1    = (attrs.get("SitusAddress1") or "").strip()
-        street_no = (attrs.get("SitusStreetNumber") or "").strip()
-        street_nm = (attrs.get("SitusStreetName") or "").strip()
-        city      = (attrs.get("SitusCity") or "").strip()
-        zipcode   = (attrs.get("SitusZipCode") or "").strip()
+        # Build short address — prefer address1, then street_no+name, then address_all
+        situs_all = g('address_all')
+        situs1    = g('address1')
+        street_no = g('street_no')
+        street_nm = g('street_name')
+        city      = g('city')
+        zipcode   = g('zipcode')
 
-        # Prefer the most complete address representation
         if situs1:
-            short_addr = situs1
-            if city:
-                short_addr += f", {city}"
+            short_addr = situs1 + (f", {city}" if city else "")
         elif street_no and street_nm:
-            short_addr = f"{street_no} {street_nm}"
-            if city:
-                short_addr += f", {city}"
+            short_addr = f"{street_no} {street_nm}" + (f", {city}" if city else "")
         elif situs_all and situs_all != zipcode:
             short_addr = situs_all
         else:
-            short_addr = ""   # no usable street address
+            short_addr = ""
 
-        # Build TRS string from component fields
-        twp = (attrs.get("Township") or "").strip()
-        twp_dir = (attrs.get("TownshipDirection") or "").strip()
-        rng = (attrs.get("Range") or "").strip()
-        rng_dir = (attrs.get("RangeDirection") or "").strip()
-        sec = (attrs.get("Section") or "").strip()
+        # Build TRS string
+        twp     = str(g('township'))
+        twp_dir = str(g('twp_dir'))
+        rng     = str(g('range'))
+        rng_dir = str(g('rng_dir'))
+        sec     = str(g('section'))
         trs_str = ""
         if twp and rng:
             trs_str = f"T{twp}{twp_dir} R{rng}{rng_dir}"
             if sec:
                 trs_str += f" Sec {sec}"
 
+        # land_area may be numeric
+        area_raw = attrs.get(fld('area'))
+        area_val = area_raw if area_raw is not None else ""
+
         result = {
-            "success":          True,
-            "source":           "arcgis",
-            "short_address":    short_addr or "(no street address on file)",
-            "situs_full":       situs_all,
-            "situs_address1":   situs1,
-            "street_number":    street_no,
-            "street_name":      street_nm,
-            "city":             city,
-            "zipcode":          zipcode,
-            "owner_official":   (attrs.get("OwnerAll") or "").strip(),
-            "legal_description": (attrs.get("LegalDescription") or "").strip(),
-            "land_area":        (attrs.get("LandArea") or ""),
-            "upc":              upc,
+            "success":           True,
+            "source":            "arcgis",
+            "short_address":     short_addr or "(no street address on file)",
+            "situs_full":        situs_all,
+            "situs_address1":    situs1,
+            "street_number":     street_no,
+            "street_name":       street_nm,
+            "city":              city,
+            "zipcode":           zipcode,
+            "owner_official":    g('owner'),
+            "legal_description": g('legal'),
+            "land_area":         area_val,
+            "upc":               upc,
             "has_street_address": bool(situs1 or (street_no and street_nm)),
-            # Enriched fields
-            "subdivision":      (attrs.get("Subdivision") or "").strip(),
-            "zoning":           (attrs.get("ZoningDescription") or "").strip(),
-            "land_use":         (attrs.get("LandUseDescription") or "").strip(),
-            "trs":              trs_str,
-            "structure_count":  attrs.get("StructureCount") or 0,
-            "structure_type":   (attrs.get("StructureType") or "").strip(),
-            "owner_type":       (attrs.get("OwnerType") or "").strip(),
-            "mail_address":     (attrs.get("MailAddressAll") or "").strip(),
+            "subdivision":       g('subdivision'),
+            "zoning":            g('zoning'),
+            "land_use":          g('land_use'),
+            "trs":               trs_str,
+            "structure_count":   attrs.get(fld('struct_count')) or 0,
+            "structure_type":    g('struct_type'),
+            "owner_type":        g('owner_type'),
+            "mail_address":      g('mail_addr'),
+            # Pass through the config so callers know what layer was used
+            "arcgis_url":        cfg['url'],
         }
 
         _address_cache[cache_key] = result
-        print(f"[address] ArcGIS UPC {upc} → {result['short_address']}", flush=True)
+        print(f"[address] ArcGIS {pid_field}={upc} → {result['short_address']}", flush=True)
         return result
 
     except Exception as e:
-        print(f"[address] ArcGIS error for UPC {upc}: {e}", flush=True)
+        print(f"[address] ArcGIS error for {upc}: {e}", flush=True)
         return None
 
 
@@ -3609,19 +3892,22 @@ def api_batch_property_address():
 # ARCGIS SPATIAL ADJOINER DISCOVERY
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _arcgis_get_parcel_geometry(upc: str) -> dict | None:
-    """Fetch the polygon geometry for a parcel from ArcGIS by UPC.
-
+def _arcgis_get_parcel_geometry(upc: str, arcgis_cfg: dict = None) -> dict | None:
+    """Fetch the polygon geometry for a parcel from ArcGIS by parcel ID.
+    Uses the dynamic ArcGIS config so any county layer works.
     Returns { "rings": [...], "spatialReference": {...} } or None.
     """
     if not upc:
         return None
+    cfg = arcgis_cfg or _get_arcgis_config()
+    pid_field = _arcgis_field(cfg, 'parcel_id')
+    owner_field = _arcgis_field(cfg, 'owner')
     try:
         resp = req_lib.get(
-            ARCGIS_TAOS_QUERY_URL,
+            cfg['url'],
             params={
-                "where":          f"UPC='{upc}'",
-                "outFields":      "UPC,OwnerAll",
+                "where":          f"{pid_field}='{upc}'",
+                "outFields":      f"{pid_field},{owner_field}",
                 "returnGeometry": "true",
                 "outSR":          "4326",
                 "f":              "json",
@@ -3636,33 +3922,39 @@ def _arcgis_get_parcel_geometry(upc: str) -> dict | None:
             return None
         return features[0].get("geometry")
     except Exception as e:
-        print(f"[arcgis-adj] Geometry fetch error for UPC {upc}: {e}", flush=True)
+        print(f"[arcgis-adj] Geometry fetch error for {upc}: {e}", flush=True)
         return None
 
 
-def _arcgis_find_touching_parcels(geometry: dict) -> list:
+def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> list:
     """Query ArcGIS for all parcels that spatially touch the given polygon.
 
-    Uses esriSpatialRelTouches — returns parcels sharing a boundary edge/vertex.
-    Falls back to esriSpatialRelIntersects with a tiny buffer if touches returns nothing.
-
-    Returns a list of dicts: [{ upc, owner, land_area, subdivision, ... }]
+    Uses esriSpatialRelTouches first, falls back to esriSpatialRelIntersects.
+    Returns a list of normalised dicts regardless of the county's field names.
     """
+    cfg = arcgis_cfg or _get_arcgis_config()
+    fld = lambda c: _arcgis_field(cfg, c)
+    adj_concepts = [
+        'parcel_id', 'owner', 'area', 'subdivision', 'legal',
+        'address_all', 'township', 'twp_dir', 'range', 'rng_dir', 'section',
+    ]
+    out_fields = _arcgis_out_fields(cfg, adj_concepts)
+
     results = []
     for spatial_rel in ("esriSpatialRelTouches", "esriSpatialRelIntersects"):
         try:
             resp = req_lib.get(
-                ARCGIS_TAOS_QUERY_URL,
+                cfg['url'],
                 params={
-                    "geometry":       json.dumps(geometry),
-                    "geometryType":   "esriGeometryPolygon",
-                    "spatialRel":     spatial_rel,
-                    "inSR":           "4326",
-                    "outSR":          "4326",
-                    "outFields":      ARCGIS_ADJOINER_FIELDS,
-                    "returnGeometry": "false",
+                    "geometry":          json.dumps(geometry),
+                    "geometryType":      "esriGeometryPolygon",
+                    "spatialRel":        spatial_rel,
+                    "inSR":              "4326",
+                    "outSR":             "4326",
+                    "outFields":         out_fields,
+                    "returnGeometry":    "false",
                     "resultRecordCount": "100",
-                    "f":              "json",
+                    "f":                 "json",
                 },
                 headers={"User-Agent": "DeedPlatHelper/1.0"},
                 timeout=20,
@@ -3673,27 +3965,26 @@ def _arcgis_find_touching_parcels(geometry: dict) -> list:
             if features:
                 for feat in features:
                     a = feat.get("attributes", {})
-                    # Build TRS
-                    twp = (a.get("Township") or "").strip()
-                    twp_dir = (a.get("TownshipDirection") or "").strip()
-                    rng = (a.get("Range") or "").strip()
-                    rng_dir = (a.get("RangeDirection") or "").strip()
-                    sec = (a.get("Section") or "").strip()
+                    g = lambda c: (a.get(fld(c)) or "").strip() if isinstance(a.get(fld(c)), str) else str(a.get(fld(c)) or "")
+                    twp = g('township'); twp_dir = g('twp_dir')
+                    rng = g('range');    rng_dir = g('rng_dir')
+                    sec = g('section')
                     trs = f"T{twp}{twp_dir} R{rng}{rng_dir}" if twp and rng else ""
                     if trs and sec:
                         trs += f" Sec {sec}"
+                    legal_raw = a.get(fld('legal')) or ""
                     results.append({
-                        "upc":           (a.get("UPC") or "").strip(),
-                        "owner":         (a.get("OwnerAll") or "").strip(),
-                        "land_area":     a.get("LandArea") or 0,
-                        "subdivision":   (a.get("Subdivision") or "").strip(),
-                        "legal":         (a.get("LegalDescription") or "").strip()[:200],
-                        "address":       (a.get("SitusAddressAll") or "").strip(),
-                        "trs":           trs,
-                        "source":        "arcgis_spatial",
-                        "spatial_rel":   spatial_rel,
+                        "upc":         g('parcel_id'),
+                        "owner":       g('owner'),
+                        "land_area":   a.get(fld('area')) or 0,
+                        "subdivision": g('subdivision'),
+                        "legal":       (str(legal_raw).strip())[:200],
+                        "address":     g('address_all'),
+                        "trs":         trs,
+                        "source":      "arcgis_spatial",
+                        "spatial_rel": spatial_rel,
                     })
-                break  # Got results, don't fall through to intersects
+                break
         except Exception as e:
             print(f"[arcgis-adj] Spatial query error ({spatial_rel}): {e}", flush=True)
             continue
