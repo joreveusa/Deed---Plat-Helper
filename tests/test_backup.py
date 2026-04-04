@@ -4,7 +4,6 @@ tests/test_backup.py — Unit tests for the rotating users.json backup system.
 import json
 import time
 import pytest
-from pathlib import Path
 from unittest.mock import patch
 
 import helpers.backup as backup_mod
