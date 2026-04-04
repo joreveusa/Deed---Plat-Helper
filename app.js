@@ -5850,6 +5850,12 @@ function _updateSaasBadge() {
   }
   // Re-apply pro feature locks whenever session state changes
   if (typeof _applyProFeatureLocks === 'function') _applyProFeatureLocks();
+  // Show/hide Team button in Settings footer based on tier
+  if (typeof _applyTeamVisibility === 'function') {
+    const tier = _saasUser?.tier || 'free';
+    const role = _saasUser?.team_role || null;
+    _applyTeamVisibility(tier, role);
+  }
 }
 
 /** Show the auth modal. mode = 'login' | 'register' | 'upgrade' */
@@ -5910,6 +5916,21 @@ async function doAuthSubmit() {
       _updateSaasBadge();
       closeAuthModal();
       showToast(isRegister ? '✅ Account created! Welcome to Deed Helper.' : `Welcome back, ${email.split('@')[0]}!`, 'success');
+      // Load search history so recent queries are ready
+      if (typeof _loadSearchHistory === 'function') _loadSearchHistory();
+      // If user arrived via a team invite link, auto-accept the invite now
+      const pendingTeamToken = sessionStorage.getItem('pendingTeamToken');
+      if (pendingTeamToken) {
+        sessionStorage.removeItem('pendingTeamToken');
+        apiFetch('/api/team/join', 'POST', { token: pendingTeamToken }).then(res => {
+          if (res.success) {
+            showToast('🎉 ' + res.message + ' You now have Team access!', 'success');
+            if (res.user) { _saasUser = res.user; _updateSaasBadge(); }
+          } else {
+            showToast('⚠ Team invite: ' + (res.error || 'Could not join team.'), 'warn');
+          }
+        }).catch(() => {});
+      }
     } else {
       errEl.textContent = data.error || 'Something went wrong.';
       errEl.classList.remove('hidden');
@@ -5946,8 +5967,29 @@ function showAccountMenu(e) {
   const tier = _saasUser.tier || 'free';
   document.getElementById('acctMenuTier').textContent =
     tier === 'free' ? 'Free Plan' : tier === 'pro' ? 'Pro Plan — $29/mo' : 'Team Plan — $79/mo';
-  document.getElementById('acctMenuSearches').textContent = _saasUser.search_count_this_month || 0;
-  document.getElementById('acctMenuLimit').textContent    = tier === 'free' ? '10' : '∞';
+
+  const used  = _saasUser.search_count_this_month || 0;
+  const limit = tier === 'free' ? 10 : null;
+  document.getElementById('acctMenuSearches').textContent = used;
+  document.getElementById('acctMenuLimit').textContent    = limit === null ? '∞' : limit;
+
+  // Usage bar
+  const bar = document.getElementById('acctMenuUsageBar');
+  if (bar) bar.style.width = limit ? Math.min(100, Math.round((used / limit) * 100)) + '%' : '0%';
+
+  // Show/hide Manage Team (team tier only)
+  const teamBtn = document.getElementById('acctMenuTeamManage');
+  if (teamBtn) teamBtn.style.display = (tier === 'team') ? '' : 'none';
+
+  // Show/hide Manage Billing (paid tiers)
+  const billingBtn = document.getElementById('acctMenuManageBilling');
+  if (billingBtn) billingBtn.style.display = (tier !== 'free') ? '' : 'none';
+
+  // Show/hide Upgrade
+  const upgradeBtn = document.getElementById('acctMenuUpgrade');
+  if (upgradeBtn) upgradeBtn.style.display = (tier === 'free') ? '' : 'none';
+  const teamUpBtn = document.getElementById('acctMenuTeamUpgrade');
+  if (teamUpBtn) teamUpBtn.style.display = (tier === 'pro') ? '' : 'none';
 
   menu.classList.remove('hidden');
   // Delay registering the outside-click listener so this click doesn't immediately close it
@@ -6037,6 +6079,87 @@ async function openBillingPortal() {
 }
 
 // (upgrade-success detection is handled by _checkUpgradeSuccess in DOMContentLoaded)
+
+// ── Account Detail Modal ───────────────────────────────────────────────────────
+
+async function showAccountDetail() {
+  if (!_saasUser) { showAuthModal('login'); return; }
+  document.getElementById('accountDetailOverlay')?.classList.remove('hidden');
+  document.getElementById('acctDetailLoading').style.display = '';
+  document.getElementById('acctDetailContent').style.display = 'none';
+
+  try {
+    const res = await apiFetch('/auth/me');
+    if (!res.success) throw new Error(res.error || 'Failed to load');
+    _renderAccountDetail(res.user, res.limits);
+  } catch (e) {
+    document.getElementById('acctDetailLoading').textContent = '⚠ ' + e.message;
+  }
+}
+
+function closeAccountDetail() {
+  document.getElementById('accountDetailOverlay')?.classList.add('hidden');
+}
+
+function _renderAccountDetail(user, limits) {
+  const tier   = user.tier  || 'free';
+  const used   = user.search_count_this_month || 0;
+  const max    = limits?.searches_per_month ?? 10;   // null = unlimited
+  const pct    = max ? Math.min(100, Math.round((used / max) * 100)) : 0;
+  const isPaid = tier !== 'free';
+
+  // Plan labels
+  const planNames  = { free: 'Free',     pro: 'Pro',          team: 'Team'    };
+  const planPrices = { free: '$0 / month', pro: '$29 / month', team: '$79 / month' };
+  const badgeColors = {
+    free: 'background:rgba(255,255,255,.08);color:var(--text2)',
+    pro:  'background:linear-gradient(135deg,#e3c55a,#c9a227);color:#1a1200',
+    team: 'background:linear-gradient(135deg,#b080e0,#7a4f9a);color:#fff',
+  };
+  const barColors = {
+    free: 'linear-gradient(90deg,#4facfe,#2563eb)',
+    pro:  'linear-gradient(90deg,#e3c55a,#c9a227)',
+    team: 'linear-gradient(90deg,#b080e0,#7a4f9a)',
+  };
+
+  document.getElementById('acctPlanName').textContent  = planNames[tier]  || tier;
+  document.getElementById('acctPlanPrice').textContent = planPrices[tier] || '';
+  document.getElementById('acctPlanBadge').style.cssText += `;${badgeColors[tier] || ''}`;
+  document.getElementById('acctPlanBadge').textContent = (planNames[tier] || tier).toUpperCase();
+
+  document.getElementById('acctSearchUsed').textContent  = used;
+  document.getElementById('acctSearchLimit').textContent = max === null ? '∞' : max;
+  document.getElementById('acctUsageBar').style.width    = max === null ? '0%' : pct + '%';
+  document.getElementById('acctUsageBar').style.background = barColors[tier] || barColors.free;
+  document.getElementById('acctResetDate').textContent   = (user.search_reset_date || '').slice(0,10) || 'Next month';
+
+  // Stripe badge
+  const stripeRow = document.getElementById('acctStripeRow');
+  if (user.stripe_subscription_id) {
+    stripeRow.style.display = 'flex';
+    document.getElementById('acctStripeId').textContent =
+      'sub: ' + (user.stripe_subscription_id || '').slice(0, 24) + '…';
+  } else {
+    stripeRow.style.display = 'none';
+  }
+
+  // CTA buttons
+  document.getElementById('acctBtnUpgradePro').style.display  = tier === 'free' ? '' : 'none';
+  document.getElementById('acctBtnUpgradeTeam').style.display = tier === 'pro'  ? '' : 'none';
+  document.getElementById('acctBtnPortal').style.display      = isPaid            ? '' : 'none';
+  const teamManageBtn = document.getElementById('acctBtnTeamManage');
+  if (teamManageBtn) teamManageBtn.style.display = (tier === 'team') ? '' : 'none';
+
+  // Security grid
+  document.getElementById('acctDetailEmail').textContent  = user.email || '';
+  const statusEl = document.getElementById('acctDetailStatus');
+  statusEl.textContent = user.active !== false ? '✓ Active' : '✗ Inactive';
+  statusEl.style.color = user.active !== false ? '#56d3a0' : 'var(--danger)';
+  document.getElementById('acctDetailJoined').textContent = (user.created_at || '').slice(0,10) || '—';
+
+  document.getElementById('acctDetailLoading').style.display  = 'none';
+  document.getElementById('acctDetailContent').style.display  = '';
+}
 
 // ── County Registry ──────────────────────────────────────────────────────
 
@@ -6731,7 +6854,7 @@ function _renderSearchHistory(inputEl, containerEl) {
 }
 
 function _fillSearch(query) {
-  const nameInput = document.getElementById('searchName');
+  const nameInput = document.getElementById('s2SearchName');
   if (nameInput) {
     nameInput.value = query;
     nameInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -6740,23 +6863,42 @@ function _fillSearch(query) {
   if (hist) hist.style.display = 'none';
 }
 
+function _showSearchHistory() {
+  if (!_searchHistory.length) {
+    // Try loading if not yet populated
+    if (typeof _loadSearchHistory === 'function') _loadSearchHistory().then(() => _showSearchHistory());
+    return;
+  }
+  const containerEl = document.getElementById('searchHistoryDropdown');
+  const inputEl     = document.getElementById('s2SearchName');
+  _renderSearchHistory(inputEl, containerEl);
+}
+
+let _historyHideTimer = null;
+function _hideSearchHistoryDelay() {
+  // Small delay so clicks inside the dropdown register before it disappears
+  _historyHideTimer = setTimeout(() => {
+    const hist = document.getElementById('searchHistoryDropdown');
+    if (hist) hist.style.display = 'none';
+  }, 200);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // FRIENDLY QUOTA MODAL — intercept upgrade_required on search
 // ─────────────────────────────────────────────────────────────────────────────
 
 function handleUpgradeRequired(data) {
-  // If upgrade modal exists, show it; otherwise fall back to upgrade overlay
-  const msg = data.error || 'This feature requires a Pro subscription.';
+  const msg     = data.error || 'This feature requires a Pro subscription.';
   const isQuota = msg.includes('searches');
 
+  // Populate the upgrade modal's message element (id may be upgradeMsg or upgradeModalMsg)
+  const msgEl = document.getElementById('upgradeMsg') || document.getElementById('upgradeModalMsg');
+  if (msgEl) msgEl.textContent = msg;
+
   if (isQuota) {
-    // Show upgrade overlay with a quota-specific message
-    const msgEl = document.getElementById('upgradeModalMsg');
-    if (msgEl) msgEl.textContent = msg;
     const ovl = document.getElementById('upgradeOverlay');
     if (ovl) ovl.classList.remove('hidden');
   } else {
-    // Generic upgrade prompt (pro feature gate)
     showToast('⚡ ' + msg, 'warn');
     setTimeout(() => {
       const ovl = document.getElementById('upgradeOverlay');
@@ -6772,3 +6914,196 @@ window.switchAuthTab = function(tab) {
   const forgotRow = document.getElementById('authForgotRow');
   if (forgotRow) forgotRow.style.display = tab === 'login' ? '' : 'none';
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEAM MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _teamData = null;
+
+async function showTeamPanel() {
+  document.getElementById('teamOverlay')?.classList.remove('hidden');
+  await _loadTeamData();
+}
+function closeTeamPanel() {
+  document.getElementById('teamOverlay')?.classList.add('hidden');
+}
+
+async function _loadTeamData() {
+  const listEl = document.getElementById('teamMemberList');
+  if (listEl) listEl.innerHTML = '<div style="font-size:12px;color:var(--text3);text-align:center;padding:20px 0">Loading…</div>';
+
+  try {
+    const res = await apiFetch('/api/team/members');
+    if (!res.success) {
+      if (listEl) listEl.innerHTML = `<div style="color:var(--danger);font-size:12px;padding:8px">${escHtml(res.error||'Error loading team.')}</div>`;
+      return;
+    }
+    _teamData = res;
+    _renderTeamPanel(res);
+  } catch(e) {
+    if (listEl) listEl.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:8px">Failed to load team data.</div>';
+  }
+}
+
+function _renderTeamPanel(data) {
+  // Update seat counter
+  const su = document.getElementById('teamSeatsUsed');
+  const sm = document.getElementById('teamSeatsMax');
+  if (su) su.textContent = data.seats_used ?? '—';
+  if (sm) sm.textContent = data.seats_max ?? 5;
+
+  const isOwner = data.role === 'owner';
+  const isTeamMember = data.role === 'member';
+
+  // Show/hide invite section (owners only)
+  const inviteSection = document.getElementById('teamInviteSection');
+  if (inviteSection) inviteSection.style.display = isOwner ? '' : 'none';
+
+  // Show/hide leave section (members only, not owner)
+  const leaveSection = document.getElementById('teamLeaveSection');
+  if (leaveSection) leaveSection.style.display = isTeamMember ? '' : 'none';
+
+  // Member list
+  const listEl = document.getElementById('teamMemberList');
+  if (!listEl) return;
+
+  if (!data.members || !data.members.length) {
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--text3);text-align:center;padding:20px 0">No team members yet. Invite someone above.</div>';
+    return;
+  }
+
+  listEl.innerHTML = data.members.map(m => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:600;color:var(--text1)">${escHtml(m.email)}</div>
+        <div style="font-size:10px;color:var(--text3)">
+          ${m.role === 'owner' ? '👑 Owner' : '👤 Member'}
+          ${m.joined_at ? ' · Joined ' + (m.joined_at||'').slice(0,10) : ''}
+          ${m.active === false ? ' · <span style="color:var(--danger)">Inactive</span>' : ''}
+        </div>
+      </div>
+      ${isOwner && m.role !== 'owner' ? `
+        <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);font-size:11px"
+          onclick="doRemoveTeamMember('${m.id}', '${escHtml(m.email)}')">Remove</button>
+      ` : ''}
+    </div>
+  `).join('');
+}
+
+async function doTeamInvite() {
+  const email    = (document.getElementById('teamInviteEmail')?.value || '').trim();
+  const resultEl = document.getElementById('teamInviteResult');
+  if (!email) { showToast('Enter an email address', 'warn'); return; }
+
+  const btn = document.getElementById('btnTeamInvite');
+  if (btn) { btn.textContent = 'Sending…'; btn.disabled = true; }
+
+  const res = await apiFetch('/api/team/invite', 'POST', { email });
+
+  if (resultEl) {
+    resultEl.style.display    = '';
+    resultEl.style.background = res.success ? 'rgba(86,211,160,.12)' : 'rgba(255,107,107,.12)';
+    resultEl.style.color      = res.success ? '#56d3a0' : 'var(--danger)';
+    resultEl.textContent      = res.success ? `✓ ${res.message}` : `✗ ${res.error || 'Invite failed.'}`;
+  }
+  if (btn) { btn.textContent = 'Send Invite'; btn.disabled = false; }
+  if (res.success) {
+    document.getElementById('teamInviteEmail').value = '';
+    await _loadTeamData();
+  }
+}
+
+async function doRemoveTeamMember(memberId, email) {
+  if (!confirm(`Remove ${email} from the team? They will be downgraded to Free.`)) return;
+  const res = await apiFetch(`/api/team/members/${memberId}`, 'DELETE');
+  if (res.success) {
+    showToast(`✓ ${res.message}`, 'success');
+    await _loadTeamData();
+  } else {
+    showToast(`✗ ${res.error || 'Remove failed.'}`, 'error');
+  }
+}
+
+async function doLeaveTeam() {
+  if (!confirm('Leave this team? You will be downgraded to Free immediately.')) return;
+  const res = await apiFetch('/api/team/leave', 'POST');
+  if (res.success) {
+    showToast('✓ ' + res.message, 'success');
+    closeTeamPanel();
+    initSaasAuth();  // re-check auth state / update badge
+  } else {
+    showToast('✗ ' + (res.error || 'Failed to leave team.'), 'error');
+  }
+}
+
+/** Auto-detect /team/join?token= URL on page load and accept invitation */
+async function _checkTeamJoinToken() {
+  if (!window.location.pathname.includes('team/join')) return;
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (!token) return;
+
+  // User must be logged in first — require auth
+  const user = await apiFetch('/auth/me');
+  if (!user?.success) {
+    // Store token and show login
+    sessionStorage.setItem('pendingTeamToken', token);
+    showAuthModal('login');
+    showToast('Log in to accept your team invitation', 'info');
+    return;
+  }
+
+  // Accept the invite
+  const res = await apiFetch('/api/team/join', 'POST', { token });
+  history.replaceState(null, '', '/');  // clean URL
+  if (res.success) {
+    showToast('🎉 ' + res.message + ' You now have Team access!', 'success');
+    initSaasAuth();
+  } else {
+    showToast('✗ ' + (res.error || 'Could not join team.'), 'error');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', _checkTeamJoinToken);
+
+/** Show Team button in Settings footer when user has team tier */
+function _applyTeamVisibility(userTier, userRole) {
+  const teamBtn = document.getElementById('btnSettingsTeam');
+  if (teamBtn) teamBtn.style.display = (userTier === 'team') ? '' : 'none';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ?plan= LANDING PAGE -> APP FLOW
+// Handles users arriving from deedplathelper.netlify.app pricing buttons.
+// ?plan=pro or ?plan=team -> show auth modal, then upgrade modal after login.
+// ─────────────────────────────────────────────────────────────────────────────
+
+(function _handlePlanParam() {
+  const plan = new URLSearchParams(window.location.search).get('plan');
+  if (!plan || !['pro', 'team'].includes(plan)) return;
+  history.replaceState(null, '', window.location.pathname);
+  const planNames = { pro: 'Pro - $29/mo', team: 'Team - $79/mo' };
+  const planMsgs  = {
+    pro:  'Unlock unlimited searches, OCR, live parcel maps, adjoiner discovery, and DXF export.',
+    team: 'Everything in Pro plus 5 seats, shared session library, and priority support.',
+  };
+  function _showUpgradeForPlan() {
+    if (typeof showUpgradeModal === 'function') {
+      showUpgradeModal(planNames[plan], planMsgs[plan]);
+    }
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+      if (_saasUser) {
+        _showUpgradeForPlan();
+      } else {
+        showAuthModal('register');
+        showToast('Create a free account to start your ' + (plan === 'pro' ? 'Pro' : 'Team') + ' trial', 'info');
+        const poll = setInterval(() => {
+          if (_saasUser) { clearInterval(poll); setTimeout(_showUpgradeForPlan, 500); }
+        }, 500);
+        setTimeout(() => clearInterval(poll), 300000);
+      }
+    }, 900);
+  });
+})();
