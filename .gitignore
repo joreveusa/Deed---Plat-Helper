@@ -38,6 +38,11 @@ dev-data/
 Thumbs.db
 .DS_Store
 
+# Security — never commit these
+github-recovery-codes.txt
+*recovery-codes*.txt
+*.recovery
+
 # Logs
 *.log
 server.log

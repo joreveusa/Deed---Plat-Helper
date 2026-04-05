@@ -100,6 +100,15 @@ setup_tesseract()
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
+# ── Security configuration ────────────────────────────────────────────────────
+_is_production = os.environ.get("DEED_APP_URL", "").startswith("https://")
+app.config.update(
+    SECRET_KEY=os.environ.get("DEED_SECRET_KEY", "dev-insecure-key-change-me"),
+    SESSION_COOKIE_SECURE=_is_production,      # HTTPS-only cookies in prod
+    SESSION_COOKIE_HTTPONLY=True,              # JS cannot read session cookies
+    SESSION_COOKIE_SAMESITE="Lax",            # CSRF mitigation
+)
+
 # ── Register Blueprints ───────────────────────────────────────────────────────
 from routes.auth import auth_bp
 from routes.stripe import stripe_bp, init_stripe
@@ -539,14 +548,38 @@ def serve_css():
 def serve_favicon():
     return send_from_directory(".", "favicon.png")
 
+
+@app.route("/robots.txt")
+def robots_txt():
+    """Block search engine crawlers from API, auth, and admin routes."""
+    content = (
+        "User-agent: *\n"
+        "Disallow: /api/\n"
+        "Disallow: /auth/\n"
+        "Disallow: /admin/\n"
+        "Disallow: /api/admin/\n"
+        "Disallow: /api/stripe/\n"
+        "Allow: /\n"
+    )
+    return app.response_class(content, mimetype="text/plain")
+
 @app.after_request
-def add_no_cache(response):
-    """Prevent browser from caching any local dev files.
-    Skips responses that already have explicit cache-control set (e.g. PDF preview)."""
+def add_security_headers(response):
+    """Add HTTP security headers and no-cache directives to every response."""
+    # ── Cache control ────────────────────────────────────────────────────────
     if "max-age" not in response.headers.get("Cache-Control", ""):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    # ── Security headers ─────────────────────────────────────────────────────
+    response.headers["X-Content-Type-Options"] = "nosniff"            # Prevent MIME sniffing
+    response.headers["X-Frame-Options"] = "DENY"                      # Clickjacking protection
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if _is_production:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"                      # Force HTTPS for 1 year
+        )
     return response
 
 # ── SaaS Auth routes → moved to routes/auth.py Blueprint ─────────────────────

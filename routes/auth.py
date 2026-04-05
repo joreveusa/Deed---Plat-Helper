@@ -8,6 +8,9 @@ Extracted from app.py for maintainability.
 import os
 import traceback
 
+# Cookie is HTTPS-only in production to prevent token theft over HTTP
+_is_production = os.environ.get("DEED_APP_URL", "").startswith("https://")
+
 from flask import Blueprint, request, jsonify, send_from_directory, g
 
 from helpers.auth import (
@@ -39,7 +42,7 @@ def register():
         token = generate_token(user["id"])
         resp  = jsonify({"success": True, "user": public_user(user)})
         resp.set_cookie("deed_token", token, max_age=60*60*24*30,
-                        httponly=True, samesite="Lax")
+                        httponly=True, samesite="Lax", secure=_is_production)
         # Send welcome email + notify admin (fire & forget)
         try:
             from helpers.email_utils import send_welcome, send_admin_new_user_notification
@@ -97,7 +100,7 @@ def login():
 @auth_bp.route("/auth/logout", methods=["POST"])
 def logout():
     resp = jsonify({"success": True})
-    resp.delete_cookie("deed_token")
+    resp.delete_cookie("deed_token", secure=_is_production)
     return resp
 
 
