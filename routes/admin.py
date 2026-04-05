@@ -125,3 +125,29 @@ def config_import():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── County Registry ───────────────────────────────────────────────────────────
+
+from helpers.county_registry import search_counties, get_county, get_all_counties
+
+
+@admin_bp.route("/api/county-registry", methods=["GET"])
+def county_registry():
+    """Return all counties in the registry (lightweight list for search UI)."""
+    q = request.args.get("q", "").strip()
+    if q:
+        results = search_counties(q)
+    else:
+        results = get_all_counties()
+    return jsonify({"success": True, "counties": results, "count": len(results)})
+
+
+@admin_bp.route("/api/county-registry/<fips>", methods=["GET"])
+def county_detail(fips: str):
+    """Return the full county entry (including ArcGIS URL + field map) by FIPS."""
+    county = get_county(fips)
+    if not county:
+        return jsonify({"success": False, "error": f"County FIPS {fips!r} not in registry"})
+    return jsonify({"success": True, "county": county})
+
