@@ -214,3 +214,17 @@ def usage():
 def reset_password_page():
     """Serve the SPA for /reset-password?token= links sent in emails."""
     return send_from_directory(".", "index.html")
+
+
+# ── Legal pages ───────────────────────────────────────────────────────────────
+
+@auth_bp.route("/terms")
+def terms_page():
+    """Terms of Service page."""
+    return send_from_directory(".", "terms.html")
+
+
+@auth_bp.route("/privacy")
+def privacy_page():
+    """Privacy Policy page."""
+    return send_from_directory(".", "privacy.html")
