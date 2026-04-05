@@ -114,14 +114,16 @@ class TestLogin:
 class TestSessionIsolation:
     def test_different_profiles_get_different_sessions(self):
         """Two different profile_ids should produce different session objects."""
-        s1 = app_module._get_web_session("user_a")
-        s2 = app_module._get_web_session("user_b")
+        from services.portal import _get_web_session
+        s1 = _get_web_session("user_a")
+        s2 = _get_web_session("user_b")
         assert s1 is not s2
 
     def test_same_profile_gets_same_session(self):
         """Same profile_id should always return the same session object."""
-        s1 = app_module._get_web_session("user_same")
-        s2 = app_module._get_web_session("user_same")
+        from services.portal import _get_web_session
+        s1 = _get_web_session("user_same")
+        s2 = _get_web_session("user_same")
         assert s1 is s2
 
     def test_session_respects_cookie(self, client_with_profile):
