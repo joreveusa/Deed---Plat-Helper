@@ -1412,21 +1412,51 @@ function renderPropertyDescriptionCard(desc) {
     html += `<div class="prop-desc-stats">${stats.join('')}</div>`;
   }
 
-  // Legal description text
+  // Legal description text with color-coded bearing/distance cross-links
   const legalText = desc.legal_description || desc.full_text || '';
   if (legalText) {
-    // Highlight bearing calls in the text
+    const segColors = [
+      '#4fc3f7','#81c784','#ffb74d','#e57373','#ba68c8','#4dd0e1',
+      '#aed581','#ff8a65','#f06292','#7986cb','#a1887f','#90a4ae'
+    ];
     let displayText = escHtml(legalText);
-    // Highlight bearing patterns
-    displayText = displayText.replace(
-      /([NS]\s*\d{1,3}[°\s]\d{0,2}[\'\s]\d{0,2}[\"\s]*[EW])/gi,
-      '<span class="bearing-highlight">$1</span>'
-    );
-    // Highlight distances
-    displayText = displayText.replace(
-      /(\d+\.?\d*)\s*(?:feet|foot|ft|&#39;)/gi,
-      '<span class="distance-highlight">$1 ft</span>'
-    );
+    if (desc.calls?.length) {
+      // Color-coded: match each call's bearing in text, wrap with interactive span
+      let callIdx = 0;
+      for (const call of desc.calls) {
+        if (!call.bearing) { callIdx++; continue; }
+        const color = segColors[callIdx % segColors.length];
+        const bearingEsc = call.bearing.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
+        const bearingRe = new RegExp('(' + bearingEsc + ')', 'i');
+        const match = displayText.match(bearingRe);
+        if (match) {
+          const idx = displayText.indexOf(match[0]);
+          if (idx >= 0) {
+            const afterBearing = displayText.substring(idx + match[0].length, idx + match[0].length + 80);
+            const distMatch = afterBearing.match(/(\d+[\d,]*\.?\d*)\s*(?:feet|foot|ft|')/i);
+            const bearingSpan = `<span class="bearing-highlight call-text-link" data-call-idx="${callIdx}" style="color:${color};border-bottom:2px solid ${color}" onmouseenter="highlightBoundarySegment(${callIdx})" onmouseleave="clearBoundaryHighlight()">${match[0]}</span>`;
+            displayText = displayText.substring(0, idx) + bearingSpan + displayText.substring(idx + match[0].length);
+            if (distMatch) {
+              const distSpan = `<span class="distance-highlight call-text-link" data-call-idx="${callIdx}" style="color:${color}" onmouseenter="highlightBoundarySegment(${callIdx})" onmouseleave="clearBoundaryHighlight()">${distMatch[0]}</span>`;
+              const insertPos = displayText.indexOf(distMatch[0], idx + bearingSpan.length);
+              if (insertPos >= 0) {
+                displayText = displayText.substring(0, insertPos) + distSpan + displayText.substring(insertPos + distMatch[0].length);
+              }
+            }
+          }
+        }
+        callIdx++;
+      }
+    } else {
+      displayText = displayText.replace(
+        /([NS]\s*\d{1,3}[°\s]\d{0,2}[\'\s]\d{0,2}[\"\s]*[EW])/gi,
+        '<span class="bearing-highlight">$1</span>'
+      );
+      displayText = displayText.replace(
+        /(\d+\.?\d*)\s*(?:feet|foot|ft|&#39;)/gi,
+        '<span class="distance-highlight">$1 ft</span>'
+      );
+    }
 
     html += `<div class="prop-desc-text-wrap">
       <div class="prop-desc-text" id="propDescText">${displayText}</div>
@@ -1735,12 +1765,15 @@ function renderBoundaryPlot(desc) {
 }
 
 /**
- * Highlight a boundary segment and its corresponding table row.
+ * Highlight a boundary segment, its table row, and its text span.
  */
 function highlightBoundarySegment(idx) {
+  // Clear previous highlights
   document.querySelectorAll('.plot-segment.active').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.call-row.active').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.call-text-link.call-text-active').forEach(el => el.classList.remove('call-text-active'));
 
+  // SVG segment
   const seg = document.querySelector(`.plot-segment[data-idx="${idx}"]`);
   if (seg) {
     seg.classList.add('active');
@@ -1748,15 +1781,33 @@ function highlightBoundarySegment(idx) {
     document.querySelectorAll('.plot-segment:not(.active)').forEach(el => el.setAttribute('stroke-width', '2.5'));
   }
 
+  // Table row
   const row = document.querySelector(`.call-row[data-call-idx="${idx}"]`);
   if (row) {
     row.classList.add('active');
     row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
+  // Text spans in legal description
+  document.querySelectorAll(`.call-text-link[data-call-idx="${idx}"]`).forEach(el => {
+    el.classList.add('call-text-active');
+  });
+
+  // Dim non-active plot labels
   document.querySelectorAll('.plot-label, .plot-dist-label').forEach(el => {
     el.setAttribute('opacity', el.dataset.idx == idx ? '1' : '0.4');
   });
+}
+
+/** Clear all boundary cross-link highlights (called on mouseleave). */
+function clearBoundaryHighlight() {
+  document.querySelectorAll('.plot-segment.active').forEach(el => {
+    el.classList.remove('active');
+    el.setAttribute('stroke-width', '2.5');
+  });
+  document.querySelectorAll('.call-row.active').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.call-text-link.call-text-active').forEach(el => el.classList.remove('call-text-active'));
+  document.querySelectorAll('.plot-label, .plot-dist-label').forEach(el => el.setAttribute('opacity', '0.8'));
 }
 
 /** Calculate a nice grid step size for the plot. */

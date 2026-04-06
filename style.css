@@ -2356,6 +2356,36 @@ body, body * {
   padding: 0 3px;
 }
 
+/* Interactive cross-link text spans */
+.call-text-link {
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s, transform 0.15s;
+  border-radius: 3px;
+  padding: 1px 3px;
+  position: relative;
+}
+.call-text-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.15);
+}
+.call-text-link.call-text-active {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 10px currentColor;
+  transform: scale(1.03);
+  font-weight: 800;
+}
+.call-row.active {
+  background: rgba(79, 172, 254, 0.08) !important;
+}
+.call-color-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
 .prop-desc-toggle {
   margin-top: 8px;
   font-size: 11px !important;
