@@ -9,6 +9,47 @@ import math
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# UNIT CONVERSION  (all → feet)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_UNIT_TO_FEET = {
+    "feet":   1.0,
+    "foot":   1.0,
+    "ft":     1.0,
+    "yards":  3.0,
+    "yard":   3.0,
+    "yd":     3.0,
+    "chains": 66.0,
+    "chain":  66.0,
+    "ch":     66.0,
+    "poles":  16.5,
+    "pole":   16.5,
+    "rods":   16.5,
+    "rod":    16.5,
+    "rd":     16.5,
+    "links":  0.66,
+    "link":   0.66,
+    "lk":     0.66,
+    "meters": 3.28084,
+    "meter":  3.28084,
+    "m":      3.28084,
+    "varas":  2.7778,    # NM vara — critical for old NM land grant deeds
+    "vara":   2.7778,
+    "v":      2.7778,    # shorthand common in old plats
+}
+
+# Regex fragment for matching unit names after a distance value
+_UNIT_RE_FRAGMENT = r'(?:feet|foot|ft|yards?|yd|chains?|ch|poles?|rods?|rd|links?|lk|meters?|m|varas?|v(?=\b))'
+
+
+def _to_feet(value: float, unit: str) -> float:
+    """Convert a distance value in the given unit to feet."""
+    unit = (unit or "feet").lower().strip().rstrip(".")
+    factor = _UNIT_TO_FEET.get(unit, 1.0)
+    return value * factor
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # BEARING / DISTANCE REGEX PATTERNS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -25,7 +66,7 @@ _BEARING_PAT = re.compile(
     r'([EW])\b'                                     # E or W
     r'[,\s]*'
     r'([\d,]+\.?\d*)'                               # distance
-    r'\s*(?:feet|foot|ft|\')?',
+    r'\s*(' + _UNIT_RE_FRAGMENT + r'|\')?',
     re.IGNORECASE
 )
 
@@ -38,7 +79,7 @@ _BEARING_VERBOSE = re.compile(
     r'([EW])\b'
     r'[,\s]*'
     r'([\d,]+\.?\d*)'
-    r'\s*(?:feet|foot|ft|\')?',
+    r'\s*(' + _UNIT_RE_FRAGMENT + r'|\')?',
     re.IGNORECASE
 )
 
@@ -235,7 +276,9 @@ def parse_metes_bounds(text: str) -> list[dict]:
         mn   = float(m.group(3)) if m.group(3) else 0.0
         sec  = float(m.group(4)) if m.group(4) else 0.0
         ew   = m.group(5).upper()
-        dist = float(m.group(6).replace(',', ''))
+        raw_dist = float(m.group(6).replace(',', ''))
+        unit_str = (m.group(7) or "feet").strip().rstrip(".")
+        dist = _to_feet(raw_dist, unit_str)
 
         azimuth = _bearing_to_azimuth(ns, deg, mn, sec, ew)
 
@@ -248,11 +291,16 @@ def parse_metes_bounds(text: str) -> list[dict]:
         label_parts.append(ew)
         label = " ".join(label_parts)
 
+        # Unit annotation if not feet
+        unit_label = unit_str if unit_str.lower() not in ("feet", "foot", "ft", "'") else ""
+
         calls.append({
             "type":          "straight",
             "bearing_label": label,
             "bearing_raw":   m.group(0).strip(),
             "distance":      dist,
+            "raw_distance":  raw_dist,
+            "unit":          unit_label or "ft",
             "azimuth_deg":   round(azimuth, 6),
             "ns": ns, "deg": deg, "min": mn, "sec": sec, "ew": ew,
             "pos":           m.start(),
@@ -269,7 +317,9 @@ def parse_metes_bounds(text: str) -> list[dict]:
         mn   = float(m.group(3)) if m.group(3) else 0.0
         sec  = float(m.group(4)) if m.group(4) else 0.0
         ew   = m.group(5).upper()
-        dist = float(m.group(6).replace(',', ''))
+        raw_dist = float(m.group(6).replace(',', ''))
+        unit_str = (m.group(7) or "feet").strip().rstrip(".")
+        dist = _to_feet(raw_dist, unit_str)
 
         azimuth = _bearing_to_azimuth(ns, deg, mn, sec, ew)
 
@@ -281,11 +331,15 @@ def parse_metes_bounds(text: str) -> list[dict]:
         label_parts.append(ew)
         label = " ".join(label_parts)
 
+        unit_label = unit_str if unit_str.lower() not in ("feet", "foot", "ft", "'") else ""
+
         calls.append({
             "type":          "straight",
             "bearing_label": label,
             "bearing_raw":   m.group(0).strip(),
             "distance":      dist,
+            "raw_distance":  raw_dist,
+            "unit":          unit_label or "ft",
             "azimuth_deg":   round(azimuth, 6),
             "ns": ns, "deg": deg, "min": mn, "sec": sec, "ew": ew,
             "pos":           m.start(),

@@ -83,7 +83,6 @@ from helpers.deed_analysis import (
     isolate_legal_description as _isolate_legal_description_impl,
 )
 from helpers.dxf import generate_boundary_dxf as _generate_dxf_impl
-<<<<<<< HEAD
 from helpers.legal_similarity import search_similar_descriptions as _search_similar_descriptions
 from helpers.research_analytics import (
     get_analytics as _get_research_analytics,
@@ -91,7 +90,6 @@ from helpers.research_analytics import (
     predict_job_complexity as _predict_job_complexity,
     scan_all_research as _scan_all_research,
 )
-=======
 from helpers.county_registry import search_counties, get_county, get_all_counties
 
 # Stripe billing (optional — import gracefully so app works without stripe installed)
@@ -104,7 +102,6 @@ try:
 except ImportError:
     _STRIPE_AVAILABLE = False
     create_checkout_session = create_customer_portal_session = handle_webhook = None
->>>>>>> origin/main
 
 # Point pytesseract at the Tesseract binary (delegated to helpers/pdf_extract.py)
 setup_tesseract()
@@ -4621,6 +4618,9 @@ def api_extract_deed_description():
                     "bearing": c.get("bearing_label", ""),
                     "distance": c.get("distance", 0),
                     "raw": c.get("bearing_raw", ""),
+                    "azimuth": c.get("azimuth_deg", 0),
+                    "unit": c.get("unit", "ft"),
+                    "raw_distance": c.get("raw_distance", c.get("distance", 0)),
                 })
             elif c.get("type") == "curve":
                 calls_formatted.append({
@@ -4629,6 +4629,20 @@ def api_extract_deed_description():
                     "raw": c.get("bearing_raw", ""),
                     "curve": True,
                 })
+
+        # ── 6. Closure error calculation ──────────────────────────────────
+        closure_err = 0.0
+        closure_ratio = ""
+        if len(pts) >= 2:
+            closure_err = round(
+                math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]), 4
+            )
+            if closure_err > 0.001 and perimeter > 0:
+                ratio = perimeter / closure_err
+                closure_ratio = f"1:{int(ratio)}"
+
+        # Coordinates for the frontend boundary plotter (list of [x, y])
+        coords = [[round(p[0], 4), round(p[1], 4)] for p in pts]
 
         return jsonify({
             "success": True,
@@ -4639,6 +4653,9 @@ def api_extract_deed_description():
                 "trs_refs":          [t["trs"] for t in trs_refs],
                 "calls_count":       len(calls),
                 "calls":             calls_formatted[:100],
+                "coords":            coords,
+                "closure_err":       closure_err,
+                "closure_ratio":     closure_ratio,
                 "desc_type":         desc_type,
                 "grantor":           grantor,
                 "grantee":           grantee,
