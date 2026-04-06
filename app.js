@@ -317,9 +317,9 @@ function _getAbortSignal(key) {
   return _abortControllers[key].signal;
 }
 
-// 
+//
 // INIT & BOOTSTRAP
-// 
+//
 document.addEventListener("DOMContentLoaded", async () => {
   // Initialize profile system — restores saved profile or prompts user
   await _initProfiles();
@@ -358,15 +358,29 @@ async function loadConfig() {
       if (res.config.firstnm_pass) document.getElementById("cfgPass").value = res.config.firstnm_pass;
       if (res.config.firstnm_url) document.getElementById("cfgUrl").value = res.config.firstnm_url;
       state.lastSession = res.config.last_session;
+
+      // Update the Step 3 badge to show the user's configured portal hostname
+      const badge = document.getElementById("s3OnlineBadge");
+      if (badge && res.config.firstnm_url) {
+        try {
+          const hostname = new URL(res.config.firstnm_url).hostname.replace(/^www\./, '');
+          badge.textContent = hostname;
+        } catch (_) { /* malformed URL, keep default */ }
+      }
+
+      // Populate the ArcGIS parcel layer section
+      if (res.config.arcgis_url !== undefined) {
+        _populateArcgisUI(res.config);
+      }
     }
   } catch (e) {
     console.error("Config load failed", e);
   }
 }
 
-// 
+//
 // WORKFLOW STEPPER LOGIC
-// 
+//
 function goToStep(step) {
   if (step > 1 && !state.researchSession) {
     showToast("Please start a research session first", "warn");
@@ -460,9 +474,9 @@ function updateJobContext() {
   updateFileBadges();
 }
 
-// 
+//
 // STEP 1: JOB SETUP
-// 
+//
 async function startSession() {
   const numInput = document.getElementById("setupJobNum").value;
   const num = parseInt(numInput) || state.nextJobNum;
@@ -692,16 +706,16 @@ function _safeCloneSession(session) {
     return safe;
   }
 }
-// 
+//
 // STEP 2: CLIENT DEED
-// 
+//
 async function doStep2Search(sortBy) {
   const name = document.getElementById("s2SearchName").value.trim();
   const op = document.getElementById("s2SearchOp").value;
   const sort = sortBy || (document.getElementById("s2SortBy")?.value) || "relevance";
 
   if (!state.loggedIn) {
-    showToast("Not connected to 1stNMTitle — click Settings to log in", "warn");
+    showToast("Not connected to County Records portal — click Settings to connect", "warn");
     await checkLogin();
     if (!state.loggedIn) return;
   }
@@ -1974,7 +1988,7 @@ async function doStep3Search() {
   // Set all columns to loading state
   locCards.innerHTML = noDeedBanner + '<div class="loading-state">Identifying target cabinet...</div>';
   if (kmlCards) kmlCards.innerHTML = '<div class="loading-state">Querying KML parcel index...</div>';
-  onlCards.innerHTML = '<div class="loading-state">Searching 1stnmtitle.com...</div>';
+  onlCards.innerHTML = '<div class="loading-state">Searching county records portal...</div>';
 
   // ── A: Instant deed parse (returns cabinet refs, zero I/O) ────────────────
   let cabRefs = [];
@@ -2547,9 +2561,9 @@ async function saveClientPlatOnline(docNo, loc) {
   }
 }
 
-// 
+//
 // STEP 4: ADJOINER DISCOVERY
-// 
+//
 /**
  * Fire-and-forget: pre-scan adjoiners in the background after plat save.
  * Results are cached in state._prefetchedAdjoiners so Step 4 renders instantly.
@@ -2975,9 +2989,9 @@ async function saveFromCabinetBrowser(filePath, filename) {
     showToast('Error: ' + e.message, 'error');
   }
 }
-// 
+//
 // STEP 5: ADJOINER RESEARCH BOARD
-// 
+//
 function renderResearchBoard() {
   const grid = document.getElementById("s5ResearchGrid");
   const rs = state.researchSession;
@@ -3193,7 +3207,11 @@ function buildChainTracker(s) {
   </div>`;
 }
 
+<<<<<<< HEAD
 //  Search from board — now opens inline deed pick modal instead of navigating away
+=======
+//  Search from board
+>>>>>>> origin/main
 function searchForSubject(name) {
   // Find the subject by name and use the inline deed search modal
   const rs = state.researchSession;
@@ -3591,7 +3609,7 @@ async function _pickAdjPlatOnline(subjId, idx) {
   } catch (e) { showToast('Error: ' + e.message, 'error'); }
 }
 
-//  Board persistence helpers 
+//  Board persistence helpers
 async function removeSubject(id) {
   state.researchSession.subjects = state.researchSession.subjects.filter(s => s.id !== id);
   await persistSession();
@@ -3948,9 +3966,9 @@ function openFile(filePath) {
     .then(r => { if (!r.success) showToast("File not found", "error"); })
     .catch(() => showToast("Could not open file", "error"));
 }
-// 
+//
 // STEP 6: BOUNDARY LINES (DXF)
-// 
+//
 function switchS6Tab(tab) {
   ["calls", "parcels", "options"].forEach(t => {
     document.getElementById(`s6Tab${t.charAt(0).toUpperCase() + t.slice(1)}`)?.classList.toggle("hidden", t !== tab);
@@ -4094,7 +4112,7 @@ function recalcS6Closure() {
   }
 }
 
-//  Parcels (Adjoiner boundaries) 
+//  Parcels (Adjoiner boundaries)
 function renderS6ParcelList() {
   const wrap = document.getElementById("s6ParcelList");
   let html = `
@@ -4196,7 +4214,7 @@ async function extractCallsFromPdf(idx, pdfPath) {
   }
 }
 
-//  DXF Generation 
+//  DXF Generation
 async function doGenerateDxf() {
   const rs = state.researchSession;
   if (!rs) { showToast("Load a session first", "warn"); return; }
@@ -4246,7 +4264,7 @@ async function doGenerateDxf() {
   }
 }
 
-//  SVG Sketch 
+//  SVG Sketch
 function updateS6Sketch() {
   const calls = state.parsedCalls;
   const sketchWrap = document.getElementById("s6SketchWrap");
@@ -4311,9 +4329,9 @@ function updateS6Sketch() {
   s += `<polygon points="${W - 16},26 ${W - 20},34 ${W - 12},34" fill="#79a8e0"/>`;
   svg.innerHTML = s;
 }
-// 
+//
 // SETTINGS MODAL
-// 
+//
 function showSettingsModal() {
   document.getElementById("settingsOverlay").classList.remove("hidden");
   loadDriveStatus(); // refresh drive status every time modal opens
@@ -4388,7 +4406,7 @@ async function pinDrive(clear = false) {
 }
 
 async function saveConfig() {
-  const url = document.getElementById("cfgUrl").value.trim();
+  const url  = document.getElementById("cfgUrl").value.trim();
   const user = document.getElementById("cfgUser").value.trim();
   const pass = document.getElementById("cfgPass").value;
   const status = document.getElementById("cfgStatus");
@@ -4400,10 +4418,17 @@ async function saveConfig() {
   btn.innerHTML = "Connecting...";
   status.textContent = "";
 
+  // Collect ArcGIS config — only include if the user has actually filled in the URL
+  // so we don't silently wipe a previously saved ArcGIS config when the section wasn't touched
+  const arcgisUrl = (document.getElementById('arcgisUrl')?.value || '').trim();
+  const payload = { firstnm_url: url, firstnm_user: user, firstnm_pass: pass };
+  if (arcgisUrl) {
+    payload.arcgis_url    = arcgisUrl;
+    payload.arcgis_fields = _collectArcgisFields();
+  }
+
   try {
-    const res = await apiFetch("/config", "POST", {
-      firstnm_url: url, firstnm_user: user, firstnm_pass: pass
-    });
+    const res = await apiFetch("/config", "POST", payload);
     if (!res.success) { showToast("Config save failed: " + res.error, "error"); return; }
 
     // Now login
@@ -4427,9 +4452,278 @@ async function saveConfig() {
   }
 }
 
-// 
+// ── ArcGIS Parcel Layer config helpers ────────────────────────────────────────
+
+// Tracks the fields discovered from the layer probe
+let _arcgisDiscoveredFields = [];
+// Cache of presets from the server
+let _arcgisPresets = {};
+
+/** Toggle the ArcGIS collapsible section */
+function toggleArcgisSection() {
+  const section  = document.getElementById('arcgisSection');
+  const chevron  = document.getElementById('arcgisSectionChevron');
+  const isOpen   = section.style.display !== 'none';
+  section.style.display = isOpen ? 'none' : 'block';
+  chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
+/** Populate ArcGIS fields in the Settings modal after loadConfig */
+function _populateArcgisUI(cfg) {
+  const urlEl = document.getElementById('arcgisUrl');
+  if (!urlEl) return;
+
+  // Cache presets for applyArcgisPreset
+  if (cfg.arcgis_presets) {
+    for (const p of cfg.arcgis_presets) _arcgisPresets[p.id] = p;
+    // Populate preset dropdown with server presets
+    const sel = document.getElementById('arcgisPreset');
+    if (sel && sel.options.length <= 2) {  // don't duplicate
+      for (const p of cfg.arcgis_presets) {
+        if (!Array.from(sel.options).find(o => o.value === p.id)) {
+          const opt = document.createElement('option');
+          opt.value = p.id; opt.textContent = p.label;
+          sel.appendChild(opt);
+        }
+      }
+    }
+  }
+
+  urlEl.value = cfg.arcgis_url || '';
+  const fields = cfg.arcgis_fields || {};
+
+  // Update the "default" badge
+  const badge = document.getElementById('arcgisDefaultBadge');
+  if (badge) badge.style.display = cfg.arcgis_is_default ? '' : 'none';
+
+  // If fields are already discovered, populate the dropdowns
+  if (_arcgisDiscoveredFields.length) {
+    _fillArcgisDropdowns(fields);
+  } else {
+    // Populate dropdowns with just the currently configured values as single options
+    // so the form is readable without requiring a Discover click
+    _setDropdownToValue('arcgisFieldParcelId', fields.parcel_id   || '');
+    _setDropdownToValue('arcgisFieldOwner',     fields.owner       || '');
+    _setDropdownToValue('arcgisFieldAddress',   fields.address_all || '');
+    _setDropdownToValue('arcgisFieldSubdiv',    fields.subdivision || '');
+    _setDropdownToValue('arcgisFieldTownship',  fields.township    || '');
+    _setDropdownToValue('arcgisFieldTwpDir',    fields.twp_dir     || '');
+    _setDropdownToValue('arcgisFieldRange',     fields.range       || '');
+    _setDropdownToValue('arcgisFieldRngDir',    fields.rng_dir     || '');
+    _setDropdownToValue('arcgisFieldSection',   fields.section     || '');
+  }
+}
+
+function _setDropdownToValue(id, value) {
+  const sel = document.getElementById(id);
+  if (!sel || !value) return;
+  // If option doesn't exist yet, add it
+  if (!Array.from(sel.options).find(o => o.value === value)) {
+    const opt = document.createElement('option');
+    opt.value = value; opt.textContent = value;
+    sel.appendChild(opt);
+  }
+  sel.value = value;
+}
+
+/** Apply a preset — fills the URL and field dropdowns */
+function applyArcgisPreset(presetId) {
+  if (!presetId) return;
+  const preset = _arcgisPresets[presetId];
+  if (!preset) return;
+  const urlEl = document.getElementById('arcgisUrl');
+  if (urlEl) urlEl.value = preset.url;
+  // Immediately re-run discover to get live fields
+  discoverArcgisFields();
+}
+
+/** Probe the ArcGIS layer URL and auto-populate the dropdowns */
+async function discoverArcgisFields() {
+  const url = (document.getElementById('arcgisUrl')?.value || '').trim();
+  if (!url) { showToast('Paste a layer URL first', 'warn'); return; }
+
+  const btn = document.getElementById('btnArcgisDiscover');
+  const infoEl = document.getElementById('arcgisLayerInfo');
+  btn.disabled = true;
+  btn.textContent = '⏳ Probing...';
+  if (infoEl) { infoEl.style.display = 'none'; infoEl.textContent = ''; }
+
+  try {
+    const res = await apiFetch('/arcgis-discover', 'POST', { url });
+    if (!res.success) {
+      showToast('Discover failed: ' + res.error, 'error');
+      return;
+    }
+
+    _arcgisDiscoveredFields = res.fields || [];
+
+    // Show layer info banner
+    if (infoEl && res.layer_info) {
+      const li = res.layer_info;
+      infoEl.style.display = '';
+      infoEl.innerHTML =
+        `<strong style="color:var(--text1)">${escHtml(li.name || 'Layer')}</strong>` +
+        (li.geometry_type ? ` &nbsp;·&nbsp; <span>${li.geometry_type}</span>` : '') +
+        `<br><span style="color:#56d3a0;font-family:monospace;font-size:10px">${escHtml(res.query_url)}</span>` +
+        `<br>${_arcgisDiscoveredFields.length} fields found.`;
+    }
+
+    // Read current field values to pre-select them
+    const cfg = {
+      parcel_id:   document.getElementById('arcgisFieldParcelId')?.value  || '',
+      owner:       document.getElementById('arcgisFieldOwner')?.value      || '',
+      address_all: document.getElementById('arcgisFieldAddress')?.value   || '',
+      subdivision: document.getElementById('arcgisFieldSubdiv')?.value    || '',
+      township:    document.getElementById('arcgisFieldTownship')?.value   || '',
+      twp_dir:     document.getElementById('arcgisFieldTwpDir')?.value     || '',
+      range:       document.getElementById('arcgisFieldRange')?.value      || '',
+      rng_dir:     document.getElementById('arcgisFieldRngDir')?.value     || '',
+      section:     document.getElementById('arcgisFieldSection')?.value    || '',
+    };
+    _fillArcgisDropdowns(cfg);
+    showToast(`✓ Found ${_arcgisDiscoveredFields.length} fields — check the mapping below`, 'success');
+  } catch (e) {
+    showToast('Discover error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🔍 Discover';
+  }
+}
+
+/** Populate the field-mapping dropdowns from _arcgisDiscoveredFields */
+function _fillArcgisDropdowns(currentValues) {
+  const selectors = {
+    arcgisFieldParcelId: currentValues.parcel_id,
+    arcgisFieldOwner:    currentValues.owner,
+    arcgisFieldAddress:  currentValues.address_all,
+    arcgisFieldSubdiv:   currentValues.subdivision,
+    arcgisFieldTownship: currentValues.township,
+    arcgisFieldTwpDir:   currentValues.twp_dir,
+    arcgisFieldRange:    currentValues.range,
+    arcgisFieldRngDir:   currentValues.rng_dir,
+    arcgisFieldSection:  currentValues.section,
+  };
+
+  for (const [selId, curVal] of Object.entries(selectors)) {
+    const sel = document.getElementById(selId);
+    if (!sel) continue;
+    // Rebuild options
+    sel.innerHTML = '<option value="">(none)</option>';
+    for (const f of _arcgisDiscoveredFields) {
+      const opt = document.createElement('option');
+      opt.value = f.name;
+      opt.textContent = f.alias !== f.name ? `${f.name} (${f.alias})` : f.name;
+      sel.appendChild(opt);
+    }
+    // Auto-select best match: exact current value, or heuristic
+    if (curVal && Array.from(sel.options).find(o => o.value === curVal)) {
+      sel.value = curVal;
+    } else {
+      // Heuristic: find a field whose name contains key keywords
+      const hints = {
+        arcgisFieldParcelId: ['parcel', 'apn', 'upc', 'pid', 'id', 'number'],
+        arcgisFieldOwner:    ['owner', 'own', 'name'],
+        arcgisFieldAddress:  ['situs', 'address', 'addr', 'site'],
+        arcgisFieldSubdiv:   ['subdiv', 'sub', 'plat'],
+        arcgisFieldTownship: ['township', 'twp'],
+        arcgisFieldTwpDir:   ['twpdir', 'twp_dir', 'townshipdir', 'tdir'],
+        arcgisFieldRange:    ['range', 'rng'],
+        arcgisFieldRngDir:   ['rngdir', 'rng_dir', 'rangedir', 'rdir'],
+        arcgisFieldSection:  ['section', 'sec'],
+      };
+      const keywords = hints[selId] || [];
+      const match = _arcgisDiscoveredFields.find(f =>
+        keywords.some(k => f.name.toLowerCase().includes(k))
+      );
+      if (match) sel.value = match.name;
+    }
+  }
+}
+
+/** Collect the current ArcGIS field mapping from the dropdowns */
+function _collectArcgisFields() {
+  return {
+    parcel_id:   document.getElementById('arcgisFieldParcelId')?.value  || '',
+    owner:       document.getElementById('arcgisFieldOwner')?.value      || '',
+    address_all: document.getElementById('arcgisFieldAddress')?.value   || '',
+    subdivision: document.getElementById('arcgisFieldSubdiv')?.value    || '',
+    township:    document.getElementById('arcgisFieldTownship')?.value   || '',
+    twp_dir:     document.getElementById('arcgisFieldTwpDir')?.value     || '',
+    range:       document.getElementById('arcgisFieldRange')?.value      || '',
+    rng_dir:     document.getElementById('arcgisFieldRngDir')?.value     || '',
+    section:     document.getElementById('arcgisFieldSection')?.value    || '',
+  };
+}
+
+/** Run a test query against the configured layer */
+async function testArcgisConfig() {
+  const url      = (document.getElementById('arcgisUrl')?.value || '').trim();
+  const sampleId = (document.getElementById('arcgisSampleId')?.value || '').trim();
+  const fields   = _collectArcgisFields();
+  const resultEl = document.getElementById('arcgisTestResult');
+
+  if (!url) { showToast('Enter a layer URL first', 'warn'); return; }
+
+  const btn = document.getElementById('btnArcgisTest');
+  btn.disabled = true; btn.textContent = '⏳';
+  if (resultEl) { resultEl.style.display = 'none'; resultEl.innerHTML = ''; }
+
+  try {
+    const res = await apiFetch('/arcgis-test', 'POST', { url, fields, sample_id: sampleId });
+    if (!resultEl) return;
+    resultEl.style.display = '';
+
+    if (!res.success) {
+      resultEl.style.background = 'rgba(255,123,114,.1)';
+      resultEl.style.border = '1px solid rgba(255,123,114,.3)';
+      resultEl.style.color = '#ff7b72';
+      resultEl.innerHTML = `<strong>✗ Test failed:</strong> ${escHtml(res.error)}`;
+      return;
+    }
+
+    resultEl.style.background = 'rgba(86,211,160,.08)';
+    resultEl.style.border = '1px solid rgba(86,211,160,.25)';
+    resultEl.style.color = 'var(--text2)';
+
+    if (res.sample_result) {
+      // Full parcel lookup result
+      const r = res.sample_result;
+      resultEl.innerHTML =
+        `<strong style="color:#56d3a0">✓ Parcel found!</strong><br>` +
+        `<strong>Owner:</strong> ${escHtml(r.owner_official || '—')}<br>` +
+        `<strong>Address:</strong> ${escHtml(r.short_address || '—')}<br>` +
+        `<strong>TRS:</strong> ${escHtml(r.trs || '—')}<br>` +
+        `<strong>Subdivision:</strong> ${escHtml(r.subdivision || '—')}`;
+    } else if (res.matched_fields) {
+      // Generic field check
+      const rows = res.matched_fields.slice(0, 8).map(f =>
+        `<tr><td style="color:var(--text3);padding-right:8px">${escHtml(f.concept)}</td>` +
+        `<td style="font-family:monospace;color:#4facfe">${escHtml(f.field)}</td>` +
+        `<td style="color:var(--text1)">${escHtml(String(f.value).slice(0, 50))}</td></tr>`
+      ).join('');
+      resultEl.innerHTML =
+        `<strong style="color:#56d3a0">✓ Layer connected!</strong><br>` +
+        `<table style="margin-top:6px;width:100%;font-size:10px;border-collapse:collapse">${rows}</table>`;
+    }
+
+  } catch (e) {
+    if (resultEl) {
+      resultEl.style.display = '';
+      resultEl.style.background = 'rgba(255,123,114,.1)';
+      resultEl.style.border = '1px solid rgba(255,123,114,.3)';
+      resultEl.style.color = '#ff7b72';
+      resultEl.innerHTML = `<strong>✗ Error:</strong> ${escHtml(e.message)}`;
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = '✓ Test';
+  }
+}
+
+
+
+//
 // LOGIN & CONNECTION
-// 
+//
 async function checkLogin() {
   try {
     const url = document.getElementById("cfgUrl").value.trim();
@@ -4463,9 +4757,9 @@ function setStatusDot(mode, text) {
   if (span) span.textContent = text;
 }
 
-// 
+//
 // GLOBAL PROGRESS FOOTER
-// 
+//
 function updateGlobalProgress() {
   const rs = state.researchSession;
   if (!rs) return;
@@ -4486,9 +4780,9 @@ function updateGlobalProgress() {
   document.getElementById("globalProgressFill").style.width = pct + "%";
 }
 
-// 
+//
 // EXPORT
-// 
+//
 async function exportSession() {
   const rs = state.researchSession;
   if (!rs) { showToast("No session loaded", "warn"); return; }
@@ -6198,16 +6492,22 @@ function getTypeClass(type) {
   return "badge-other";
 }
 
-async function apiFetch(path, method = "GET", body = null, { signal } = {}) {
-  const opts = { method, headers: { "Content-Type": "application/json" } };
-  if (body) opts.body = JSON.stringify(body);
-  if (signal) opts.signal = signal;
-  const res = await fetch(API + path, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+// NOTE: apiFetch is defined in the SaaS section below (handles credentials + auth/upgrade intercepts)
+// This stub keeps hoisting intact for any calls before the SaaS block loads.
+async function apiFetch(path, method = 'GET', body = null, opts = {}) {
+  const fetchOpts = { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include' };
+  if (body) fetchOpts.body = JSON.stringify(body);
+  if (opts?.signal) fetchOpts.signal = opts.signal;
+  const res  = await fetch(API + path, fetchOpts);
+  const data = await res.json();
+  if (!res.ok) {
+    if (data.auth_required)    showAuthModal?.('login');
+    else if (data.upgrade_required) handleUpgradeRequired?.(data);
+  }
+  return data;
 }
 
-//  Toast 
+//  Toast
 let _toastEl;
 function showToast(msg, type = "info") {
   if (!_toastEl) {
@@ -6257,6 +6557,7 @@ _toastStyle.textContent = `
 `;
 document.head.appendChild(_toastStyle);
 
+<<<<<<< HEAD
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AI INSIGHTS PANEL — DASHBOARD & PREDICTIONS
@@ -6303,10 +6604,558 @@ async function refreshAiInsights() {
         staleText.textContent = `${h.newer_xml_files.length} KML file(s) are newer than the index`;
       } else {
         staleRow.classList.add('hidden');
+=======
+// ─────────────────────────────────────────────────────────────────────────────
+// SAAS AUTH — Login, Register, Account Badge, Upgrade Modal
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _saasUser = null;   // current logged-in SaaS user, or null
+
+/** Check if we have a valid SaaS session on page load. */
+async function initSaasAuth() {
+  try {
+    const res = await fetch('/auth/me', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) { _saasUser = data.user; _updateSaasBadge(); return; }
+    }
+  } catch (_) { }
+  // Not logged in — show Sign In button
+  _saasUser = null;
+  _updateSaasBadge();
+}
+
+/** Update the nav bar badge to reflect login state. */
+function _updateSaasBadge() {
+  const badge   = document.getElementById('saasBadge');
+  const loginBtn= document.getElementById('btnSaasLogin');
+  if (!badge || !loginBtn) return;
+
+  if (_saasUser) {
+    const email   = _saasUser.email || '';
+    const tier    = _saasUser.tier  || 'free';
+    const initials= email.slice(0,2).toUpperCase();
+    document.getElementById('saasAvatar').textContent   = initials;
+    document.getElementById('saasEmail').textContent    = email;
+    const tierEl = document.getElementById('saasTierBadge');
+    tierEl.textContent  = tier.charAt(0).toUpperCase() + tier.slice(1);
+    tierEl.className    = 'saas-tier-badge' + (tier !== 'free' ? ` tier-${tier}` : '');
+    badge.classList.remove('hidden');
+    loginBtn.style.display = 'none';
+    // Account dropdown — show the right action buttons based on tier
+    const upgradeBtn     = document.getElementById('acctMenuUpgrade');
+    const teamBtn        = document.getElementById('acctMenuTeamUpgrade');
+    const manageBillBtn  = document.getElementById('acctMenuManageBilling');
+    if (upgradeBtn)    upgradeBtn.style.display    = tier === 'free' ? '' : 'none';
+    if (teamBtn)       teamBtn.style.display       = tier === 'pro'  ? '' : 'none';
+    if (manageBillBtn) manageBillBtn.style.display = tier !== 'free' ? '' : 'none';
+  } else {
+    badge.classList.add('hidden');
+    loginBtn.style.display = '';
+  }
+  // Re-apply pro feature locks whenever session state changes
+  if (typeof _applyProFeatureLocks === 'function') _applyProFeatureLocks();
+  // Show/hide Team button in Settings footer based on tier
+  if (typeof _applyTeamVisibility === 'function') {
+    const tier = _saasUser?.tier || 'free';
+    const role = _saasUser?.team_role || null;
+    _applyTeamVisibility(tier, role);
+  }
+}
+
+/** Show the auth modal. mode = 'login' | 'register' | 'upgrade' */
+function showAuthModal(mode) {
+  document.getElementById('authOverlay').classList.remove('hidden');
+  switchAuthTab(mode === 'register' ? 'register' : 'login');
+  setTimeout(() => document.getElementById('authEmail')?.focus(), 100);
+}
+
+function closeAuthModal() {
+  document.getElementById('authOverlay').classList.add('hidden');
+  // Clear fields
+  ['authEmail','authPassword','authPasswordConfirm'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  document.getElementById('authError').classList.add('hidden');
+}
+
+function switchAuthTab(tab) {
+  const isRegister = tab === 'register';
+  document.getElementById('authTabLogin').classList.toggle('auth-tab-active', !isRegister);
+  document.getElementById('authTabRegister').classList.toggle('auth-tab-active', isRegister);
+  document.getElementById('authRegisterExtra').style.display = isRegister ? '' : 'none';
+  document.getElementById('btnAuthSubmit').textContent = isRegister ? 'Create Free Account' : 'Sign In';
+  document.getElementById('authModalTitle').textContent = isRegister ? '✨ Create Account' : '🔑 Sign In';
+  document.getElementById('authSwitchText').textContent = isRegister ? 'Already have an account?' : "Don't have an account?";
+  document.getElementById('authSwitchLink').textContent = isRegister ? 'Sign in' : 'Create one free';
+  document.getElementById('authError').classList.add('hidden');
+}
+
+async function doAuthSubmit() {
+  const isRegister = document.getElementById('authTabRegister').classList.contains('auth-tab-active');
+  const email      = (document.getElementById('authEmail')?.value || '').trim();
+  const password   = document.getElementById('authPassword')?.value || '';
+  const confirm    = document.getElementById('authPasswordConfirm')?.value || '';
+  const errEl      = document.getElementById('authError');
+  const btn        = document.getElementById('btnAuthSubmit');
+
+  errEl.classList.add('hidden');
+  if (!email || !password) { errEl.textContent = 'Email and password are required.'; errEl.classList.remove('hidden'); return; }
+  if (isRegister && password !== confirm) { errEl.textContent = 'Passwords do not match.'; errEl.classList.remove('hidden'); return; }
+
+  btn.disabled = true;
+  btn.textContent = isRegister ? 'Creating account…' : 'Signing in…';
+
+  try {
+    const endpoint = isRegister ? '/auth/register' : '/auth/login';
+    const res = await fetch(endpoint, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      _saasUser = data.user;
+      _updateSaasBadge();
+      closeAuthModal();
+      showToast(isRegister ? '✅ Account created! Welcome to Deed Helper.' : `Welcome back, ${email.split('@')[0]}!`, 'success');
+      // Load search history so recent queries are ready
+      if (typeof _loadSearchHistory === 'function') _loadSearchHistory();
+      // If user arrived via a team invite link, auto-accept the invite now
+      const pendingTeamToken = sessionStorage.getItem('pendingTeamToken');
+      if (pendingTeamToken) {
+        sessionStorage.removeItem('pendingTeamToken');
+        apiFetch('/api/team/join', 'POST', { token: pendingTeamToken }).then(res => {
+          if (res.success) {
+            showToast('🎉 ' + res.message + ' You now have Team access!', 'success');
+            if (res.user) { _saasUser = res.user; _updateSaasBadge(); }
+          } else {
+            showToast('⚠ Team invite: ' + (res.error || 'Could not join team.'), 'warn');
+          }
+        }).catch(() => {});
+      }
+    } else {
+      errEl.textContent = data.error || 'Something went wrong.';
+      errEl.classList.remove('hidden');
+    }
+  } catch (e) {
+    errEl.textContent = 'Network error: ' + e.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = isRegister ? 'Create Free Account' : 'Sign In';
+  }
+}
+
+async function doSaasLogout() {
+  closeAccountMenu();
+  await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
+  _saasUser = null;
+  _updateSaasBadge();
+  showToast('Signed out.', 'info');
+}
+
+// ── Account dropdown ──────────────────────────────────────────────────────────
+function showAccountMenu(e) {
+  if (e && e.stopPropagation) e.stopPropagation();
+  if (!_saasUser) { showAuthModal('login'); return; }
+  const menu = document.getElementById('accountMenu');
+  if (!menu) return;
+
+  const isOpen = !menu.classList.contains('hidden');
+  if (isOpen) { menu.classList.add('hidden'); return; }
+
+  // Refresh usage stats
+  document.getElementById('acctMenuEmail').textContent = _saasUser.email || '';
+  const tier = _saasUser.tier || 'free';
+  document.getElementById('acctMenuTier').textContent =
+    tier === 'free' ? 'Free Plan' : tier === 'pro' ? 'Pro Plan — $29/mo' : 'Team Plan — $79/mo';
+
+  const used  = _saasUser.search_count_this_month || 0;
+  const limit = tier === 'free' ? 10 : null;
+  document.getElementById('acctMenuSearches').textContent = used;
+  document.getElementById('acctMenuLimit').textContent    = limit === null ? '∞' : limit;
+
+  // Usage bar
+  const bar = document.getElementById('acctMenuUsageBar');
+  if (bar) bar.style.width = limit ? Math.min(100, Math.round((used / limit) * 100)) + '%' : '0%';
+
+  // Show/hide Manage Team (team tier only)
+  const teamBtn = document.getElementById('acctMenuTeamManage');
+  if (teamBtn) teamBtn.style.display = (tier === 'team') ? '' : 'none';
+
+  // Show/hide Manage Billing (paid tiers)
+  const billingBtn = document.getElementById('acctMenuManageBilling');
+  if (billingBtn) billingBtn.style.display = (tier !== 'free') ? '' : 'none';
+
+  // Show/hide Upgrade
+  const upgradeBtn = document.getElementById('acctMenuUpgrade');
+  if (upgradeBtn) upgradeBtn.style.display = (tier === 'free') ? '' : 'none';
+  const teamUpBtn = document.getElementById('acctMenuTeamUpgrade');
+  if (teamUpBtn) teamUpBtn.style.display = (tier === 'pro') ? '' : 'none';
+
+  menu.classList.remove('hidden');
+  // Delay registering the outside-click listener so this click doesn't immediately close it
+  requestAnimationFrame(() => {
+    document.addEventListener('click', _closeMenuOnClickOutside, { once: true });
+  });
+}
+
+function closeAccountMenu() {
+  document.getElementById('accountMenu')?.classList.add('hidden');
+}
+
+function _closeMenuOnClickOutside(e) {
+  const menu  = document.getElementById('accountMenu');
+  const badge = document.getElementById('saasBadge');
+  if (menu && !menu.contains(e.target) && !badge?.contains(e.target)) {
+    menu.classList.add('hidden');
+  }
+}
+
+// ── Upgrade modal ─────────────────────────────────────────────────────────────
+function showUpgradeModal(featureName, message) {
+  document.getElementById('upgradeFeatureName').textContent = featureName || 'Pro Feature';
+  document.getElementById('upgradeMsg').textContent = message || 'This feature requires a Pro subscription.';
+  document.getElementById('upgradeOverlay').classList.remove('hidden');
+}
+
+function closeUpgradeModal() {
+  document.getElementById('upgradeOverlay').classList.add('hidden');
+}
+
+/** Call this when an API returns upgrade_required: true */
+function handleUpgradeRequired(res, featureName) {
+  const msg = res.error || 'This feature requires a Pro subscription.';
+  if (!_saasUser) {
+    showAuthModal('login');
+    showToast('Please sign in to use this feature.', 'warn');
+  } else {
+    handleUpgradeClick();
+  }
+}
+
+// ── Stripe Checkout & Billing Portal ─────────────────────────────────────
+
+/** Route the upgrade button based on current tier */
+function handleUpgradeClick() {
+  const tier = _saasUser?.tier || 'free';
+  if (tier === 'free') {
+    startCheckout('pro');
+  } else if (tier === 'pro') {
+    startCheckout('team');
+  } else {
+    openBillingPortal();
+  }
+}
+
+/** Redirect to Stripe Checkout for the given tier */
+async function startCheckout(tier) {
+  if (!_saasUser) { showAuthModal('login'); return; }
+  showToast('Opening secure checkout…', 'info');
+  try {
+    const res = await apiFetch('/stripe/checkout', 'POST', { tier });
+    if (res.success && res.checkout_url) {
+      window.location.href = res.checkout_url;  // redirect to Stripe Hosted Checkout
+    } else {
+      showToast('Checkout error: ' + (res.error || 'Unknown error'), 'error');
+    }
+  } catch (e) {
+    showToast('Checkout failed: ' + e.message, 'error');
+  }
+}
+
+/** Open the Stripe Customer Portal so the user can manage / cancel their subscription */
+async function openBillingPortal() {
+  if (!_saasUser) return;
+  showToast('Opening billing portal…', 'info');
+  try {
+    const res = await apiFetch('/stripe/portal', 'POST');
+    if (res.success && res.portal_url) {
+      window.open(res.portal_url, '_blank');
+    } else {
+      showToast('Portal error: ' + (res.error || 'Unknown error'), 'error');
+    }
+  } catch (e) {
+    showToast('Portal failed: ' + e.message, 'error');
+  }
+}
+
+// (upgrade-success detection is handled by _checkUpgradeSuccess in DOMContentLoaded)
+
+// ── Account Detail Modal ───────────────────────────────────────────────────────
+
+async function showAccountDetail() {
+  if (!_saasUser) { showAuthModal('login'); return; }
+  document.getElementById('accountDetailOverlay')?.classList.remove('hidden');
+  document.getElementById('acctDetailLoading').style.display = '';
+  document.getElementById('acctDetailContent').style.display = 'none';
+
+  try {
+    const res = await apiFetch('/auth/me');
+    if (!res.success) throw new Error(res.error || 'Failed to load');
+    _renderAccountDetail(res.user, res.limits);
+  } catch (e) {
+    document.getElementById('acctDetailLoading').textContent = '⚠ ' + e.message;
+  }
+}
+
+function closeAccountDetail() {
+  document.getElementById('accountDetailOverlay')?.classList.add('hidden');
+}
+
+function _renderAccountDetail(user, limits) {
+  const tier   = user.tier  || 'free';
+  const used   = user.search_count_this_month || 0;
+  const max    = limits?.searches_per_month ?? 10;   // null = unlimited
+  const pct    = max ? Math.min(100, Math.round((used / max) * 100)) : 0;
+  const isPaid = tier !== 'free';
+
+  // Plan labels
+  const planNames  = { free: 'Free',     pro: 'Pro',          team: 'Team'    };
+  const planPrices = { free: '$0 / month', pro: '$29 / month', team: '$79 / month' };
+  const badgeColors = {
+    free: 'background:rgba(255,255,255,.08);color:var(--text2)',
+    pro:  'background:linear-gradient(135deg,#e3c55a,#c9a227);color:#1a1200',
+    team: 'background:linear-gradient(135deg,#b080e0,#7a4f9a);color:#fff',
+  };
+  const barColors = {
+    free: 'linear-gradient(90deg,#4facfe,#2563eb)',
+    pro:  'linear-gradient(90deg,#e3c55a,#c9a227)',
+    team: 'linear-gradient(90deg,#b080e0,#7a4f9a)',
+  };
+
+  document.getElementById('acctPlanName').textContent  = planNames[tier]  || tier;
+  document.getElementById('acctPlanPrice').textContent = planPrices[tier] || '';
+  document.getElementById('acctPlanBadge').style.cssText += `;${badgeColors[tier] || ''}`;
+  document.getElementById('acctPlanBadge').textContent = (planNames[tier] || tier).toUpperCase();
+
+  document.getElementById('acctSearchUsed').textContent  = used;
+  document.getElementById('acctSearchLimit').textContent = max === null ? '∞' : max;
+  document.getElementById('acctUsageBar').style.width    = max === null ? '0%' : pct + '%';
+  document.getElementById('acctUsageBar').style.background = barColors[tier] || barColors.free;
+  document.getElementById('acctResetDate').textContent   = (user.search_reset_date || '').slice(0,10) || 'Next month';
+
+  // Stripe badge
+  const stripeRow = document.getElementById('acctStripeRow');
+  if (user.stripe_subscription_id) {
+    stripeRow.style.display = 'flex';
+    document.getElementById('acctStripeId').textContent =
+      'sub: ' + (user.stripe_subscription_id || '').slice(0, 24) + '…';
+  } else {
+    stripeRow.style.display = 'none';
+  }
+
+  // CTA buttons
+  document.getElementById('acctBtnUpgradePro').style.display  = tier === 'free' ? '' : 'none';
+  document.getElementById('acctBtnUpgradeTeam').style.display = tier === 'pro'  ? '' : 'none';
+  document.getElementById('acctBtnPortal').style.display      = isPaid            ? '' : 'none';
+  const teamManageBtn = document.getElementById('acctBtnTeamManage');
+  if (teamManageBtn) teamManageBtn.style.display = (tier === 'team') ? '' : 'none';
+
+  // Security grid
+  document.getElementById('acctDetailEmail').textContent  = user.email || '';
+  const statusEl = document.getElementById('acctDetailStatus');
+  statusEl.textContent = user.active !== false ? '✓ Active' : '✗ Inactive';
+  statusEl.style.color = user.active !== false ? '#56d3a0' : 'var(--danger)';
+  document.getElementById('acctDetailJoined').textContent = (user.created_at || '').slice(0,10) || '—';
+
+  document.getElementById('acctDetailLoading').style.display  = 'none';
+  document.getElementById('acctDetailContent').style.display  = '';
+}
+
+// ── County Registry ──────────────────────────────────────────────────────
+
+let _countySearchTimer = null;
+
+/** Debounced search of the county registry — called on oninput */
+function searchCountyRegistry(q) {
+  clearTimeout(_countySearchTimer);
+  const resultsEl = document.getElementById('countyResults');
+  const selectedEl = document.getElementById('countySelected');
+  if (!q || q.trim().length < 2) {
+    if (resultsEl) resultsEl.style.display = 'none';
+    return;
+  }
+  _countySearchTimer = setTimeout(async () => {
+    try {
+      const res = await apiFetch('/county-registry?q=' + encodeURIComponent(q.trim()));
+      if (!res.success || !resultsEl) return;
+      const counties = res.counties || [];
+      if (!counties.length) {
+        resultsEl.style.display = '';
+        resultsEl.innerHTML = '<div style="padding:6px 8px;font-size:11px;color:var(--text3)">No counties found. Try a different search term.</div>';
+        return;
+      }
+      resultsEl.style.display = '';
+      resultsEl.innerHTML = counties.slice(0, 12).map(c => `
+        <div onclick="applyCountyConfig('${escHtml(c.fips)}')"
+          style="padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between;align-items:center"
+          onmouseover="this.style.background='rgba(79,172,254,.1)'" onmouseout="this.style.background=''"
+        >
+          <span>${escHtml(c.name)}</span>
+          <span style="font-size:10px;color:var(--text3);margin-left:8px">${escHtml(c.portal_type)}</span>
+        </div>
+      `).join('');
+    } catch(e) {
+      console.warn('County registry search failed', e);
+    }
+  }, 280);
+}
+
+/** Fetch a county's full config and apply portal URL + ArcGIS URL to the Settings form */
+async function applyCountyConfig(fips) {
+  try {
+    const res = await apiFetch('/county-registry/' + fips);
+    if (!res.success || !res.county) return;
+    const c = res.county;
+
+    // Fill portal URL
+    const portalEl = document.getElementById('cfgUrl');
+    if (portalEl && c.portal_url) portalEl.value = c.portal_url;
+
+    // Fill ArcGIS URL (expand the section automatically)
+    const arcgisEl = document.getElementById('arcgisUrl');
+    if (arcgisEl && c.arcgis_url) {
+      arcgisEl.value = c.arcgis_url;
+      // Auto-expand ArcGIS section so the user can see it filled in
+      const section = document.getElementById('arcgisSection');
+      const chevron = document.getElementById('arcgisSectionChevron');
+      if (section && section.style.display === 'none') {
+        section.style.display = 'block';
+        if (chevron) chevron.style.transform = 'rotate(180deg)';
+      }
+      // Pre-fill field dropdowns with the registry's known fields
+      if (c.arcgis_fields) {
+        _populateArcgisUI({ arcgis_url: c.arcgis_url, arcgis_fields: c.arcgis_fields, arcgis_is_default: false });
+      }
+    }
+
+    // Show confirmation
+    const resultsEl  = document.getElementById('countyResults');
+    const selectedEl = document.getElementById('countySelected');
+    if (resultsEl)  resultsEl.style.display  = 'none';
+    if (selectedEl) {
+      selectedEl.style.display = '';
+      selectedEl.innerHTML = `✓ ${escHtml(c.name)} applied`
+        + (c.notes ? ` &nbsp;<span style="font-weight:400;color:var(--text3);font-size:10px">${escHtml(c.notes)}</span>` : '');
+    }
+    const searchEl = document.getElementById('countySearch');
+    if (searchEl) searchEl.value = '';
+
+    showToast(`✓ ${c.name} config loaded — review URLs below then click Connect`, 'success');
+  } catch(e) {
+    showToast('Failed to load county config: ' + e.message, 'error');
+  }
+}
+
+// ── Intercept apiFetch to handle 401/403 upgrade responses ───────────────────
+const _originalApiFetch = apiFetch;
+async function apiFetch(path, method = 'GET', body = null, opts = {}) {
+  const fetchOpts = { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include' };
+  if (body) fetchOpts.body = JSON.stringify(body);
+  if (opts.signal) fetchOpts.signal = opts.signal;
+  const res = await fetch(API + path, fetchOpts);
+  const data = await res.json();
+  // Surface auth/upgrade errors before caller sees them
+  if (!res.ok) {
+    if (data.auth_required) { showAuthModal('login'); }
+    else if (data.upgrade_required) { handleUpgradeRequired(data); }
+  }
+  return data;
+}
+
+// ── Init on page load ─────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  initSaasAuth();
+  _checkUpgradeSuccess();
+  _applyProFeatureLocks();
+  // Show onboarding wizard if no portal URL is configured yet
+  setTimeout(checkOnboarding, 1500);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRO FEATURE GATING — UI locks and Stripe Checkout launch
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Check ?upgraded=1 query param set by /upgrade-success redirect */
+function _checkUpgradeSuccess() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('upgraded') === '1') {
+    showToast('🎉 Welcome to Pro! Your account has been upgraded.', 'success');
+    // Remove param from URL without reloading
+    history.replaceState(null, '', window.location.pathname);
+    // Refresh session to get new tier
+    initSaasAuth();
+  }
+}
+
+/**
+ * Returns true if the current SaaS user has Pro or Team.
+ * Falls back to false (free) if not logged in.
+ */
+function _hasPro() {
+  if (!_saasUser) return false;
+  const tier = _saasUser.tier || 'free';
+  return tier === 'pro' || tier === 'team';
+}
+
+/**
+ * Guard a pro-only action.
+ * If user has pro → call fn(). Otherwise show auth/upgrade modal.
+ * @param {string} featureName  - Display name for the feature
+ * @param {string} featureKey   - Key from UPGRADE_MESSAGES ('ocr', 'dxf_export', etc.)
+ * @param {Function} fn         - The action to run if allowed
+ */
+function requirePro(featureName, featureKey, fn) {
+  if (!_saasUser) {
+    showAuthModal('login');
+    showToast('Sign in to use ' + featureName, 'warn');
+    return;
+  }
+  if (!_hasPro()) {
+    const msgs = {
+      ocr:        'OCR text extraction is a Pro feature. Upgrade to extract text from scanned deeds.',
+      dxf_export: 'DXF boundary export requires a Pro subscription.',
+      adjoiners:  'Adjoiner auto-discovery requires a Pro subscription.',
+      parcel_map: 'Live parcel maps require a Pro subscription.',
+      chain:      'Chain of title tracing requires a Pro subscription.',
+    };
+    const msg = msgs[featureKey] || 'This feature requires a Pro subscription.';
+    showUpgradeModal(featureName, msg);
+    return;
+  }
+  fn();
+}
+
+/** Apply visual pro-locks to buttons that require upgrade */
+function _applyProFeatureLocks() {
+  // Re-run whenever tier changes
+  const isPro = _hasPro();
+
+  // DXF Generate button
+  const dxfBtn = document.getElementById('btnGenerateDxf');
+  if (dxfBtn) {
+    if (!isPro) {
+      dxfBtn.setAttribute('data-original-onclick', dxfBtn.getAttribute('onclick') || 'doGenerateDxf()');
+      dxfBtn.setAttribute('onclick', "requirePro('DXF Export','dxf_export',doGenerateDxf)");
+      if (!dxfBtn.querySelector('.pro-lock-icon')) {
+        dxfBtn.innerHTML = '<span class="btn-icon">🔒</span> Generate & Save DXF <span class="pro-badge-inline">PRO</span>';
+      }
+    } else {
+      // Restore if they just upgraded
+      const orig = dxfBtn.getAttribute('data-original-onclick');
+      if (orig) { dxfBtn.setAttribute('onclick', orig); dxfBtn.removeAttribute('data-original-onclick'); }
+      if (!dxfBtn.querySelector('.btn-icon')) {
+        dxfBtn.innerHTML = '<span class="btn-icon">💾</span> Generate & Save DXF';
+>>>>>>> origin/main
       }
     }
   }
 
+<<<<<<< HEAD
   // ── Data Conflicts Count ───────────────────────────────────────────────
   if (conflictsRes.status === 'fulfilled' && conflictsRes.value.success) {
     const c = conflictsRes.value;
@@ -6330,10 +7179,43 @@ async function refreshAiInsights() {
     // Show prediction if we have data
     if (a.predictions) {
       _showPrediction(a.predictions);
+=======
+  // Adjoiner Discovery button
+  const adjBtn = document.getElementById('btnDiscoverAdjoiners');
+  if (adjBtn && !isPro) {
+    adjBtn.setAttribute('onclick', "requirePro('Adjoiner Discovery','adjoiners',runAdjoinerDiscovery)");
+  } else if (adjBtn && isPro) {
+    adjBtn.setAttribute('onclick', 'runAdjoinerDiscovery()');
+  }
+
+  // ArcGIS Spatial button
+  const arcBtn = document.getElementById('btnArcgisSpatial');
+  if (arcBtn && !isPro) {
+    arcBtn.setAttribute('onclick', "requirePro('ArcGIS Spatial Discovery','adjoiners',runArcgisSpatialDiscovery)");
+  } else if (arcBtn && isPro) {
+    arcBtn.setAttribute('onclick', 'runArcgisSpatialDiscovery()');
+  }
+
+  // Bulk Search button (Step 5)
+  const bulkBtn = document.querySelector('[onclick="bulkSearchAdjoiners()"]');
+  if (bulkBtn && !isPro) {
+    bulkBtn.setAttribute('onclick', "requirePro('Bulk Adjoiner Search','adjoiners',bulkSearchAdjoiners)");
+  } else if (bulkBtn && isPro) {
+    bulkBtn.setAttribute('onclick', 'bulkSearchAdjoiners()');
+  }
+
+  // Add PRO badge to relevant section headings
+  const s6Tabs = document.getElementById('s6Tabs');
+  if (s6Tabs && !isPro) {
+    const dxfTab = [...s6Tabs.querySelectorAll('.tab-btn')].find(b => b.textContent.includes('DXF'));
+    if (dxfTab && !dxfTab.querySelector('.pro-badge-inline')) {
+      dxfTab.innerHTML += ' <span class="pro-badge-inline">PRO</span>';
+>>>>>>> origin/main
     }
   }
 }
 
+<<<<<<< HEAD
 /** Show/update the complexity prediction row */
 function _showPrediction(pred) {
   const row = document.getElementById('aiPredictionRow');
@@ -6491,3 +7373,729 @@ async function findSimilarDescriptions() {
     }
   }
 }
+=======
+/**
+ * Launch Stripe Checkout for upgrading.
+ * Called from the upgrade modal "Join Waitlist" area when Stripe is configured.
+ */
+async function launchStripeCheckout(tier = 'pro') {
+  if (!_saasUser) { showAuthModal('login'); return; }
+
+  const btn = event?.target;
+  if (btn) { btn.textContent = 'Redirecting to Stripe…'; btn.disabled = true; }
+
+  try {
+    const res = await fetch('/api/stripe/checkout', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tier }),
+    });
+    const data = await res.json();
+    if (data.success && data.checkout_url) {
+      window.location.href = data.checkout_url;
+    } else {
+      showToast(data.error || 'Checkout failed. Please try again.', 'error');
+      if (btn) { btn.textContent = 'Upgrade to Pro'; btn.disabled = false; }
+    }
+  } catch (e) {
+    showToast('Network error: ' + e.message, 'error');
+    if (btn) { btn.textContent = 'Upgrade to Pro'; btn.disabled = false; }
+  }
+}
+
+// _applyProFeatureLocks is called inside _updateSaasBadge (see definition above)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ONBOARDING WIZARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _obSelectedCounty = null;
+let _obSearchTimer    = null;
+
+/** Check if onboarding is needed and show if so. */
+function checkOnboarding() {
+  if (sessionStorage.getItem('ob_done')) return;
+  fetch(API + '/config', { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.url || d.url.length < 5) {
+        setTimeout(() => document.getElementById('onboardingOverlay')?.classList.remove('hidden'), 800);
+      }
+    }).catch(() => {});
+}
+
+function closeOnboarding() {
+  document.getElementById('onboardingOverlay')?.classList.add('hidden');
+  sessionStorage.setItem('ob_done', '1');
+}
+
+function obGoStep(n) {
+  for (let i = 1; i <= 4; i++) {
+    const step = document.getElementById('obStep' + i);
+    const tab  = document.getElementById('obTab'  + i);
+    if (!step || !tab) continue;
+    step.style.display = i === n ? '' : 'none';
+    tab.style.color = i <= n ? 'var(--accent)' : 'var(--text3)';
+    tab.style.borderBottom = i === n ? '2px solid var(--accent)' : '2px solid transparent';
+  }
+}
+
+function obSearchCounty(q) {
+  clearTimeout(_obSearchTimer);
+  const resultsEl  = document.getElementById('obCountyResults');
+  const noCountyEl = document.getElementById('obNoCounty');
+  if (!q || q.trim().length < 2) { if (resultsEl) resultsEl.style.display = 'none'; return; }
+  _obSearchTimer = setTimeout(async () => {
+    try {
+      const res = await apiFetch('/county-registry?q=' + encodeURIComponent(q.trim()));
+      if (!res.success || !resultsEl) return;
+      const counties = res.counties || [];
+      if (noCountyEl) noCountyEl.style.display = counties.length ? 'none' : '';
+      if (!counties.length) { resultsEl.style.display = 'none'; return; }
+      resultsEl.style.display = '';
+      resultsEl.innerHTML = counties.slice(0, 10).map(c => `
+        <div onclick="obSelectCounty('${escHtml(c.fips)}')"
+          style="padding:7px 10px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between"
+          onmouseover="this.style.background='rgba(79,172,254,.1)'" onmouseout="this.style.background=''">
+          <span>${escHtml(c.name)}</span><span style="font-size:10px;color:var(--text3)">${escHtml(c.portal_type)}</span>
+        </div>`).join('');
+    } catch(e) { console.warn('ob search', e); }
+  }, 280);
+}
+
+async function obSelectCounty(fips) {
+  const res = await apiFetch('/county-registry/' + fips);
+  if (!res.success) return;
+  const c = res.county;
+  _obSelectedCounty = c;
+  document.getElementById('obCountyResults').style.display = 'none';
+  const selEl = document.getElementById('obCountySelected');
+  if (selEl) { selEl.style.display = ''; selEl.textContent = '✓ ' + c.name + ' selected'; }
+  if (c.portal_url) {
+    const pEl = document.getElementById('obPortalUrl');
+    if (pEl) pEl.value = c.portal_url;
+    const lbl = document.getElementById('obCountyUrlLabel');
+    if (lbl) lbl.textContent = c.portal_url;
+    const row = document.getElementById('obCountyUrlRow');
+    if (row) row.style.display = '';
+  }
+  const nextBtn = document.getElementById('obNextCounty');
+  if (nextBtn) nextBtn.disabled = false;
+}
+
+async function obTestConnection() {
+  const url  = (document.getElementById('obPortalUrl')?.value || '').trim();
+  const user = (document.getElementById('obUsername')?.value || '').trim();
+  const pass = (document.getElementById('obPassword')?.value || '').trim();
+  const resultEl = document.getElementById('obConnectResult');
+  const btn = document.getElementById('btnObTest');
+  if (!url) { showToast('Enter a portal URL first', 'warn'); return; }
+  if (btn) { btn.textContent = 'Testing…'; btn.disabled = true; }
+  try {
+    const res = await apiFetch('/test-connection', 'POST', { url, username: user, password: pass });
+    if (resultEl) {
+      resultEl.style.display = '';
+      resultEl.style.background = res.success ? 'rgba(86,211,160,.12)' : 'rgba(255,107,107,.12)';
+      resultEl.style.color = res.success ? '#56d3a0' : 'var(--danger)';
+      resultEl.textContent = res.success ? '✓ Connection successful!' : '✗ ' + (res.error || 'Connection failed');
+    }
+  } catch(e) {
+    if (resultEl) { resultEl.style.display=''; resultEl.textContent='Error: '+e.message; }
+  } finally {
+    if (btn) { btn.textContent='Test Connection'; btn.disabled=false; }
+  }
+}
+
+async function obSaveAndFinish() {
+  const url  = (document.getElementById('obPortalUrl')?.value || '').trim();
+  const user = (document.getElementById('obUsername')?.value || '').trim();
+  const pass = (document.getElementById('obPassword')?.value || '').trim();
+  const btn  = document.getElementById('btnObSave');
+  if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+  try {
+    const payload = { url, username: user, password: pass };
+    if (_obSelectedCounty?.arcgis_url) {
+      payload.arcgis_url    = _obSelectedCounty.arcgis_url;
+      payload.arcgis_fields = _obSelectedCounty.arcgis_fields || {};
+    }
+    const res = await apiFetch('/config', 'POST', payload);
+    if (res.success) {
+      obGoStep(4);
+    } else {
+      showToast('Save failed: ' + (res.error || 'Unknown'), 'error');
+      if (btn) { btn.textContent='Save & Finish'; btn.disabled=false; }
+    }
+  } catch(e) {
+    showToast('Error: '+e.message, 'error');
+    if (btn) { btn.textContent='Save & Finish'; btn.disabled=false; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _adminPassword = '';
+
+function showAdminPanel() {
+  document.getElementById('adminOverlay')?.classList.remove('hidden');
+  document.getElementById('adminAuthGate').style.display = '';
+  document.getElementById('adminDashboard').style.display = 'none';
+  document.getElementById('adminAuthError').style.display = 'none';
+  document.getElementById('adminPwdInput').value = '';
+  setTimeout(() => document.getElementById('adminPwdInput')?.focus(), 100);
+}
+function closeAdminPanel() {
+  document.getElementById('adminOverlay')?.classList.add('hidden');
+  _adminPassword = '';
+}
+
+async function adminLogin() {
+  const pwd   = document.getElementById('adminPwdInput')?.value || '';
+  const errEl = document.getElementById('adminAuthError');
+  try {
+    const res = await apiFetch('/admin/auth', 'POST', { password: pwd });
+    if (res.success) {
+      _adminPassword = pwd;
+      document.getElementById('adminAuthGate').style.display = 'none';
+      document.getElementById('adminDashboard').style.display = '';
+      errEl.style.display = 'none';
+      _renderAdminStats(res.stats);
+      await _loadAdminUsers();
+    } else {
+      errEl.style.display = '';
+      errEl.textContent = res.error || 'Invalid password';
+    }
+  } catch(e) {
+    errEl.style.display = '';
+    errEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+function _renderAdminStats(stats) {
+  if (!stats) return;
+  const grid = document.getElementById('adminStatsGrid');
+  if (!grid) return;
+  const items = [
+    { label: 'Total Users', value: stats.total_users  || 0, color: 'var(--accent)' },
+    { label: 'Active',      value: stats.active_users || 0, color: '#56d3a0' },
+    { label: 'MRR',         value: '$' + (stats.mrr_usd || 0), color: '#e3c55a' },
+    { label: 'Pro / Team',  value: (stats.by_tier?.pro||0) + ' / ' + (stats.by_tier?.team||0), color: '#b080e0' },
+  ];
+  grid.innerHTML = items.map(it => `
+    <div style="background:var(--surface2);border-radius:8px;padding:12px 10px;text-align:center">
+      <div style="font-size:22px;font-weight:700;color:${it.color}">${it.value}</div>
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-top:2px">${it.label}</div>
+    </div>`).join('');
+}
+
+async function _loadAdminUsers() {
+  const res = await apiFetch('/admin/users?password=' + encodeURIComponent(_adminPassword));
+  if (!res.success) return;
+  _renderAdminStats(res.stats);
+  const tbody = document.getElementById('adminUserRows');
+  if (!tbody) return;
+  const tierColors = { free:'var(--text3)', pro:'#e3c55a', team:'#b080e0' };
+  tbody.innerHTML = (res.users || []).map(u => `
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:6px 8px">${escHtml(u.email)}</td>
+      <td style="padding:6px 8px">
+        <span style="font-weight:700;color:${tierColors[u.tier]||'var(--text2)'}">${u.tier}</span>
+        <select onchange="adminChangeTier('${u.id}',this.value)" style="margin-left:6px;font-size:10px;background:var(--surface2);color:var(--text1);border:1px solid var(--border);border-radius:3px;padding:1px">
+          <option value="">change…</option>
+          <option value="free">→ Free</option>
+          <option value="pro">→ Pro</option>
+          <option value="team">→ Team</option>
+        </select>
+      </td>
+      <td style="padding:6px 8px;text-align:center">${u.searches_used}${u.search_limit===null?' / ∞':' / '+u.search_limit}</td>
+      <td style="padding:6px 8px;font-size:10px;font-family:monospace;color:var(--text3)">${u.stripe_cus_id ? u.stripe_cus_id.slice(0,18)+'…' : '—'}</td>
+      <td style="padding:6px 8px;font-size:10px;color:var(--text3)">${(u.created_at||'').slice(0,10)}</td>
+      <td style="padding:6px 8px;white-space:nowrap">
+        <button onclick="adminResetSearches('${u.id}')" class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 5px">↺ Reset</button>
+        <button onclick="adminToggleActive('${u.id}',${!u.active})" class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 5px;margin-left:3px">${u.active?'Disable':'Enable'}</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function adminChangeTier(userId, tier) {
+  if (!tier) return;
+  await apiFetch('/admin/users/'+userId, 'PATCH', { password: _adminPassword, tier });
+  showToast('Tier updated → ' + tier, 'success');
+  await _loadAdminUsers();
+}
+async function adminResetSearches(userId) {
+  await apiFetch('/admin/users/'+userId, 'PATCH', { password: _adminPassword, reset_searches: true });
+  showToast('Search counter reset', 'success');
+  await _loadAdminUsers();
+}
+async function adminToggleActive(userId, active) {
+  await apiFetch('/admin/users/'+userId, 'PATCH', { password: _adminPassword, active });
+  showToast(active ? 'Account enabled' : 'Account disabled', 'success');
+  await _loadAdminUsers();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG EXPORT / IMPORT
+// ─────────────────────────────────────────────────────────────────────────────
+
+function exportConfig() {
+  const profile = state.researchSession?.profile || 'default';
+  const a = document.createElement('a');
+  a.href = API + '/config/export?profile=' + encodeURIComponent(profile);
+  a.download = 'deed_config.json';
+  a.click();
+  showToast('County config saved as deed_config.json', 'success');
+}
+
+function showConfigImport() {
+  document.getElementById('configImportOverlay')?.classList.remove('hidden');
+  document.getElementById('configImportJson').value = '';
+  document.getElementById('configImportResult').style.display = 'none';
+}
+function closeConfigImport() {
+  document.getElementById('configImportOverlay')?.classList.add('hidden');
+}
+
+async function doConfigImport() {
+  const raw = (document.getElementById('configImportJson')?.value || '').trim();
+  const resultEl = document.getElementById('configImportResult');
+  let cfg;
+  try { cfg = JSON.parse(raw); } catch {
+    resultEl.style.display=''; resultEl.style.background='rgba(255,107,107,.12)';
+    resultEl.style.color='var(--danger)'; resultEl.textContent='✗ Invalid JSON'; return;
+  }
+  const profile = state.researchSession?.profile || 'default';
+  const res = await apiFetch('/config/import', 'POST', { profile, config: cfg });
+  resultEl.style.display = '';
+  if (res.success) {
+    resultEl.style.background='rgba(86,211,160,.12)'; resultEl.style.color='#56d3a0';
+    resultEl.textContent = '✓ ' + (res.message || 'Imported');
+    setTimeout(closeConfigImport, 1200);
+    showToast('Config imported — reload Settings to confirm', 'success');
+  } else {
+    resultEl.style.background='rgba(255,107,107,.12)'; resultEl.style.color='var(--danger)';
+    resultEl.textContent = '✗ ' + (res.error || 'Import failed');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FORGOT / RESET PASSWORD
+// ─────────────────────────────────────────────────────────────────────────────
+
+function showForgotPassword() {
+  document.getElementById('authForgotForm').style.display = '';
+  document.getElementById('authForgotRow').style.display  = 'none';
+  document.getElementById('forgotEmail').focus();
+}
+function hideForgotPassword() {
+  document.getElementById('authForgotForm').style.display = 'none';
+  document.getElementById('authForgotRow').style.display  = '';
+  document.getElementById('forgotResult').style.display   = 'none';
+}
+
+async function doForgotPassword() {
+  const email    = (document.getElementById('forgotEmail')?.value || '').trim();
+  const resultEl = document.getElementById('forgotResult');
+  if (!email) { showToast('Enter your email address', 'warn'); return; }
+
+  const btn = document.querySelector('#authForgotForm .btn-accent');
+  if (btn) { btn.textContent = 'Sending…'; btn.disabled = true; }
+
+  const res = await apiFetch('/auth/forgot-password', 'POST', { email });
+
+  if (resultEl) {
+    resultEl.style.display    = '';
+    resultEl.style.background = 'rgba(86,211,160,.12)';
+    resultEl.style.color      = '#56d3a0';
+    resultEl.textContent      = '✓ ' + (res.message || 'Check your email for a reset link.');
+  }
+  if (btn) { btn.textContent = 'Send Reset Link'; btn.disabled = false; }
+}
+
+async function doResetPassword() {
+  const newPwd     = document.getElementById('resetNewPassword')?.value || '';
+  const confirmPwd = document.getElementById('resetConfirmPassword')?.value || '';
+  const resultEl   = document.getElementById('resetResult');
+  const token      = new URLSearchParams(window.location.search).get('token') || '';
+
+  if (!newPwd || newPwd.length < 8) {
+    showResult(resultEl, false, 'Password must be at least 8 characters.');
+    return;
+  }
+  if (newPwd !== confirmPwd) {
+    showResult(resultEl, false, 'Passwords do not match.');
+    return;
+  }
+  if (!token) {
+    showResult(resultEl, false, 'No reset token found in URL. Request a new reset link.');
+    return;
+  }
+
+  const btn = document.querySelector('#authResetForm .btn-primary');
+  if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+
+  const res = await apiFetch('/auth/reset-password', 'POST', { token, password: newPwd });
+
+  if (res.success) {
+    showResult(resultEl, true, '✓ ' + res.message);
+    showToast('Password updated! Signing you in…', 'success');
+    // Remove token from URL then trigger login
+    history.replaceState(null, '', '/');
+    setTimeout(() => {
+      document.getElementById('authResetForm').style.display = 'none';
+      document.getElementById('authForgotRow').style.display = '';
+      document.getElementById('authEmail')?.focus();
+    }, 1500);
+  } else {
+    showResult(resultEl, false, '✗ ' + (res.error || 'Reset failed.'));
+  }
+  if (btn) { btn.textContent = 'Set New Password'; btn.disabled = false; }
+}
+
+function showResult(el, success, msg) {
+  if (!el) return;
+  el.style.display    = '';
+  el.style.background = success ? 'rgba(86,211,160,.12)' : 'rgba(255,107,107,.12)';
+  el.style.color      = success ? '#56d3a0' : 'var(--danger)';
+  el.textContent      = msg;
+}
+
+/** On page load, if ?token= in URL, open auth modal with reset form showing */
+function _checkResetToken() {
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (!token) return;
+  // Show auth modal with the reset form
+  showAuthModal('login');
+  setTimeout(() => {
+    document.getElementById('authResetForm').style.display  = '';
+    document.getElementById('authForgotRow').style.display  = 'none';
+    document.getElementById('btnAuthSubmit').style.display  = 'none';
+    document.getElementById('authForgotForm').style.display = 'none';
+    // Hide tabs — this is the reset flow only
+    const tabs = document.querySelectorAll('.auth-tab');
+    tabs.forEach(t => t.style.display = 'none');
+  }, 50);
+}
+
+document.addEventListener('DOMContentLoaded', _checkResetToken);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USAGE BAR — update when account dropdown opens
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function _refreshUsageBar() {
+  try {
+    const res = await apiFetch('/auth/usage');
+    if (!res.success) return;
+    const searchesEl = document.getElementById('acctMenuSearches');
+    const limitEl    = document.getElementById('acctMenuLimit');
+    const barEl      = document.getElementById('acctMenuUsageBar');
+    const rowEl      = document.getElementById('acctMenuUsageRow');
+
+    if (searchesEl) searchesEl.textContent = res.used ?? 0;
+    if (limitEl)    limitEl.textContent    = res.limit === null ? '∞' : (res.limit ?? 10);
+
+    if (barEl && rowEl) {
+      if (res.limit === null) {
+        // Unlimited — hide the bar row for Pro/Team
+        rowEl.style.display = 'none';
+      } else {
+        rowEl.style.display = '';
+        const pct = Math.min(100, Math.round((res.used / res.limit) * 100));
+        barEl.style.width      = pct + '%';
+        // Color: green <60%, amber 60-80%, red ≥80%
+        barEl.style.background = pct >= 80 ? '#da3633' : pct >= 60 ? '#c9a227' : 'var(--accent)';
+      }
+    }
+  } catch(e) { /* silently ignore — usage bar is best-effort */ }
+}
+
+// Patch openAccountMenu (if it exists) to refresh usage bar on open
+const _origOpenAccountMenu = window.openAccountMenu;
+window.openAccountMenu = function(...args) {
+  if (_origOpenAccountMenu) _origOpenAccountMenu.apply(this, args);
+  _refreshUsageBar();
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEARCH HISTORY — recent queries panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _searchHistory = [];
+
+async function _loadSearchHistory() {
+  try {
+    const res = await apiFetch('/auth/history');
+    if (res.success) _searchHistory = res.history || [];
+  } catch(e) {}
+}
+
+/** Render a compact history dropdown below the name search input. */
+function _renderSearchHistory(inputEl, containerEl) {
+  if (!containerEl || !_searchHistory.length) return;
+  containerEl.innerHTML = _searchHistory.slice(0, 8).map(h => `
+    <div onclick="_fillSearch(${JSON.stringify(h.query)})"
+      style="padding:6px 10px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between;align-items:center"
+      onmouseover="this.style.background='rgba(79,172,254,.1)'" onmouseout="this.style.background=''">
+      <span style="color:var(--text1)">${escHtml(h.query)}</span>
+      <span style="font-size:10px;color:var(--text3)">${h.count ?? ''} results · ${(h.at||'').slice(0,10)}</span>
+    </div>`).join('');
+  containerEl.style.display = '';
+}
+
+function _fillSearch(query) {
+  const nameInput = document.getElementById('s2SearchName');
+  if (nameInput) {
+    nameInput.value = query;
+    nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  const hist = document.getElementById('searchHistoryDropdown');
+  if (hist) hist.style.display = 'none';
+}
+
+function _showSearchHistory() {
+  if (!_searchHistory.length) {
+    // Try loading if not yet populated
+    if (typeof _loadSearchHistory === 'function') _loadSearchHistory().then(() => _showSearchHistory());
+    return;
+  }
+  const containerEl = document.getElementById('searchHistoryDropdown');
+  const inputEl     = document.getElementById('s2SearchName');
+  _renderSearchHistory(inputEl, containerEl);
+}
+
+let _historyHideTimer = null;
+function _hideSearchHistoryDelay() {
+  // Small delay so clicks inside the dropdown register before it disappears
+  _historyHideTimer = setTimeout(() => {
+    const hist = document.getElementById('searchHistoryDropdown');
+    if (hist) hist.style.display = 'none';
+  }, 200);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FRIENDLY QUOTA MODAL — intercept upgrade_required on search
+// ─────────────────────────────────────────────────────────────────────────────
+
+function handleUpgradeRequired(data) {
+  const msg     = data.error || 'This feature requires a Pro subscription.';
+  const isQuota = msg.includes('searches');
+
+  // Populate the upgrade modal's message element (id may be upgradeMsg or upgradeModalMsg)
+  const msgEl = document.getElementById('upgradeMsg') || document.getElementById('upgradeModalMsg');
+  if (msgEl) msgEl.textContent = msg;
+
+  if (isQuota) {
+    const ovl = document.getElementById('upgradeOverlay');
+    if (ovl) ovl.classList.remove('hidden');
+  } else {
+    showToast('⚡ ' + msg, 'warn');
+    setTimeout(() => {
+      const ovl = document.getElementById('upgradeOverlay');
+      if (ovl) ovl.classList.remove('hidden');
+    }, 600);
+  }
+}
+
+// Patch switchAuthTab to show/hide forgot link
+const _origSwitchAuthTab = window.switchAuthTab;
+window.switchAuthTab = function(tab) {
+  if (_origSwitchAuthTab) _origSwitchAuthTab.apply(this, arguments);
+  const forgotRow = document.getElementById('authForgotRow');
+  if (forgotRow) forgotRow.style.display = tab === 'login' ? '' : 'none';
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEAM MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _teamData = null;
+
+async function showTeamPanel() {
+  document.getElementById('teamOverlay')?.classList.remove('hidden');
+  await _loadTeamData();
+}
+function closeTeamPanel() {
+  document.getElementById('teamOverlay')?.classList.add('hidden');
+}
+
+async function _loadTeamData() {
+  const listEl = document.getElementById('teamMemberList');
+  if (listEl) listEl.innerHTML = '<div style="font-size:12px;color:var(--text3);text-align:center;padding:20px 0">Loading…</div>';
+
+  try {
+    const res = await apiFetch('/api/team/members');
+    if (!res.success) {
+      if (listEl) listEl.innerHTML = `<div style="color:var(--danger);font-size:12px;padding:8px">${escHtml(res.error||'Error loading team.')}</div>`;
+      return;
+    }
+    _teamData = res;
+    _renderTeamPanel(res);
+  } catch(e) {
+    if (listEl) listEl.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:8px">Failed to load team data.</div>';
+  }
+}
+
+function _renderTeamPanel(data) {
+  // Update seat counter
+  const su = document.getElementById('teamSeatsUsed');
+  const sm = document.getElementById('teamSeatsMax');
+  if (su) su.textContent = data.seats_used ?? '—';
+  if (sm) sm.textContent = data.seats_max ?? 5;
+
+  const isOwner = data.role === 'owner';
+  const isTeamMember = data.role === 'member';
+
+  // Show/hide invite section (owners only)
+  const inviteSection = document.getElementById('teamInviteSection');
+  if (inviteSection) inviteSection.style.display = isOwner ? '' : 'none';
+
+  // Show/hide leave section (members only, not owner)
+  const leaveSection = document.getElementById('teamLeaveSection');
+  if (leaveSection) leaveSection.style.display = isTeamMember ? '' : 'none';
+
+  // Member list
+  const listEl = document.getElementById('teamMemberList');
+  if (!listEl) return;
+
+  if (!data.members || !data.members.length) {
+    listEl.innerHTML = '<div style="font-size:12px;color:var(--text3);text-align:center;padding:20px 0">No team members yet. Invite someone above.</div>';
+    return;
+  }
+
+  listEl.innerHTML = data.members.map(m => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:600;color:var(--text1)">${escHtml(m.email)}</div>
+        <div style="font-size:10px;color:var(--text3)">
+          ${m.role === 'owner' ? '👑 Owner' : '👤 Member'}
+          ${m.joined_at ? ' · Joined ' + (m.joined_at||'').slice(0,10) : ''}
+          ${m.active === false ? ' · <span style="color:var(--danger)">Inactive</span>' : ''}
+        </div>
+      </div>
+      ${isOwner && m.role !== 'owner' ? `
+        <button class="btn btn-outline btn-sm" style="color:var(--danger);border-color:var(--danger);font-size:11px"
+          onclick="doRemoveTeamMember('${m.id}', '${escHtml(m.email)}')">Remove</button>
+      ` : ''}
+    </div>
+  `).join('');
+}
+
+async function doTeamInvite() {
+  const email    = (document.getElementById('teamInviteEmail')?.value || '').trim();
+  const resultEl = document.getElementById('teamInviteResult');
+  if (!email) { showToast('Enter an email address', 'warn'); return; }
+
+  const btn = document.getElementById('btnTeamInvite');
+  if (btn) { btn.textContent = 'Sending…'; btn.disabled = true; }
+
+  const res = await apiFetch('/api/team/invite', 'POST', { email });
+
+  if (resultEl) {
+    resultEl.style.display    = '';
+    resultEl.style.background = res.success ? 'rgba(86,211,160,.12)' : 'rgba(255,107,107,.12)';
+    resultEl.style.color      = res.success ? '#56d3a0' : 'var(--danger)';
+    resultEl.textContent      = res.success ? `✓ ${res.message}` : `✗ ${res.error || 'Invite failed.'}`;
+  }
+  if (btn) { btn.textContent = 'Send Invite'; btn.disabled = false; }
+  if (res.success) {
+    document.getElementById('teamInviteEmail').value = '';
+    await _loadTeamData();
+  }
+}
+
+async function doRemoveTeamMember(memberId, email) {
+  if (!confirm(`Remove ${email} from the team? They will be downgraded to Free.`)) return;
+  const res = await apiFetch(`/api/team/members/${memberId}`, 'DELETE');
+  if (res.success) {
+    showToast(`✓ ${res.message}`, 'success');
+    await _loadTeamData();
+  } else {
+    showToast(`✗ ${res.error || 'Remove failed.'}`, 'error');
+  }
+}
+
+async function doLeaveTeam() {
+  if (!confirm('Leave this team? You will be downgraded to Free immediately.')) return;
+  const res = await apiFetch('/api/team/leave', 'POST');
+  if (res.success) {
+    showToast('✓ ' + res.message, 'success');
+    closeTeamPanel();
+    initSaasAuth();  // re-check auth state / update badge
+  } else {
+    showToast('✗ ' + (res.error || 'Failed to leave team.'), 'error');
+  }
+}
+
+/** Auto-detect /team/join?token= URL on page load and accept invitation */
+async function _checkTeamJoinToken() {
+  if (!window.location.pathname.includes('team/join')) return;
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (!token) return;
+
+  // User must be logged in first — require auth
+  const user = await apiFetch('/auth/me');
+  if (!user?.success) {
+    // Store token and show login
+    sessionStorage.setItem('pendingTeamToken', token);
+    showAuthModal('login');
+    showToast('Log in to accept your team invitation', 'info');
+    return;
+  }
+
+  // Accept the invite
+  const res = await apiFetch('/api/team/join', 'POST', { token });
+  history.replaceState(null, '', '/');  // clean URL
+  if (res.success) {
+    showToast('🎉 ' + res.message + ' You now have Team access!', 'success');
+    initSaasAuth();
+  } else {
+    showToast('✗ ' + (res.error || 'Could not join team.'), 'error');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', _checkTeamJoinToken);
+
+/** Show Team button in Settings footer when user has team tier */
+function _applyTeamVisibility(userTier, userRole) {
+  const teamBtn = document.getElementById('btnSettingsTeam');
+  if (teamBtn) teamBtn.style.display = (userTier === 'team') ? '' : 'none';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ?plan= LANDING PAGE -> APP FLOW
+// Handles users arriving from deedplathelper.netlify.app pricing buttons.
+// ?plan=pro or ?plan=team -> show auth modal, then upgrade modal after login.
+// ─────────────────────────────────────────────────────────────────────────────
+
+(function _handlePlanParam() {
+  const plan = new URLSearchParams(window.location.search).get('plan');
+  if (!plan || !['pro', 'team'].includes(plan)) return;
+  history.replaceState(null, '', window.location.pathname);
+  const planNames = { pro: 'Pro - $29/mo', team: 'Team - $79/mo' };
+  const planMsgs  = {
+    pro:  'Unlock unlimited searches, OCR, live parcel maps, adjoiner discovery, and DXF export.',
+    team: 'Everything in Pro plus 5 seats, shared session library, and priority support.',
+  };
+  function _showUpgradeForPlan() {
+    if (typeof showUpgradeModal === 'function') {
+      showUpgradeModal(planNames[plan], planMsgs[plan]);
+    }
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+      if (_saasUser) {
+        _showUpgradeForPlan();
+      } else {
+        showAuthModal('register');
+        showToast('Create a free account to start your ' + (plan === 'pro' ? 'Pro' : 'Team') + ' trial', 'info');
+        const poll = setInterval(() => {
+          if (_saasUser) { clearInterval(poll); setTimeout(_showUpgradeForPlan, 500); }
+        }, 500);
+        setTimeout(() => clearInterval(poll), 300000);
+      }
+    }, 900);
+  });
+})();
+>>>>>>> origin/main

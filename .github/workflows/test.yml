@@ -1,0 +1,71 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Deed & Plat Helper — CI Pipeline
+# Runs the full test suite on every push and pull request.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Tests
+
+on:
+  push:
+    branches: [main, dev, ml-dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run unit tests (helpers + processors)
+        run: |
+          python -m pytest tests/test_helpers.py tests/test_xml_processor.py tests/test_ocr_correct.py tests/test_dxf.py -v
+
+      - name: Run integration tests (Flask routes)
+        run: |
+          python -m pytest tests/test_api_routes.py tests/test_pdf_extract.py -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Check code style
+        run: ruff check helpers/ tests/ --select E,F,W --ignore E501,E402,E702,F841
+        # E501 = line too long (fix gradually)
+        # E402 = mid-file imports (test organization pattern)
+        # E702 = semicolons (compact style in parsers)
+        # F841 = unused vars (some intentional captures)

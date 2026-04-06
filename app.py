@@ -1,7 +1,15 @@
-from flask import Flask, request, jsonify, send_from_directory, Response, make_response
+from flask import Flask, request, jsonify, send_from_directory, Response, make_response, g
 import requests as req_lib
 from bs4 import BeautifulSoup
-import os, re, json, traceback, subprocess, gzip, math, shutil, tempfile
+import os
+import re
+import json
+import traceback
+import subprocess
+import gzip
+import math
+import shutil
+import tempfile
 from collections import Counter
 from pathlib import Path
 import fitz          # PyMuPDF  — PDF → image
@@ -16,6 +24,33 @@ from helpers.profiles import (
     list_profiles, get_profile, save_profile, create_profile,
     delete_profile, update_profile_field, migrate_from_config,
 )
+
+# ── SaaS auth & subscription gating ───────────────────────────────────────────
+from helpers.auth import (
+    create_user, find_user_by_email, get_user as get_saas_user,
+    verify_password, generate_token, verify_token,
+    increment_search_count, reset_monthly_counts_if_needed, public_user,
+    generate_reset_token, reset_password as reset_user_password,
+    add_search_history, get_search_history,
+    check_login_allowed, record_failed_login, clear_failed_logins,
+)
+from helpers.subscription import (
+    require_auth, require_pro, require_team,
+    check_search_quota, has_feature, get_tier_limits,
+)
+from helpers.stripe_webhook import verify_and_parse as _stripe_verify, dispatch_event as _stripe_dispatch
+from helpers.admin import (
+    check_admin_password, list_users_summary, get_user_stats,
+    admin_set_tier, admin_toggle_active, admin_reset_searches,
+)
+from helpers.rate_limit import rate_limit, rate_limit_ip
+from helpers.backup import list_backups, restore_backup
+from helpers.teams import (
+    get_team_members, get_seat_count, invite_member,
+    accept_invite, remove_member, leave_team,
+    verify_invite_token,
+)
+
 
 # ── Helper modules (extracted from this file for maintainability) ─────────────
 from helpers.metes_bounds import (
@@ -48,6 +83,7 @@ from helpers.deed_analysis import (
     isolate_legal_description as _isolate_legal_description_impl,
 )
 from helpers.dxf import generate_boundary_dxf as _generate_dxf_impl
+<<<<<<< HEAD
 from helpers.legal_similarity import search_similar_descriptions as _search_similar_descriptions
 from helpers.research_analytics import (
     get_analytics as _get_research_analytics,
@@ -55,13 +91,183 @@ from helpers.research_analytics import (
     predict_job_complexity as _predict_job_complexity,
     scan_all_research as _scan_all_research,
 )
+=======
+from helpers.county_registry import search_counties, get_county, get_all_counties
+
+# Stripe billing (optional — import gracefully so app works without stripe installed)
+try:
+    from helpers.stripe_billing import (
+        create_checkout_session, create_customer_portal_session, handle_webhook,
+        STRIPE_SECRET_KEY as _STRIPE_KEY_SET,
+    )
+    _STRIPE_AVAILABLE = bool(_STRIPE_KEY_SET)
+except ImportError:
+    _STRIPE_AVAILABLE = False
+    create_checkout_session = create_customer_portal_session = handle_webhook = None
+>>>>>>> origin/main
 
 # Point pytesseract at the Tesseract binary (delegated to helpers/pdf_extract.py)
 setup_tesseract()
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
-BASE_URL = "http://records.1stnmtitle.com"
+# ── Security configuration ────────────────────────────────────────────────────
+_is_production = os.environ.get("DEED_APP_URL", "").startswith("https://")
+app.config.update(
+    SECRET_KEY=os.environ.get("DEED_SECRET_KEY", "dev-insecure-key-change-me"),
+    SESSION_COOKIE_SECURE=_is_production,      # HTTPS-only cookies in prod
+    SESSION_COOKIE_HTTPONLY=True,              # JS cannot read session cookies
+    SESSION_COOKIE_SAMESITE="Lax",            # CSRF mitigation
+)
+
+# ── Register Blueprints ───────────────────────────────────────────────────────
+from routes.auth import auth_bp
+from routes.stripe import stripe_bp, init_stripe
+from routes.admin import admin_bp
+from routes.team import team_bp
+
+app.register_blueprint(auth_bp)
+app.register_blueprint(stripe_bp)
+app.register_blueprint(admin_bp)
+app.register_blueprint(team_bp)
+
+# Inject Stripe functions into the Stripe Blueprint (avoids circular import)
+init_stripe(
+    available=_STRIPE_AVAILABLE,
+    checkout_fn=create_checkout_session,
+    portal_fn=create_customer_portal_session,
+    verify_fn=_stripe_verify,
+    dispatch_fn=_stripe_dispatch,
+)
+
+# Default portal URL — overridden per-user via Settings → URL field.
+# Each user enters the URL for their own county records portal (e.halFILE, etc.).
+_DEFAULT_PORTAL_URL = "http://records.1stnmtitle.com"
+
+def _get_portal_url() -> str:
+    """Return the county records portal base URL for the current request.
+    Reads from the active profile first, falls back to global config, then
+    falls back to the compiled-in default.  Strips trailing slashes."""
+    try:
+        pid = request.cookies.get('profile_id')
+    except RuntimeError:
+        pid = None  # called outside request context
+
+    url = ""
+    if pid:
+        p = get_profile(pid)
+        if p:
+            url = p.get("firstnm_url", "").strip()
+    if not url:
+        cfg = load_config()
+        url = cfg.get("firstnm_url", "").strip()
+    return (url or _DEFAULT_PORTAL_URL).rstrip("/")
+
+
+# ── ArcGIS Parcel Layer — configurable per user ────────────────────────────────
+# The app uses an ArcGIS REST FeatureService/MapServer layer for:
+#   • Parcel geometry  (map picker + spatial adjoiner discovery)
+#   • Owner name       (relevance scoring)
+#   • TRS (Township/Range/Section)  (relevance scoring)
+#   • Property address (address lookup)
+#
+# Each county organises its ArcGIS layer differently.  The user configures:
+#   arcgis_url   — full query URL, e.g. .../MapServer/29/query
+#   arcgis_fields — dict mapping concept → actual attribute field name
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Built-in preset: NM OSE statewide parcel service, Taos County layer
+_ARCGIS_PRESETS = {
+    "taos_nm": {
+        "label": "Taos County, NM (default)",
+        "url": "https://gis.ose.nm.gov/server_s/rest/services/Parcels/County_Parcels_2025/MapServer/29/query",
+        "fields": {
+            "parcel_id":   "UPC",
+            "owner":       "OwnerAll",
+            "address_all": "SitusAddressAll",
+            "address1":    "SitusAddress1",
+            "street_no":   "SitusStreetNumber",
+            "street_name": "SitusStreetName",
+            "city":        "SitusCity",
+            "zipcode":     "SitusZipCode",
+            "legal":       "LegalDescription",
+            "area":        "LandArea",
+            "subdivision": "Subdivision",
+            "zoning":      "ZoningDescription",
+            "land_use":    "LandUseDescription",
+            "township":    "Township",
+            "twp_dir":     "TownshipDirection",
+            "range":       "Range",
+            "rng_dir":     "RangeDirection",
+            "section":     "Section",
+            "struct_count":"StructureCount",
+            "struct_type": "StructureType",
+            "owner_type":  "OwnerType",
+            "mail_addr":   "MailAddressAll",
+        },
+    },
+}
+
+# Concepts that are optional — silently skipped if the field is not configured
+_ARCGIS_OPTIONAL_FIELDS = {
+    "address1", "street_no", "street_name", "city", "zipcode",
+    "zoning", "land_use", "struct_count", "struct_type", "owner_type",
+    "mail_addr", "twp_dir", "rng_dir",
+}
+
+
+def _get_arcgis_config() -> dict:
+    """Return the ArcGIS layer config for the current request.
+
+    Reads from active profile → global config → Taos NM default.
+    Returns dict: { url, fields: { concept: field_name } }
+    """
+    try:
+        pid = request.cookies.get('profile_id')
+    except RuntimeError:
+        pid = None
+
+    stored = None
+    if pid:
+        p = get_profile(pid)
+        if p and p.get('arcgis_url'):
+            stored = p
+    if not stored:
+        cfg = load_config()
+        if cfg.get('arcgis_url'):
+            stored = cfg
+
+    if stored:
+        # Merge user-supplied fields over the default field map
+        default_fields = dict(_ARCGIS_PRESETS['taos_nm']['fields'])
+        user_fields = stored.get('arcgis_fields') or {}
+        default_fields.update({k: v for k, v in user_fields.items() if v})
+        return {
+            'url':    stored['arcgis_url'].rstrip('/'),
+            'fields': default_fields,
+        }
+
+    # No user config — use built-in Taos NM default
+    preset = _ARCGIS_PRESETS['taos_nm']
+    return {'url': preset['url'], 'fields': dict(preset['fields'])}
+
+
+def _arcgis_field(cfg: dict, concept: str) -> str:
+    """Return the actual ArcGIS attribute field name for a logical concept.
+    Falls back to the Taos default if not configured."""
+    return cfg['fields'].get(concept) or _ARCGIS_PRESETS['taos_nm']['fields'].get(concept, '')
+
+
+def _arcgis_out_fields(cfg: dict, concepts: list) -> str:
+    """Build a comma-separated outFields string for a given list of concepts."""
+    fields = []
+    for c in concepts:
+        f = _arcgis_field(cfg, c)
+        if f and f not in fields:
+            fields.append(f)
+    return ','.join(fields)
+
 
 # ── Removable-drive detection ───────────────────────────────────────────────────
 # The Survey Data folder lives on a removable drive whose letter changes
@@ -93,10 +299,19 @@ def detect_survey_drive(force: bool = False) -> str | None:
     Caches the result; pass force=True to rescan.
     """
     global _detected_drive
+    # ── Dev mode: DEV_DATA_DIR env var bypasses drive scanning ──────────────
+    dev_dir = os.environ.get("DEV_DATA_DIR", "").strip()
+    if dev_dir and Path(dev_dir).exists():
+        _detected_drive = "__dev__"
+        if not force:
+            return _detected_drive
+        print(f"[drive] DEV MODE — using local data: {dev_dir}", flush=True)
+        return _detected_drive
     if _detected_drive and not force:
         # Verify cached drive is still present
-        if Path(f"{_detected_drive}:\\").exists():
+        if _detected_drive == "__dev__" or Path(f"{_detected_drive}:\\").exists():
             return _detected_drive
+
     # Try config override first
     cfg = load_config()
     override = cfg.get("survey_drive", "").strip().upper()
@@ -124,6 +339,9 @@ def detect_survey_drive(force: bool = False) -> str | None:
 def get_survey_data_path() -> str:
     """Return the current Survey Data path, auto-detecting the drive."""
     drive = detect_survey_drive()
+    if drive == "__dev__":
+        dev_dir = os.environ.get("DEV_DATA_DIR", "").strip()
+        return dev_dir if dev_dir else ""
     if drive:
         return str(Path(f"{drive}:\\") / _SURVEY_RELATIVE)
     return ""  # drive not found — caller should check for empty string and warn user
@@ -331,7 +549,15 @@ def save_research(job_number, client_name, job_type, data: dict):
 # ── static ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
+def landing():
+    """Public marketing/landing page. Authenticated users are redirected to /app by the JS."""
+    resp = make_response(send_from_directory(".", "landing.html"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+@app.route("/app")
 def index():
+    """The main SPA. Served to authenticated users."""
     resp = make_response(send_from_directory(".", "index.html"))
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
@@ -350,17 +576,65 @@ def serve_css():
 def serve_favicon():
     return send_from_directory(".", "favicon.png")
 
+
+@app.route("/robots.txt")
+def robots_txt():
+    """Block search engine crawlers from API, auth, and admin routes."""
+    content = (
+        "User-agent: *\n"
+        "Disallow: /api/\n"
+        "Disallow: /auth/\n"
+        "Disallow: /admin/\n"
+        "Disallow: /api/admin/\n"
+        "Disallow: /api/stripe/\n"
+        "Allow: /\n"
+    )
+    return app.response_class(content, mimetype="text/plain")
+
+
+@app.route("/.well-known/security.txt")
+def security_txt():
+    """Standard security.txt — tells researchers how to report vulnerabilities."""
+    _app_url = os.environ.get("DEED_APP_URL", "https://deedplathelper.netlify.app")
+    content = (
+        f"Contact: mailto:support@deedplathelper.com\n"
+        f"Expires: 2027-01-01T00:00:00.000Z\n"
+        f"Preferred-Languages: en\n"
+        f"Canonical: {_app_url}/.well-known/security.txt\n"
+        f"Policy: Please report security vulnerabilities responsibly via email before public disclosure.\n"
+    )
+    return app.response_class(content, mimetype="text/plain")
+
 @app.after_request
-def add_no_cache(response):
-    """Prevent browser from caching any local dev files.
-    Skips responses that already have explicit cache-control set (e.g. PDF preview)."""
+def add_security_headers(response):
+    """Add HTTP security headers and no-cache directives to every response."""
+    # ── Cache control ────────────────────────────────────────────────────────
     if "max-age" not in response.headers.get("Cache-Control", ""):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    # ── Security headers ─────────────────────────────────────────────────────
+    response.headers["X-Content-Type-Options"] = "nosniff"            # Prevent MIME sniffing
+    response.headers["X-Frame-Options"] = "DENY"                      # Clickjacking protection
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if _is_production:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"                      # Force HTTPS for 1 year
+        )
     return response
 
-# ── profiles ───────────────────────────────────────────────────────────────────
+# ── SaaS Auth routes → moved to routes/auth.py Blueprint ─────────────────────
+
+
+
+# ── Stripe billing → moved to routes/stripe.py Blueprint ─────────────────────
+# ── Admin panel   → moved to routes/admin.py Blueprint ─────────────────────
+
+
+# Team + backup routes -> moved to routes/team.py Blueprint
+
+# ── profiles ──────────────────────────────────────────────────────
 
 @app.route("/api/profiles", methods=["GET"])
 def api_profiles_list():
@@ -382,11 +656,12 @@ def api_profiles_create():
     if not name:
         return jsonify({"success": False, "error": "display_name is required"})
     p = create_profile(name)
-    # Optionally copy shared credentials into the new profile
+    # Optionally copy shared credentials + portal URL into the new profile
     cfg = load_config()
     if cfg.get("firstnm_user"):
         p["firstnm_user"] = cfg["firstnm_user"]
         p["firstnm_pass"] = cfg.get("firstnm_pass", "")
+        p["firstnm_url"]  = cfg.get("firstnm_url", "")
         save_profile(p)
     return jsonify({"success": True, "profile": p})
 
@@ -446,6 +721,8 @@ def api_config():
             user = cfg.get("firstnm_user") or cfg.get("username", "")
             pwd  = cfg.get("firstnm_pass") or cfg.get("password", "")
             sess = cfg.get("last_session")
+        # ArcGIS layer — prefer profile, fall back to global config, then default
+        arcgis_cfg = _get_arcgis_config()
         return jsonify({
             "success": True,
             "config": {
@@ -453,6 +730,18 @@ def api_config():
                 "firstnm_pass": pwd,
                 "firstnm_url":  cfg.get("firstnm_url", ""),
                 "last_session": sess,
+                # ArcGIS layer config
+                "arcgis_url":    arcgis_cfg["url"],
+                "arcgis_fields": arcgis_cfg["fields"],
+                "arcgis_is_default": not bool(
+                    (profile and profile.get("arcgis_url")) or cfg.get("arcgis_url")
+                ),
+                # Expose presets so the frontend can offer a selector
+                "arcgis_presets": [
+                    {"id": k, "label": v["label"], "url": v["url"],
+                     "fields": v["fields"]}
+                    for k, v in _ARCGIS_PRESETS.items()
+                ],
             }
         })
     data = request.get_json()
@@ -464,6 +753,14 @@ def api_config():
             profile["firstnm_pass"] = data.get("firstnm_pass", data.get("password", ""))
         if "last_session" in data:
             profile["last_session"] = data["last_session"]
+        if "arcgis_url" in data:
+            new_url = (data["arcgis_url"] or "").strip()
+            if new_url:  # Only overwrite if user actually supplied a URL
+                profile["arcgis_url"] = new_url
+        if "arcgis_fields" in data and isinstance(data["arcgis_fields"], dict) and profile.get("arcgis_url"):
+            profile["arcgis_fields"] = data["arcgis_fields"]
+        if "firstnm_url" in data:
+            profile["firstnm_url"] = data["firstnm_url"]
         save_profile(profile)
     else:
         cfg = load_config()
@@ -477,14 +774,177 @@ def api_config():
             cfg["firstnm_pass"] = data["password"]
         if "firstnm_url" in data:
             cfg["firstnm_url"] = data["firstnm_url"]
+        if "arcgis_url" in data:
+            new_url = (data["arcgis_url"] or "").strip()
+            if new_url:  # Only overwrite if user actually supplied a URL
+                cfg["arcgis_url"] = new_url
+        if "arcgis_fields" in data and isinstance(data["arcgis_fields"], dict) and cfg.get("arcgis_url"):
+            cfg["arcgis_fields"] = data["arcgis_fields"]
         if "last_session" in data:
             cfg["last_session"] = data["last_session"]
         cfg.pop("username", None)
         cfg.pop("password", None)
         save_config(cfg)
+    # Invalidate ArcGIS address cache so new settings take effect immediately
+    _address_cache.clear()
     return jsonify({"success": True})
 
-# ── login ──────────────────────────────────────────────────────────────────────
+
+# ── ArcGIS discover & test ──────────────────────────────────────────────────────
+
+@app.route("/api/arcgis-discover", methods=["POST"])
+@require_auth
+@require_pro
+def api_arcgis_discover():
+    """Probe an ArcGIS REST layer URL and return all available field names.
+
+    Body: { "url": "https://...query" }  (or just the base layer URL)
+    Returns: { success, fields: [{name, type, alias}], layer_info: {...} }
+    """
+    try:
+        data = request.get_json() or {}
+        raw_url = (data.get("url") or "").strip().rstrip("/")
+        if not raw_url:
+            return jsonify({"success": False, "error": "No URL provided"})
+
+        # Strip /query suffix if present so we hit the layer metadata endpoint
+        base_url = raw_url[:-6] if raw_url.lower().endswith("/query") else raw_url
+
+        resp = req_lib.get(
+            base_url,
+            params={"f": "json"},
+            headers={"User-Agent": "DeedPlatHelper/1.0"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return jsonify({"success": False, "error": f"HTTP {resp.status_code} from ArcGIS server"})
+
+        info = resp.json()
+        if "error" in info:
+            msg = info["error"].get("message", str(info["error"]))
+            return jsonify({"success": False, "error": f"ArcGIS error: {msg}"})
+
+        raw_fields = info.get("fields", [])
+        if not raw_fields:
+            return jsonify({"success": False,
+                           "error": "No fields found. Make sure the URL points to a specific layer (ending in /0, /1, /29, etc.) not the service root."})
+
+        fields = [
+            {
+                "name":  f.get("name", ""),
+                "alias": f.get("alias") or f.get("name", ""),
+                "type":  f.get("type", ""),
+            }
+            for f in raw_fields
+            if f.get("name")
+        ]
+
+        return jsonify({
+            "success": True,
+            "fields":  fields,
+            "layer_info": {
+                "name":        info.get("name", ""),
+                "description": info.get("description", ""),
+                "geometry_type": info.get("geometryType", ""),
+                "feature_count": info.get("maxRecordCount"),
+            },
+            "query_url": base_url + "/query",
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/arcgis-test", methods=["POST"])
+def api_arcgis_test():
+    """Run a sample parcel lookup with the provided ArcGIS config.
+
+    Body: {
+        "url":    "https://.../query",
+        "fields": { concept: field_name, ... },   // field mapping to test
+        "sample_id": "ABC123",                     // optional parcel ID to look up
+    }
+    Returns: { success, sample_result: {...}, matched_fields: [...] }
+    """
+    try:
+        data = request.get_json() or {}
+        url    = (data.get("url") or "").strip().rstrip("/")
+        fields = data.get("fields") or {}
+        sample_id = (data.get("sample_id") or "").strip()
+
+        if not url:
+            return jsonify({"success": False, "error": "No URL provided"})
+
+        # Ensure URL ends with /query
+        query_url = url if url.lower().endswith("/query") else url + "/query"
+
+        # Build a test config
+        test_cfg = {
+            "url":    query_url,
+            "fields": {
+                **_ARCGIS_PRESETS["taos_nm"]["fields"],  # defaults
+                **{k: v for k, v in fields.items() if v},   # user overrides
+            },
+        }
+
+        pid_field = _arcgis_field(test_cfg, "parcel_id")
+
+        if sample_id:
+            # Try to look up the provided parcel ID
+            result = _arcgis_lookup_upc(sample_id, arcgis_cfg=test_cfg)
+            if result:
+                return jsonify({"success": True, "sample_result": result,
+                               "tested_with": sample_id})
+            return jsonify({"success": False,
+                           "error": f"Parcel '{sample_id}' not found using field '{pid_field}'. Try a different sample ID."})
+
+        # No sample ID — fetch the first record from the layer to verify connectivity
+        out_fields = _arcgis_out_fields(test_cfg, list(test_cfg["fields"].keys()))
+        resp = req_lib.get(
+            query_url,
+            params={
+                "where":             "1=1",
+                "outFields":         out_fields,
+                "returnGeometry":    "false",
+                "resultRecordCount": "1",
+                "f":                 "json",
+            },
+            headers={"User-Agent": "DeedPlatHelper/1.0"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return jsonify({"success": False, "error": f"HTTP {resp.status_code} from ArcGIS"})
+
+        resp_data = resp.json()
+        if "error" in resp_data:
+            return jsonify({"success": False,
+                           "error": resp_data["error"].get("message", "ArcGIS query error")})
+
+        features = resp_data.get("features", [])
+        if not features:
+            return jsonify({"success": False, "error": "Layer returned no features. Check the URL and ensure the layer has data."})
+
+        sample_attrs = features[0].get("attributes", {})
+        # Show which configured fields actually have data
+        matched_fields = [
+            {"concept": c, "field": f, "value": str(sample_attrs.get(f, "(not found)"))[:80]}
+            for c, f in test_cfg["fields"].items()
+            if f
+        ]
+        return jsonify({
+            "success":        True,
+            "sample_attrs":   {k: str(v)[:80] for k, v in sample_attrs.items()},
+            "matched_fields": matched_fields,
+            "record_count":   resp_data.get("exceededTransferLimit", False),
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+# County Registry -> moved to routes/admin.py Blueprint
+
+# ── login ──────────────────────────────────────────────────────
 
 @app.route("/api/login", methods=["POST"])
 def api_login():
@@ -496,7 +956,7 @@ def api_login():
 
         # Fetch login page to discover form
         sess = _session()
-        resp = sess.get(BASE_URL + "/", timeout=8)
+        resp = sess.get(_get_portal_url() + "/", timeout=8)
         soup = BeautifulSoup(resp.text, "lxml")
         form = soup.find("form")
         if not form:
@@ -504,7 +964,7 @@ def api_login():
 
         action = form.get("action", "/")
         if not action.startswith("http"):
-            action = BASE_URL + "/" + action.lstrip("/")
+            action = _get_portal_url() + "/" + action.lstrip("/")
 
         form_data = {}
         for inp in form.find_all('input'):
@@ -541,9 +1001,10 @@ def api_login():
 
         post_resp = sess.post(action, data=form_data, timeout=8)
         # Success = we landed on the search/welcome page, NOT back on login
+        portal_root = _get_portal_url().lower().rstrip('/')
         landed_url = post_resp.url.lower()
         success = ('hfweb' in landed_url or 'new search' in post_resp.text.lower() or
-                   ('logout' in post_resp.text.lower() and 'records.1stnmtitle.com/' not in landed_url.rstrip('/')))
+                   ('logout' in post_resp.text.lower() and landed_url.rstrip('/') != portal_root))
 
         if success:
             if remember:
@@ -572,7 +1033,18 @@ def api_logout():
 # ── search ─────────────────────────────────────────────────────────────────────
 
 @app.route("/api/search", methods=["POST"])
+@require_auth
+@rate_limit(requests=30, window=60)   # hard IP throttle: 30 req/min (quota gate is the main limit)
 def api_search():
+    # ── Quota gate ──────────────────────────────────────────────────────────
+    allowed, quota_msg = check_search_quota(g.current_user)
+    if not allowed:
+        return jsonify({
+            "success":        False,
+            "error":          quota_msg,
+            "upgrade_required": True,
+            "current_tier":   g.current_user.get("tier", "free"),
+        }), 403
     try:
         data = request.get_json()
         name      = data.get("name", "").strip()
@@ -582,13 +1054,13 @@ def api_search():
         op_map = {"contains": "contains", "begins with": "begin", "exact match": "exact", "equals": "exact"}
         operator = op_map.get(data.get("operator", "contains"), "contains")
 
-        search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+        search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
         sess = _session()
         resp = sess.get(search_url, timeout=15)
 
         # Detect redirect back to login page
         landed = resp.url.lower().rstrip('/')
-        if landed == BASE_URL.lower().rstrip('/') or 'login' in landed:
+        if landed == _get_portal_url().lower().rstrip('/') or 'login' in landed:
             return jsonify({"success": False, "error": "Session expired — please log in again."})
 
         # The site has malformed HTML (form appears after </html>),
@@ -599,7 +1071,7 @@ def api_search():
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # Action is set via JS; we know it's always hflook.asp
-        action = BASE_URL + "/scripts/hflook.asp"
+        action = _get_portal_url() + "/scripts/hflook.asp"
 
 
         form_data = _scrape_form_data(soup)
@@ -656,6 +1128,11 @@ def api_search():
                 "grantee":          cells[10].text.strip() if len(cells) > 10 else "",
             })
 
+        # Increment monthly search counter for tier tracking + save to history
+        increment_search_count(g.current_user)
+        _query = name or address
+        if _query:
+            add_search_history(g.current_user["id"], _query, len(results))
         return jsonify({"success": True, "results": results, "count": len(results), "count_text": count_text})
     except Exception as e:
         traceback.print_exc()
@@ -760,6 +1237,8 @@ def _score_search_result(
 
 
 @app.route("/api/search-enriched", methods=["POST"])
+@require_auth
+@require_pro
 def api_search_enriched():
     """Enriched search: standard 1stNMTitle search + ArcGIS relevance scoring.
 
@@ -790,18 +1269,18 @@ def api_search_enriched():
             return jsonify({"success": False, "error": "No search criteria provided"})
 
         sess = _session()
-        search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+        search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
         resp = sess.get(search_url, timeout=15)
 
         landed = resp.url.lower().rstrip('/')
-        if landed == BASE_URL.lower().rstrip('/') or 'login' in landed:
+        if landed == _get_portal_url().lower().rstrip('/') or 'login' in landed:
             return jsonify({"success": False, "error": "Session expired — please log in again."})
 
         if 'CROSSNAMEFIELD' not in resp.text and 'FIELD14' not in resp.text:
             return jsonify({"success": False, "error": "Session expired — please log in again."})
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        action = BASE_URL + "/scripts/hflook.asp"
+        action = _get_portal_url() + "/scripts/hflook.asp"
         form_data = _scrape_form_data(soup)
         if not form_data:
             return jsonify({"success": False, "error": "Search form not found"})
@@ -915,6 +1394,8 @@ def api_search_enriched():
 # ── chain-of-title search ─────────────────────────────────────────────────────
 
 @app.route("/api/chain-search", methods=["POST"])
+@require_auth
+@require_pro
 def api_chain_search():
     """
     Trace ownership backward by recursively searching the grantor as grantee.
@@ -939,7 +1420,7 @@ def api_chain_search():
 
         for hop in range(max_hops):
             # Search for current_name as GRANTEE (find deed where they received property)
-            search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+            search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
             try:
                 resp = _session().get(search_url, timeout=15)
             except Exception:
@@ -962,7 +1443,7 @@ def api_chain_search():
             form_data["CROSSNAMETYPE"] = "begin"
             form_data["CROSSTYPE"] = "GE"  # GE = grantee
 
-            action = BASE_URL + "/scripts/hflook.asp"
+            action = _get_portal_url() + "/scripts/hflook.asp"
             try:
                 post_resp = _session().post(action, data=form_data, timeout=20)
             except Exception:
@@ -1047,6 +1528,7 @@ def api_chain_search():
 # ── document detail ────────────────────────────────────────────────────────────
 
 @app.route("/api/document/<doc_no>", methods=["GET", "POST"])
+@require_auth
 def api_document(doc_no):
     try:
         cfg = load_config()
@@ -1059,7 +1541,7 @@ def api_document(doc_no):
             body = request.get_json(silent=True) or {}
             search_row = body.get("search_result", {})
 
-        url = f"{BASE_URL}/scripts/hfpage.asp?Appl=FNM&Doctype=TP&DocNo={doc_no}&FormUser={username}"
+        url = f"{_get_portal_url()}/scripts/hfpage.asp?Appl=FNM&Doctype=TP&DocNo={doc_no}&FormUser={username}"
         resp = _session().get(url, timeout=15)
         soup = BeautifulSoup(resp.text, "lxml")
 
@@ -1111,10 +1593,10 @@ def api_document(doc_no):
         pdf_link = soup.find("a", string=re.compile(r"pdf all pages", re.I))
         if pdf_link:
             href = pdf_link.get("href", "")
-            detail["pdf_url"] = (BASE_URL + "/" + href.lstrip("/")
+            detail["pdf_url"] = (_get_portal_url() + "/" + href.lstrip("/")
                                  if not href.startswith("http") else href)
         else:
-            detail["pdf_url"] = f"{BASE_URL}/WebTemp/{doc_no}.pdf"
+            detail["pdf_url"] = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
 
         # ── TRS extraction ────────────────────────────────────────────────────
         all_text = page_text + " " + " ".join(str(v) for v in detail.values())
@@ -1155,7 +1637,7 @@ def find_adjoiners_online(location: str, grantor: str, sess: req_lib.Session | N
 
     # Search online by location prefix (book number)
     try:
-        search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+        search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
         _s = sess or _session()
         resp = _s.get(search_url, timeout=12)
         if "FIELD14" not in resp.text and "CROSSNAMEFIELD" not in resp.text:
@@ -1172,7 +1654,7 @@ def find_adjoiners_online(location: str, grantor: str, sess: req_lib.Session | N
         fd["FIELD14"]    = book + "-"
         fd["FIELD14TYPE"] = "begin"
 
-        post = _s.post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=20)
+        post = _s.post(f"{_get_portal_url()}/scripts/hflook.asp", data=fd, timeout=20)
         soup2 = BeautifulSoup(post.text, "html.parser")
 
         # Collect unique grantors/grantees from nearby records (skip our own grantor)
@@ -1227,6 +1709,8 @@ def ocr_plat_file(pdf_path: str) -> list[str]:
 
 
 @app.route("/api/find-adjoiners", methods=["POST"])
+@require_auth
+@require_pro
 def api_find_adjoiners():
     """
     Automatically discover adjoiner names from:
@@ -1642,6 +2126,7 @@ def search_local_cabinet(cabinet: str, doc_num: str,
 
 
 @app.route("/api/find-plat", methods=["POST"])
+@require_auth
 def api_find_plat():
     """
     INSTANT: Returns parsed cabinet refs from deed text — zero I/O.
@@ -1664,6 +2149,7 @@ def api_find_plat():
 
 
 @app.route("/api/find-plat-kml", methods=["POST"])
+@require_auth
 def api_find_plat_kml():
     """
     KML parcel index cross-reference.
@@ -1728,6 +2214,7 @@ def api_find_plat_kml():
 
 
 @app.route("/api/find-plat-local", methods=["POST"])
+@require_auth
 def api_find_plat_local():
     """
     Targeted cabinet scan — locates plat PDFs by finding the correct cabinet
@@ -2025,7 +2512,7 @@ def api_find_plat_local():
             if local_hits:
                 targeting_reason = broadened_reason
         elif not local_hits and not has_deed_detail:
-            print(f"[local] 0 results (name-only mode — auto-broaden disabled)", flush=True)
+            print("[local] 0 results (name-only mode — auto-broaden disabled)", flush=True)
 
         # ── Diagnostic: log what was searched when 0 results ─────────────────────
         if not local_hits:
@@ -2085,6 +2572,7 @@ def api_find_plat_local():
 
 
 @app.route("/api/find-plat-online", methods=["POST"])
+@require_auth
 def api_find_plat_online():
     """
     Slow online survey search (separate endpoint so it doesn't block the UI).
@@ -2105,7 +2593,7 @@ def api_find_plat_online():
             if not name_last or len(name_last) < 2:
                 return
             try:
-                search_url = f"{BASE_URL}/scripts/hfweb.asp?Application=FNM&Database=TP"
+                search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
                 resp = _session().get(search_url, timeout=8)
                 if "CROSSNAMEFIELD" not in resp.text and "FIELD14" not in resp.text:
                     return  # not logged in
@@ -2118,7 +2606,7 @@ def api_find_plat_online():
                 # NOTE: Do NOT set FIELD7="SUR" here — it conflicts with the form
                 # and may suppress all results. Instrument-type filtering is done
                 # by the regex below after results are returned.
-                post  = _session().post(f"{BASE_URL}/scripts/hflook.asp", data=fd, timeout=10)
+                post  = _session().post(f"{_get_portal_url()}/scripts/hflook.asp", data=fd, timeout=10)
                 soup2 = BeautifulSoup(post.text, "html.parser")
                 for row in soup2.find_all("tr"):
                     cells = row.find_all("td")
@@ -2141,7 +2629,7 @@ def api_find_plat_online():
                         "recorded_date":   cells[7].text.strip() if len(cells) > 7 else "",
                         "grantor":         cells[9].text.strip() if len(cells) > 9 else "",
                         "grantee":         cells[10].text.strip() if len(cells) > 10 else "",
-                        "pdf_url":         f"{BASE_URL}/WebTemp/{doc_no}.pdf",
+                        "pdf_url":         f"{_get_portal_url()}/WebTemp/{doc_no}.pdf",
                         "source":          "online",
                         "search_label":    label,
                     })
@@ -2225,7 +2713,7 @@ def api_save_plat():
         if source == "local":
             shutil.copy2(file_path, dest)
         elif source == "online":
-            pdf_url  = data.get("pdf_url", f"{BASE_URL}/WebTemp/{doc_no}.pdf")
+            pdf_url  = data.get("pdf_url", f"{_get_portal_url()}/WebTemp/{doc_no}.pdf")
             pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
             if pdf_resp.status_code != 200:
                 return jsonify({"success": False, "error": f"PDF fetch failed: {pdf_resp.status_code}"})
@@ -2331,6 +2819,7 @@ def api_next_job():
 # ── create project ─────────────────────────────────────────────────────────────
 
 @app.route("/api/create-project", methods=["POST"])
+@require_auth
 def api_create_project():
     try:
         data = request.get_json()
@@ -2407,7 +2896,7 @@ def api_download():
             })
 
         # Download
-        pdf_url  = f"{BASE_URL}/WebTemp/{doc_no}.pdf"
+        pdf_url  = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
         pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
         if pdf_resp.status_code != 200:
             return jsonify({"success": False, "error": f"PDF fetch failed: {pdf_resp.status_code}"})
@@ -2770,6 +3259,7 @@ def api_recent_jobs():
 
 
 @app.route("/api/export-session", methods=["POST"])
+@require_auth
 def api_export_session():
     """Generate a plain-text research summary from the current session."""
     try:
@@ -2779,12 +3269,12 @@ def api_export_session():
             return jsonify({"success": False, "error": "No session provided"})
 
         lines = [
-            f"DEED & PLAT RESEARCH SUMMARY",
+            "DEED & PLAT RESEARCH SUMMARY",
             f"{'='*50}",
             f"Job #:    {rs.get('job_number')}",
             f"Client:   {rs.get('client_name')}",
             f"Type:     {rs.get('job_type')}",
-            f"",
+            "",
         ]
         subjects = rs.get("subjects", [])
         prog     = rs.get("progress", {})
@@ -2937,6 +3427,8 @@ def api_extract_calls_from_pdf():
 # ── /api/generate-dxf ─────────────────────────────────────────────────────────
 
 @app.route("/api/generate-dxf", methods=["POST"])
+@require_auth
+@require_pro
 def api_generate_dxf():
     """
     Generate a DXF file from one or more parcel call-lists.
@@ -3500,25 +3992,9 @@ def api_xml_map_geojson():
 _address_cache: dict = {}
 _nominatim_last_call: float = 0.0   # monotonic timestamp of last Nominatim call
 
-# ── NM State ArcGIS Parcel Service (primary) ──────────────────────────────────
-# Free, no API key needed, returns official situs addresses tied to UPC
-ARCGIS_TAOS_QUERY_URL = (
-    "https://gis.ose.nm.gov/server_s/rest/services/"
-    "Parcels/County_Parcels_2025/MapServer/29/query"
-)
-ARCGIS_OUT_FIELDS = (
-    "UPC,OwnerAll,SitusAddressAll,SitusAddress1,SitusAddress2,"
-    "SitusStreetNumber,SitusStreetName,SitusCity,SitusZipCode,"
-    "LegalDescription,LandArea,Subdivision,ZoningDescription,"
-    "Township,TownshipDirection,Range,RangeDirection,Section,"
-    "StructureCount,StructureType,OwnerType,MailAddressAll,LandUseDescription"
-)
-
-# Fields returned for spatial adjoiner queries (lighter payload)
-ARCGIS_ADJOINER_FIELDS = (
-    "UPC,OwnerAll,LandArea,Subdivision,LegalDescription,"
-    "SitusAddressAll,Township,TownshipDirection,Range,RangeDirection,Section"
-)
+# ArcGIS config is now fully dynamic — see _get_arcgis_config() above.
+# All queries use _get_arcgis_config() at request time so each user/profile
+# can point to their own county's ArcGIS REST layer.
 
 # ── Nominatim (fallback) ─────────────────────────────────────────────────────
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
@@ -3528,10 +4004,12 @@ NOMINATIM_HEADERS = {
 }
 
 
-def _arcgis_lookup_upc(upc: str) -> dict:
-    """Query the NM ArcGIS parcel service by UPC.
+def _arcgis_lookup_upc(upc: str, arcgis_cfg: dict = None) -> dict:
+    """Query the configured ArcGIS parcel layer by parcel ID.
 
-    Returns a dict with address fields, or None on failure.
+    Uses the dynamic ArcGIS config (URL + field mapping) so any county's
+    layer works, not just Taos NM.
+    Returns a normalised dict with address fields, or None on failure.
     """
     if not upc:
         return None
@@ -3540,96 +4018,110 @@ def _arcgis_lookup_upc(upc: str) -> dict:
     if cache_key in _address_cache:
         return _address_cache[cache_key]
 
+    cfg = arcgis_cfg or _get_arcgis_config()
+    fld = lambda c: _arcgis_field(cfg, c)  # shorthand
+
+    pid_field = fld('parcel_id')
+    out_concepts = [
+        'parcel_id', 'owner',
+        'address_all', 'address1', 'street_no', 'street_name', 'city', 'zipcode',
+        'legal', 'area', 'subdivision', 'zoning', 'land_use',
+        'township', 'twp_dir', 'range', 'rng_dir', 'section',
+        'struct_count', 'struct_type', 'owner_type', 'mail_addr',
+    ]
+    out_fields = _arcgis_out_fields(cfg, out_concepts)
+
     try:
         resp = req_lib.get(
-            ARCGIS_TAOS_QUERY_URL,
+            cfg['url'],
             params={
-                "where":            f"UPC='{upc}'",
-                "outFields":        ARCGIS_OUT_FIELDS,
-                "returnGeometry":   "false",
-                "f":                "json",
+                "where":          f"{pid_field}='{upc}'",
+                "outFields":      out_fields,
+                "returnGeometry": "false",
+                "f":              "json",
             },
             headers={"User-Agent": "DeedPlatHelper/1.0"},
             timeout=15,
         )
         if resp.status_code != 200:
-            print(f"[address] ArcGIS returned {resp.status_code} for UPC {upc}", flush=True)
+            print(f"[address] ArcGIS returned {resp.status_code} for {pid_field}={upc}", flush=True)
             return None
 
         data = resp.json()
         features = data.get("features", [])
         if not features:
-            print(f"[address] ArcGIS: no features for UPC {upc}", flush=True)
+            print(f"[address] ArcGIS: no features for {pid_field}={upc}", flush=True)
             return None
 
         attrs = features[0].get("attributes", {})
+        g = lambda c: (attrs.get(fld(c)) or "").strip() if isinstance(attrs.get(fld(c)), str) else (attrs.get(fld(c)) or "")
 
-        # Build short_address from official situs fields
-        situs_all = (attrs.get("SitusAddressAll") or "").strip()
-        situs1    = (attrs.get("SitusAddress1") or "").strip()
-        street_no = (attrs.get("SitusStreetNumber") or "").strip()
-        street_nm = (attrs.get("SitusStreetName") or "").strip()
-        city      = (attrs.get("SitusCity") or "").strip()
-        zipcode   = (attrs.get("SitusZipCode") or "").strip()
+        # Build short address — prefer address1, then street_no+name, then address_all
+        situs_all = g('address_all')
+        situs1    = g('address1')
+        street_no = g('street_no')
+        street_nm = g('street_name')
+        city      = g('city')
+        zipcode   = g('zipcode')
 
-        # Prefer the most complete address representation
         if situs1:
-            short_addr = situs1
-            if city:
-                short_addr += f", {city}"
+            short_addr = situs1 + (f", {city}" if city else "")
         elif street_no and street_nm:
-            short_addr = f"{street_no} {street_nm}"
-            if city:
-                short_addr += f", {city}"
+            short_addr = f"{street_no} {street_nm}" + (f", {city}" if city else "")
         elif situs_all and situs_all != zipcode:
             short_addr = situs_all
         else:
-            short_addr = ""   # no usable street address
+            short_addr = ""
 
-        # Build TRS string from component fields
-        twp = (attrs.get("Township") or "").strip()
-        twp_dir = (attrs.get("TownshipDirection") or "").strip()
-        rng = (attrs.get("Range") or "").strip()
-        rng_dir = (attrs.get("RangeDirection") or "").strip()
-        sec = (attrs.get("Section") or "").strip()
+        # Build TRS string
+        twp     = str(g('township'))
+        twp_dir = str(g('twp_dir'))
+        rng     = str(g('range'))
+        rng_dir = str(g('rng_dir'))
+        sec     = str(g('section'))
         trs_str = ""
         if twp and rng:
             trs_str = f"T{twp}{twp_dir} R{rng}{rng_dir}"
             if sec:
                 trs_str += f" Sec {sec}"
 
+        # land_area may be numeric
+        area_raw = attrs.get(fld('area'))
+        area_val = area_raw if area_raw is not None else ""
+
         result = {
-            "success":          True,
-            "source":           "arcgis",
-            "short_address":    short_addr or "(no street address on file)",
-            "situs_full":       situs_all,
-            "situs_address1":   situs1,
-            "street_number":    street_no,
-            "street_name":      street_nm,
-            "city":             city,
-            "zipcode":          zipcode,
-            "owner_official":   (attrs.get("OwnerAll") or "").strip(),
-            "legal_description": (attrs.get("LegalDescription") or "").strip(),
-            "land_area":        (attrs.get("LandArea") or ""),
-            "upc":              upc,
+            "success":           True,
+            "source":            "arcgis",
+            "short_address":     short_addr or "(no street address on file)",
+            "situs_full":        situs_all,
+            "situs_address1":    situs1,
+            "street_number":     street_no,
+            "street_name":       street_nm,
+            "city":              city,
+            "zipcode":           zipcode,
+            "owner_official":    g('owner'),
+            "legal_description": g('legal'),
+            "land_area":         area_val,
+            "upc":               upc,
             "has_street_address": bool(situs1 or (street_no and street_nm)),
-            # Enriched fields
-            "subdivision":      (attrs.get("Subdivision") or "").strip(),
-            "zoning":           (attrs.get("ZoningDescription") or "").strip(),
-            "land_use":         (attrs.get("LandUseDescription") or "").strip(),
-            "trs":              trs_str,
-            "structure_count":  attrs.get("StructureCount") or 0,
-            "structure_type":   (attrs.get("StructureType") or "").strip(),
-            "owner_type":       (attrs.get("OwnerType") or "").strip(),
-            "mail_address":     (attrs.get("MailAddressAll") or "").strip(),
+            "subdivision":       g('subdivision'),
+            "zoning":            g('zoning'),
+            "land_use":          g('land_use'),
+            "trs":               trs_str,
+            "structure_count":   attrs.get(fld('struct_count')) or 0,
+            "structure_type":    g('struct_type'),
+            "owner_type":        g('owner_type'),
+            "mail_address":      g('mail_addr'),
+            # Pass through the config so callers know what layer was used
+            "arcgis_url":        cfg['url'],
         }
 
         _address_cache[cache_key] = result
-        print(f"[address] ArcGIS UPC {upc} → {result['short_address']}", flush=True)
+        print(f"[address] ArcGIS {pid_field}={upc} → {result['short_address']}", flush=True)
         return result
 
     except Exception as e:
-        print(f"[address] ArcGIS error for UPC {upc}: {e}", flush=True)
+        print(f"[address] ArcGIS error for {upc}: {e}", flush=True)
         return None
 
 
@@ -3716,6 +4208,7 @@ def _nominatim_reverse(lat: float, lon: float) -> dict:
 
 
 @app.route("/api/property-address", methods=["POST"])
+@require_auth
 def api_property_address():
     """Look up property address info.
 
@@ -3763,6 +4256,7 @@ def api_property_address():
 
 
 @app.route("/api/batch-property-address", methods=["POST"])
+@require_auth
 def api_batch_property_address():
     """Look up addresses for up to 10 parcels.
 
@@ -3803,19 +4297,22 @@ def api_batch_property_address():
 # ARCGIS SPATIAL ADJOINER DISCOVERY
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _arcgis_get_parcel_geometry(upc: str) -> dict | None:
-    """Fetch the polygon geometry for a parcel from ArcGIS by UPC.
-
+def _arcgis_get_parcel_geometry(upc: str, arcgis_cfg: dict = None) -> dict | None:
+    """Fetch the polygon geometry for a parcel from ArcGIS by parcel ID.
+    Uses the dynamic ArcGIS config so any county layer works.
     Returns { "rings": [...], "spatialReference": {...} } or None.
     """
     if not upc:
         return None
+    cfg = arcgis_cfg or _get_arcgis_config()
+    pid_field = _arcgis_field(cfg, 'parcel_id')
+    owner_field = _arcgis_field(cfg, 'owner')
     try:
         resp = req_lib.get(
-            ARCGIS_TAOS_QUERY_URL,
+            cfg['url'],
             params={
-                "where":          f"UPC='{upc}'",
-                "outFields":      "UPC,OwnerAll",
+                "where":          f"{pid_field}='{upc}'",
+                "outFields":      f"{pid_field},{owner_field}",
                 "returnGeometry": "true",
                 "outSR":          "4326",
                 "f":              "json",
@@ -3830,33 +4327,39 @@ def _arcgis_get_parcel_geometry(upc: str) -> dict | None:
             return None
         return features[0].get("geometry")
     except Exception as e:
-        print(f"[arcgis-adj] Geometry fetch error for UPC {upc}: {e}", flush=True)
+        print(f"[arcgis-adj] Geometry fetch error for {upc}: {e}", flush=True)
         return None
 
 
-def _arcgis_find_touching_parcels(geometry: dict) -> list:
+def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> list:
     """Query ArcGIS for all parcels that spatially touch the given polygon.
 
-    Uses esriSpatialRelTouches — returns parcels sharing a boundary edge/vertex.
-    Falls back to esriSpatialRelIntersects with a tiny buffer if touches returns nothing.
-
-    Returns a list of dicts: [{ upc, owner, land_area, subdivision, ... }]
+    Uses esriSpatialRelTouches first, falls back to esriSpatialRelIntersects.
+    Returns a list of normalised dicts regardless of the county's field names.
     """
+    cfg = arcgis_cfg or _get_arcgis_config()
+    fld = lambda c: _arcgis_field(cfg, c)
+    adj_concepts = [
+        'parcel_id', 'owner', 'area', 'subdivision', 'legal',
+        'address_all', 'township', 'twp_dir', 'range', 'rng_dir', 'section',
+    ]
+    out_fields = _arcgis_out_fields(cfg, adj_concepts)
+
     results = []
     for spatial_rel in ("esriSpatialRelTouches", "esriSpatialRelIntersects"):
         try:
             resp = req_lib.get(
-                ARCGIS_TAOS_QUERY_URL,
+                cfg['url'],
                 params={
-                    "geometry":       json.dumps(geometry),
-                    "geometryType":   "esriGeometryPolygon",
-                    "spatialRel":     spatial_rel,
-                    "inSR":           "4326",
-                    "outSR":          "4326",
-                    "outFields":      ARCGIS_ADJOINER_FIELDS,
-                    "returnGeometry": "false",
+                    "geometry":          json.dumps(geometry),
+                    "geometryType":      "esriGeometryPolygon",
+                    "spatialRel":        spatial_rel,
+                    "inSR":              "4326",
+                    "outSR":             "4326",
+                    "outFields":         out_fields,
+                    "returnGeometry":    "false",
                     "resultRecordCount": "100",
-                    "f":              "json",
+                    "f":                 "json",
                 },
                 headers={"User-Agent": "DeedPlatHelper/1.0"},
                 timeout=20,
@@ -3867,27 +4370,26 @@ def _arcgis_find_touching_parcels(geometry: dict) -> list:
             if features:
                 for feat in features:
                     a = feat.get("attributes", {})
-                    # Build TRS
-                    twp = (a.get("Township") or "").strip()
-                    twp_dir = (a.get("TownshipDirection") or "").strip()
-                    rng = (a.get("Range") or "").strip()
-                    rng_dir = (a.get("RangeDirection") or "").strip()
-                    sec = (a.get("Section") or "").strip()
+                    g = lambda c: (a.get(fld(c)) or "").strip() if isinstance(a.get(fld(c)), str) else str(a.get(fld(c)) or "")
+                    twp = g('township'); twp_dir = g('twp_dir')
+                    rng = g('range');    rng_dir = g('rng_dir')
+                    sec = g('section')
                     trs = f"T{twp}{twp_dir} R{rng}{rng_dir}" if twp and rng else ""
                     if trs and sec:
                         trs += f" Sec {sec}"
+                    legal_raw = a.get(fld('legal')) or ""
                     results.append({
-                        "upc":           (a.get("UPC") or "").strip(),
-                        "owner":         (a.get("OwnerAll") or "").strip(),
-                        "land_area":     a.get("LandArea") or 0,
-                        "subdivision":   (a.get("Subdivision") or "").strip(),
-                        "legal":         (a.get("LegalDescription") or "").strip()[:200],
-                        "address":       (a.get("SitusAddressAll") or "").strip(),
-                        "trs":           trs,
-                        "source":        "arcgis_spatial",
-                        "spatial_rel":   spatial_rel,
+                        "upc":         g('parcel_id'),
+                        "owner":       g('owner'),
+                        "land_area":   a.get(fld('area')) or 0,
+                        "subdivision": g('subdivision'),
+                        "legal":       (str(legal_raw).strip())[:200],
+                        "address":     g('address_all'),
+                        "trs":         trs,
+                        "source":      "arcgis_spatial",
+                        "spatial_rel": spatial_rel,
                     })
-                break  # Got results, don't fall through to intersects
+                break
         except Exception as e:
             print(f"[arcgis-adj] Spatial query error ({spatial_rel}): {e}", flush=True)
             continue
@@ -3895,6 +4397,8 @@ def _arcgis_find_touching_parcels(geometry: dict) -> list:
 
 
 @app.route("/api/arcgis-adjoiners", methods=["POST"])
+@require_auth
+@require_pro
 def api_arcgis_adjoiners():
     """Find adjacent parcels using ArcGIS spatial queries.
 
@@ -3941,7 +4445,7 @@ def api_arcgis_adjoiners():
             })
 
         # Step 2: Spatial query
-        print(f"[arcgis-adj] Running spatial query for touching parcels...", flush=True)
+        print("[arcgis-adj] Running spatial query for touching parcels...", flush=True)
         raw = _arcgis_find_touching_parcels(geometry)
 
         # Step 3: Filter out the client's own parcel
@@ -3987,6 +4491,8 @@ def analyze_deed(detail: dict, pdf_path: str = "") -> dict:
 
 
 @app.route("/api/extract-deed-description", methods=["POST"])
+@require_auth
+@require_pro
 def api_extract_deed_description():
     """
     Extract the full property description from a deed PDF.
@@ -4043,7 +4549,7 @@ def api_extract_deed_description():
         if not full_text.strip() and doc_no:
             # Try to download the PDF from the online source into a temp file
             try:
-                pdf_url  = f"{BASE_URL}/WebTemp/{doc_no}.pdf"
+                pdf_url  = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
                 pdf_resp = _session().get(pdf_url, stream=True, timeout=20)
                 if pdf_resp.status_code == 200:
                     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
@@ -4156,6 +4662,8 @@ def _isolate_legal_description(text: str) -> str:
 
 
 @app.route("/api/analyze-deed", methods=["POST"])
+@require_auth
+@require_pro
 def api_analyze_deed():
     """
     Deep deed analysis endpoint.
@@ -4288,7 +4796,7 @@ if __name__ == "__main__":
     _lan = _get_lan_ip()
     print("=" * 60)
     print("  Deed & Plat Helper")
-    print(f"  Local:   http://localhost:5000")
+    print("  Local:   http://localhost:5000")
     print(f"  Network: http://{_lan}:5000")
     print("=" * 60)
     # Cabinet index already initialized at module-import time (see above).

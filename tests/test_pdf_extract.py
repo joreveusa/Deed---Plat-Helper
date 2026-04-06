@@ -8,7 +8,7 @@ Run with:  py -m pytest tests/test_pdf_extract.py -v
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from helpers.pdf_extract import _find_tesseract, _ocr_cache_path, setup_tesseract
 
