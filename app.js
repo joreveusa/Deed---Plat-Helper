@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 const API = "/api";  // Use relative URL to avoid CORS issues
 
 
@@ -317,9 +317,9 @@ function _getAbortSignal(key) {
   return _abortControllers[key].signal;
 }
 
-//
+// 
 // INIT & BOOTSTRAP
-//
+// 
 document.addEventListener("DOMContentLoaded", async () => {
   // Initialize profile system — restores saved profile or prompts user
   await _initProfiles();
@@ -358,29 +358,15 @@ async function loadConfig() {
       if (res.config.firstnm_pass) document.getElementById("cfgPass").value = res.config.firstnm_pass;
       if (res.config.firstnm_url) document.getElementById("cfgUrl").value = res.config.firstnm_url;
       state.lastSession = res.config.last_session;
-
-      // Update the Step 3 badge to show the user's configured portal hostname
-      const badge = document.getElementById("s3OnlineBadge");
-      if (badge && res.config.firstnm_url) {
-        try {
-          const hostname = new URL(res.config.firstnm_url).hostname.replace(/^www\./, '');
-          badge.textContent = hostname;
-        } catch (_) { /* malformed URL, keep default */ }
-      }
-
-      // Populate the ArcGIS parcel layer section
-      if (res.config.arcgis_url !== undefined) {
-        _populateArcgisUI(res.config);
-      }
     }
   } catch (e) {
     console.error("Config load failed", e);
   }
 }
 
-//
+// 
 // WORKFLOW STEPPER LOGIC
-//
+// 
 function goToStep(step) {
   if (step > 1 && !state.researchSession) {
     showToast("Please start a research session first", "warn");
@@ -474,9 +460,9 @@ function updateJobContext() {
   updateFileBadges();
 }
 
-//
+// 
 // STEP 1: JOB SETUP
-//
+// 
 async function startSession() {
   const numInput = document.getElementById("setupJobNum").value;
   const num = parseInt(numInput) || state.nextJobNum;
@@ -706,16 +692,16 @@ function _safeCloneSession(session) {
     return safe;
   }
 }
-//
+// 
 // STEP 2: CLIENT DEED
-//
+// 
 async function doStep2Search(sortBy) {
   const name = document.getElementById("s2SearchName").value.trim();
   const op = document.getElementById("s2SearchOp").value;
   const sort = sortBy || (document.getElementById("s2SortBy")?.value) || "relevance";
 
   if (!state.loggedIn) {
-    showToast("Not connected to County Records portal — click Settings to connect", "warn");
+    showToast("Not connected to 1stNMTitle — click Settings to log in", "warn");
     await checkLogin();
     if (!state.loggedIn) return;
   }
@@ -1988,7 +1974,7 @@ async function doStep3Search() {
   // Set all columns to loading state
   locCards.innerHTML = noDeedBanner + '<div class="loading-state">Identifying target cabinet...</div>';
   if (kmlCards) kmlCards.innerHTML = '<div class="loading-state">Querying KML parcel index...</div>';
-  onlCards.innerHTML = '<div class="loading-state">Searching county records portal...</div>';
+  onlCards.innerHTML = '<div class="loading-state">Searching 1stnmtitle.com...</div>';
 
   // ── A: Instant deed parse (returns cabinet refs, zero I/O) ────────────────
   let cabRefs = [];
@@ -2561,9 +2547,9 @@ async function saveClientPlatOnline(docNo, loc) {
   }
 }
 
-//
+// 
 // STEP 4: ADJOINER DISCOVERY
-//
+// 
 /**
  * Fire-and-forget: pre-scan adjoiners in the background after plat save.
  * Results are cached in state._prefetchedAdjoiners so Step 4 renders instantly.
@@ -2989,9 +2975,9 @@ async function saveFromCabinetBrowser(filePath, filename) {
     showToast('Error: ' + e.message, 'error');
   }
 }
-//
+// 
 // STEP 5: ADJOINER RESEARCH BOARD
-//
+// 
 function renderResearchBoard() {
   const grid = document.getElementById("s5ResearchGrid");
   const rs = state.researchSession;
@@ -3207,11 +3193,7 @@ function buildChainTracker(s) {
   </div>`;
 }
 
-<<<<<<< HEAD
 //  Search from board — now opens inline deed pick modal instead of navigating away
-=======
-//  Search from board
->>>>>>> origin/main
 function searchForSubject(name) {
   // Find the subject by name and use the inline deed search modal
   const rs = state.researchSession;
@@ -3609,7 +3591,7 @@ async function _pickAdjPlatOnline(subjId, idx) {
   } catch (e) { showToast('Error: ' + e.message, 'error'); }
 }
 
-//  Board persistence helpers
+//  Board persistence helpers 
 async function removeSubject(id) {
   state.researchSession.subjects = state.researchSession.subjects.filter(s => s.id !== id);
   await persistSession();
@@ -3966,9 +3948,9 @@ function openFile(filePath) {
     .then(r => { if (!r.success) showToast("File not found", "error"); })
     .catch(() => showToast("Could not open file", "error"));
 }
-//
+// 
 // STEP 6: BOUNDARY LINES (DXF)
-//
+// 
 function switchS6Tab(tab) {
   ["calls", "parcels", "options"].forEach(t => {
     document.getElementById(`s6Tab${t.charAt(0).toUpperCase() + t.slice(1)}`)?.classList.toggle("hidden", t !== tab);
@@ -4112,7 +4094,7 @@ function recalcS6Closure() {
   }
 }
 
-//  Parcels (Adjoiner boundaries)
+//  Parcels (Adjoiner boundaries) 
 function renderS6ParcelList() {
   const wrap = document.getElementById("s6ParcelList");
   let html = `
@@ -4214,7 +4196,7 @@ async function extractCallsFromPdf(idx, pdfPath) {
   }
 }
 
-//  DXF Generation
+//  DXF Generation 
 async function doGenerateDxf() {
   const rs = state.researchSession;
   if (!rs) { showToast("Load a session first", "warn"); return; }
@@ -4264,7 +4246,7 @@ async function doGenerateDxf() {
   }
 }
 
-//  SVG Sketch
+//  SVG Sketch 
 function updateS6Sketch() {
   const calls = state.parsedCalls;
   const sketchWrap = document.getElementById("s6SketchWrap");
@@ -4329,9 +4311,9 @@ function updateS6Sketch() {
   s += `<polygon points="${W - 16},26 ${W - 20},34 ${W - 12},34" fill="#79a8e0"/>`;
   svg.innerHTML = s;
 }
-//
+// 
 // SETTINGS MODAL
-//
+// 
 function showSettingsModal() {
   document.getElementById("settingsOverlay").classList.remove("hidden");
   loadDriveStatus(); // refresh drive status every time modal opens
@@ -4406,7 +4388,7 @@ async function pinDrive(clear = false) {
 }
 
 async function saveConfig() {
-  const url  = document.getElementById("cfgUrl").value.trim();
+  const url = document.getElementById("cfgUrl").value.trim();
   const user = document.getElementById("cfgUser").value.trim();
   const pass = document.getElementById("cfgPass").value;
   const status = document.getElementById("cfgStatus");
@@ -4418,17 +4400,10 @@ async function saveConfig() {
   btn.innerHTML = "Connecting...";
   status.textContent = "";
 
-  // Collect ArcGIS config — only include if the user has actually filled in the URL
-  // so we don't silently wipe a previously saved ArcGIS config when the section wasn't touched
-  const arcgisUrl = (document.getElementById('arcgisUrl')?.value || '').trim();
-  const payload = { firstnm_url: url, firstnm_user: user, firstnm_pass: pass };
-  if (arcgisUrl) {
-    payload.arcgis_url    = arcgisUrl;
-    payload.arcgis_fields = _collectArcgisFields();
-  }
-
   try {
-    const res = await apiFetch("/config", "POST", payload);
+    const res = await apiFetch("/config", "POST", {
+      firstnm_url: url, firstnm_user: user, firstnm_pass: pass
+    });
     if (!res.success) { showToast("Config save failed: " + res.error, "error"); return; }
 
     // Now login
@@ -4452,278 +4427,9 @@ async function saveConfig() {
   }
 }
 
-// ── ArcGIS Parcel Layer config helpers ────────────────────────────────────────
-
-// Tracks the fields discovered from the layer probe
-let _arcgisDiscoveredFields = [];
-// Cache of presets from the server
-let _arcgisPresets = {};
-
-/** Toggle the ArcGIS collapsible section */
-function toggleArcgisSection() {
-  const section  = document.getElementById('arcgisSection');
-  const chevron  = document.getElementById('arcgisSectionChevron');
-  const isOpen   = section.style.display !== 'none';
-  section.style.display = isOpen ? 'none' : 'block';
-  chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
-}
-
-/** Populate ArcGIS fields in the Settings modal after loadConfig */
-function _populateArcgisUI(cfg) {
-  const urlEl = document.getElementById('arcgisUrl');
-  if (!urlEl) return;
-
-  // Cache presets for applyArcgisPreset
-  if (cfg.arcgis_presets) {
-    for (const p of cfg.arcgis_presets) _arcgisPresets[p.id] = p;
-    // Populate preset dropdown with server presets
-    const sel = document.getElementById('arcgisPreset');
-    if (sel && sel.options.length <= 2) {  // don't duplicate
-      for (const p of cfg.arcgis_presets) {
-        if (!Array.from(sel.options).find(o => o.value === p.id)) {
-          const opt = document.createElement('option');
-          opt.value = p.id; opt.textContent = p.label;
-          sel.appendChild(opt);
-        }
-      }
-    }
-  }
-
-  urlEl.value = cfg.arcgis_url || '';
-  const fields = cfg.arcgis_fields || {};
-
-  // Update the "default" badge
-  const badge = document.getElementById('arcgisDefaultBadge');
-  if (badge) badge.style.display = cfg.arcgis_is_default ? '' : 'none';
-
-  // If fields are already discovered, populate the dropdowns
-  if (_arcgisDiscoveredFields.length) {
-    _fillArcgisDropdowns(fields);
-  } else {
-    // Populate dropdowns with just the currently configured values as single options
-    // so the form is readable without requiring a Discover click
-    _setDropdownToValue('arcgisFieldParcelId', fields.parcel_id   || '');
-    _setDropdownToValue('arcgisFieldOwner',     fields.owner       || '');
-    _setDropdownToValue('arcgisFieldAddress',   fields.address_all || '');
-    _setDropdownToValue('arcgisFieldSubdiv',    fields.subdivision || '');
-    _setDropdownToValue('arcgisFieldTownship',  fields.township    || '');
-    _setDropdownToValue('arcgisFieldTwpDir',    fields.twp_dir     || '');
-    _setDropdownToValue('arcgisFieldRange',     fields.range       || '');
-    _setDropdownToValue('arcgisFieldRngDir',    fields.rng_dir     || '');
-    _setDropdownToValue('arcgisFieldSection',   fields.section     || '');
-  }
-}
-
-function _setDropdownToValue(id, value) {
-  const sel = document.getElementById(id);
-  if (!sel || !value) return;
-  // If option doesn't exist yet, add it
-  if (!Array.from(sel.options).find(o => o.value === value)) {
-    const opt = document.createElement('option');
-    opt.value = value; opt.textContent = value;
-    sel.appendChild(opt);
-  }
-  sel.value = value;
-}
-
-/** Apply a preset — fills the URL and field dropdowns */
-function applyArcgisPreset(presetId) {
-  if (!presetId) return;
-  const preset = _arcgisPresets[presetId];
-  if (!preset) return;
-  const urlEl = document.getElementById('arcgisUrl');
-  if (urlEl) urlEl.value = preset.url;
-  // Immediately re-run discover to get live fields
-  discoverArcgisFields();
-}
-
-/** Probe the ArcGIS layer URL and auto-populate the dropdowns */
-async function discoverArcgisFields() {
-  const url = (document.getElementById('arcgisUrl')?.value || '').trim();
-  if (!url) { showToast('Paste a layer URL first', 'warn'); return; }
-
-  const btn = document.getElementById('btnArcgisDiscover');
-  const infoEl = document.getElementById('arcgisLayerInfo');
-  btn.disabled = true;
-  btn.textContent = '⏳ Probing...';
-  if (infoEl) { infoEl.style.display = 'none'; infoEl.textContent = ''; }
-
-  try {
-    const res = await apiFetch('/arcgis-discover', 'POST', { url });
-    if (!res.success) {
-      showToast('Discover failed: ' + res.error, 'error');
-      return;
-    }
-
-    _arcgisDiscoveredFields = res.fields || [];
-
-    // Show layer info banner
-    if (infoEl && res.layer_info) {
-      const li = res.layer_info;
-      infoEl.style.display = '';
-      infoEl.innerHTML =
-        `<strong style="color:var(--text1)">${escHtml(li.name || 'Layer')}</strong>` +
-        (li.geometry_type ? ` &nbsp;·&nbsp; <span>${li.geometry_type}</span>` : '') +
-        `<br><span style="color:#56d3a0;font-family:monospace;font-size:10px">${escHtml(res.query_url)}</span>` +
-        `<br>${_arcgisDiscoveredFields.length} fields found.`;
-    }
-
-    // Read current field values to pre-select them
-    const cfg = {
-      parcel_id:   document.getElementById('arcgisFieldParcelId')?.value  || '',
-      owner:       document.getElementById('arcgisFieldOwner')?.value      || '',
-      address_all: document.getElementById('arcgisFieldAddress')?.value   || '',
-      subdivision: document.getElementById('arcgisFieldSubdiv')?.value    || '',
-      township:    document.getElementById('arcgisFieldTownship')?.value   || '',
-      twp_dir:     document.getElementById('arcgisFieldTwpDir')?.value     || '',
-      range:       document.getElementById('arcgisFieldRange')?.value      || '',
-      rng_dir:     document.getElementById('arcgisFieldRngDir')?.value     || '',
-      section:     document.getElementById('arcgisFieldSection')?.value    || '',
-    };
-    _fillArcgisDropdowns(cfg);
-    showToast(`✓ Found ${_arcgisDiscoveredFields.length} fields — check the mapping below`, 'success');
-  } catch (e) {
-    showToast('Discover error: ' + e.message, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '🔍 Discover';
-  }
-}
-
-/** Populate the field-mapping dropdowns from _arcgisDiscoveredFields */
-function _fillArcgisDropdowns(currentValues) {
-  const selectors = {
-    arcgisFieldParcelId: currentValues.parcel_id,
-    arcgisFieldOwner:    currentValues.owner,
-    arcgisFieldAddress:  currentValues.address_all,
-    arcgisFieldSubdiv:   currentValues.subdivision,
-    arcgisFieldTownship: currentValues.township,
-    arcgisFieldTwpDir:   currentValues.twp_dir,
-    arcgisFieldRange:    currentValues.range,
-    arcgisFieldRngDir:   currentValues.rng_dir,
-    arcgisFieldSection:  currentValues.section,
-  };
-
-  for (const [selId, curVal] of Object.entries(selectors)) {
-    const sel = document.getElementById(selId);
-    if (!sel) continue;
-    // Rebuild options
-    sel.innerHTML = '<option value="">(none)</option>';
-    for (const f of _arcgisDiscoveredFields) {
-      const opt = document.createElement('option');
-      opt.value = f.name;
-      opt.textContent = f.alias !== f.name ? `${f.name} (${f.alias})` : f.name;
-      sel.appendChild(opt);
-    }
-    // Auto-select best match: exact current value, or heuristic
-    if (curVal && Array.from(sel.options).find(o => o.value === curVal)) {
-      sel.value = curVal;
-    } else {
-      // Heuristic: find a field whose name contains key keywords
-      const hints = {
-        arcgisFieldParcelId: ['parcel', 'apn', 'upc', 'pid', 'id', 'number'],
-        arcgisFieldOwner:    ['owner', 'own', 'name'],
-        arcgisFieldAddress:  ['situs', 'address', 'addr', 'site'],
-        arcgisFieldSubdiv:   ['subdiv', 'sub', 'plat'],
-        arcgisFieldTownship: ['township', 'twp'],
-        arcgisFieldTwpDir:   ['twpdir', 'twp_dir', 'townshipdir', 'tdir'],
-        arcgisFieldRange:    ['range', 'rng'],
-        arcgisFieldRngDir:   ['rngdir', 'rng_dir', 'rangedir', 'rdir'],
-        arcgisFieldSection:  ['section', 'sec'],
-      };
-      const keywords = hints[selId] || [];
-      const match = _arcgisDiscoveredFields.find(f =>
-        keywords.some(k => f.name.toLowerCase().includes(k))
-      );
-      if (match) sel.value = match.name;
-    }
-  }
-}
-
-/** Collect the current ArcGIS field mapping from the dropdowns */
-function _collectArcgisFields() {
-  return {
-    parcel_id:   document.getElementById('arcgisFieldParcelId')?.value  || '',
-    owner:       document.getElementById('arcgisFieldOwner')?.value      || '',
-    address_all: document.getElementById('arcgisFieldAddress')?.value   || '',
-    subdivision: document.getElementById('arcgisFieldSubdiv')?.value    || '',
-    township:    document.getElementById('arcgisFieldTownship')?.value   || '',
-    twp_dir:     document.getElementById('arcgisFieldTwpDir')?.value     || '',
-    range:       document.getElementById('arcgisFieldRange')?.value      || '',
-    rng_dir:     document.getElementById('arcgisFieldRngDir')?.value     || '',
-    section:     document.getElementById('arcgisFieldSection')?.value    || '',
-  };
-}
-
-/** Run a test query against the configured layer */
-async function testArcgisConfig() {
-  const url      = (document.getElementById('arcgisUrl')?.value || '').trim();
-  const sampleId = (document.getElementById('arcgisSampleId')?.value || '').trim();
-  const fields   = _collectArcgisFields();
-  const resultEl = document.getElementById('arcgisTestResult');
-
-  if (!url) { showToast('Enter a layer URL first', 'warn'); return; }
-
-  const btn = document.getElementById('btnArcgisTest');
-  btn.disabled = true; btn.textContent = '⏳';
-  if (resultEl) { resultEl.style.display = 'none'; resultEl.innerHTML = ''; }
-
-  try {
-    const res = await apiFetch('/arcgis-test', 'POST', { url, fields, sample_id: sampleId });
-    if (!resultEl) return;
-    resultEl.style.display = '';
-
-    if (!res.success) {
-      resultEl.style.background = 'rgba(255,123,114,.1)';
-      resultEl.style.border = '1px solid rgba(255,123,114,.3)';
-      resultEl.style.color = '#ff7b72';
-      resultEl.innerHTML = `<strong>✗ Test failed:</strong> ${escHtml(res.error)}`;
-      return;
-    }
-
-    resultEl.style.background = 'rgba(86,211,160,.08)';
-    resultEl.style.border = '1px solid rgba(86,211,160,.25)';
-    resultEl.style.color = 'var(--text2)';
-
-    if (res.sample_result) {
-      // Full parcel lookup result
-      const r = res.sample_result;
-      resultEl.innerHTML =
-        `<strong style="color:#56d3a0">✓ Parcel found!</strong><br>` +
-        `<strong>Owner:</strong> ${escHtml(r.owner_official || '—')}<br>` +
-        `<strong>Address:</strong> ${escHtml(r.short_address || '—')}<br>` +
-        `<strong>TRS:</strong> ${escHtml(r.trs || '—')}<br>` +
-        `<strong>Subdivision:</strong> ${escHtml(r.subdivision || '—')}`;
-    } else if (res.matched_fields) {
-      // Generic field check
-      const rows = res.matched_fields.slice(0, 8).map(f =>
-        `<tr><td style="color:var(--text3);padding-right:8px">${escHtml(f.concept)}</td>` +
-        `<td style="font-family:monospace;color:#4facfe">${escHtml(f.field)}</td>` +
-        `<td style="color:var(--text1)">${escHtml(String(f.value).slice(0, 50))}</td></tr>`
-      ).join('');
-      resultEl.innerHTML =
-        `<strong style="color:#56d3a0">✓ Layer connected!</strong><br>` +
-        `<table style="margin-top:6px;width:100%;font-size:10px;border-collapse:collapse">${rows}</table>`;
-    }
-
-  } catch (e) {
-    if (resultEl) {
-      resultEl.style.display = '';
-      resultEl.style.background = 'rgba(255,123,114,.1)';
-      resultEl.style.border = '1px solid rgba(255,123,114,.3)';
-      resultEl.style.color = '#ff7b72';
-      resultEl.innerHTML = `<strong>✗ Error:</strong> ${escHtml(e.message)}`;
-    }
-  } finally {
-    btn.disabled = false; btn.textContent = '✓ Test';
-  }
-}
-
-
-
-//
+// 
 // LOGIN & CONNECTION
-//
+// 
 async function checkLogin() {
   try {
     const url = document.getElementById("cfgUrl").value.trim();
@@ -4757,9 +4463,9 @@ function setStatusDot(mode, text) {
   if (span) span.textContent = text;
 }
 
-//
+// 
 // GLOBAL PROGRESS FOOTER
-//
+// 
 function updateGlobalProgress() {
   const rs = state.researchSession;
   if (!rs) return;
@@ -4780,9 +4486,9 @@ function updateGlobalProgress() {
   document.getElementById("globalProgressFill").style.width = pct + "%";
 }
 
-//
+// 
 // EXPORT
-//
+// 
 async function exportSession() {
   const rs = state.researchSession;
   if (!rs) { showToast("No session loaded", "warn"); return; }
@@ -6492,22 +6198,16 @@ function getTypeClass(type) {
   return "badge-other";
 }
 
-// NOTE: apiFetch is defined in the SaaS section below (handles credentials + auth/upgrade intercepts)
-// This stub keeps hoisting intact for any calls before the SaaS block loads.
-async function apiFetch(path, method = 'GET', body = null, opts = {}) {
-  const fetchOpts = { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include' };
-  if (body) fetchOpts.body = JSON.stringify(body);
-  if (opts?.signal) fetchOpts.signal = opts.signal;
-  const res  = await fetch(API + path, fetchOpts);
-  const data = await res.json();
-  if (!res.ok) {
-    if (data.auth_required)    showAuthModal?.('login');
-    else if (data.upgrade_required) handleUpgradeRequired?.(data);
-  }
-  return data;
+async function apiFetch(path, method = "GET", body = null, { signal } = {}) {
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body) opts.body = JSON.stringify(body);
+  if (signal) opts.signal = signal;
+  const res = await fetch(API + path, opts);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
 }
 
-//  Toast
+//  Toast 
 let _toastEl;
 function showToast(msg, type = "info") {
   if (!_toastEl) {
@@ -6557,7 +6257,6 @@ _toastStyle.textContent = `
 `;
 document.head.appendChild(_toastStyle);
 
-<<<<<<< HEAD
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AI INSIGHTS PANEL — DASHBOARD & PREDICTIONS
@@ -6604,7 +6303,196 @@ async function refreshAiInsights() {
         staleText.textContent = `${h.newer_xml_files.length} KML file(s) are newer than the index`;
       } else {
         staleRow.classList.add('hidden');
-=======
+      }
+    }
+  }
+
+  // ── Data Conflicts Count ───────────────────────────────────────────────
+  if (conflictsRes.status === 'fulfilled' && conflictsRes.value.success) {
+    const c = conflictsRes.value;
+    const el = document.getElementById('aiConflictCount');
+    if (el) {
+      const total = c.conflict_count || 0;
+      el.textContent = total;
+      el.style.color = total === 0 ? '#56d3a0' : total <= 10 ? '#e3c55a' : '#ff7b72';
+    }
+  }
+
+  // ── Research Analytics ─────────────────────────────────────────────────
+  if (analyticsRes.status === 'fulfilled' && analyticsRes.value.success) {
+    const a = analyticsRes.value;
+    const jobsEl = document.getElementById('aiJobsScanned');
+    if (jobsEl) {
+      jobsEl.textContent = a.scanned_jobs || 0;
+      jobsEl.style.color = a.scanned_jobs > 0 ? '#79a8e0' : 'var(--text3)';
+    }
+
+    // Show prediction if we have data
+    if (a.predictions) {
+      _showPrediction(a.predictions);
+    }
+  }
+}
+
+/** Show/update the complexity prediction row */
+function _showPrediction(pred) {
+  const row = document.getElementById('aiPredictionRow');
+  if (!row) return;
+
+  row.classList.remove('hidden');
+
+  const compEl = document.getElementById('aiPredComplexity');
+  const adjEl = document.getElementById('aiPredAdjoiners');
+  const rangeEl = document.getElementById('aiPredRange');
+  const cabsEl = document.getElementById('aiPredCabinets');
+  const confEl = document.getElementById('aiPredConfidence');
+  const simEl = document.getElementById('aiPredSimilar');
+
+  if (compEl) {
+    compEl.textContent = pred.predicted_complexity;
+    compEl.className = 'ai-pred-complexity pred-' + pred.predicted_complexity;
+  }
+  if (adjEl) adjEl.textContent = pred.predicted_adjoiners;
+  if (rangeEl && pred.adjoiner_range) {
+    rangeEl.textContent = `(range: ${pred.adjoiner_range.p25}–${pred.adjoiner_range.p75})`;
+  }
+  if (cabsEl) cabsEl.textContent = (pred.likely_cabinets || []).map(c => 'Cab ' + c).join(', ');
+  if (confEl) {
+    confEl.textContent = pred.confidence;
+    confEl.style.color = pred.confidence === 'high' ? '#56d3a0'
+                        : pred.confidence === 'medium' ? '#e3c55a'
+                        : '#ff7b72';
+  }
+  if (simEl) simEl.textContent = pred.similar_jobs_count || 0;
+}
+
+/** Re-predict when job type changes in Step 1 */
+async function _onJobTypeChanged() {
+  const typeEl = document.getElementById('setupJobType');
+  if (!typeEl) return;
+  try {
+    const res = await apiFetch('/research-analytics/predict', 'POST', {
+      job_type: typeEl.value,
+    });
+    if (res.success) _showPrediction(res);
+  } catch (_) {}
+}
+
+// Wire up job type dropdown to update predictions
+document.addEventListener('DOMContentLoaded', () => {
+  const typeEl = document.getElementById('setupJobType');
+  if (typeEl) typeEl.addEventListener('change', _onJobTypeChanged);
+
+  // Load AI insights after a brief delay (don't block initial render)
+  setTimeout(() => refreshAiInsights(), 800);
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LEGAL DESCRIPTION SIMILARITY SEARCH
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Search for parcels with similar legal descriptions.
+ * Uses the property description extracted from the current deed.
+ */
+async function findSimilarDescriptions() {
+  // Get the extracted description from the current session
+  const descWrap = document.getElementById('deedPropertyDescArea');
+  if (!descWrap) {
+    showToast('No property description available', 'warn');
+    return;
+  }
+
+  // Try to get the description text from the prop-desc-text element
+  const descEl = descWrap.querySelector('.prop-desc-text');
+  const text = descEl ? descEl.textContent.trim() : '';
+
+  if (!text || text.length < 20) {
+    showToast('Extract the property description first (📜 Get Description)', 'warn');
+    return;
+  }
+
+  const container = document.getElementById('deedTabAnalysis');
+  if (container) {
+    container.innerHTML = `<div class="loading-state flex-col gap-2"><div class="spinner"></div>Searching for similar descriptions…</div>`;
+    // Switch to analysis tab
+    switchDeedTab('analysis');
+  }
+
+  try {
+    const res = await apiFetch('/similar-descriptions', 'POST', {
+      text: text,
+      min_score: 15,
+      limit: 15,
+    });
+
+    if (!container) return;
+
+    if (!res.success) {
+      container.innerHTML = `<div class="empty-state text-danger">Error: ${escHtml(res.error || 'Unknown')}</div>`;
+      return;
+    }
+
+    if (res.count === 0) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><p>No similar descriptions found in the parcel index.</p></div>`;
+      return;
+    }
+
+    let html = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:rgba(121,168,224,0.05)">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#79a8e0;margin-bottom:4px">
+          🔍 Similar Descriptions Found
+        </div>
+        <div style="font-size:12px;color:var(--text2)">${res.count} parcels match this legal description</div>
+      </div>
+      <div style="padding:8px;overflow-y:auto;max-height:500px">`;
+
+    for (const r of res.results) {
+      const s = r.similarity;
+      const scoreColor = s.score >= 60 ? '#56d3a0' : s.score >= 30 ? '#e3c55a' : '#79a8e0';
+      const shared = [];
+      if (s.shared_trs.length) shared.push('TRS: ' + s.shared_trs.join(', '));
+      if (s.shared_cabs.length) shared.push('Cabs: ' + s.shared_cabs.join(', '));
+      if (s.shared_names.length) shared.push('Names: ' + s.shared_names.join(', '));
+
+      html += `
+        <div style="padding:10px 12px;margin:4px;border-radius:8px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.06);cursor:default;transition:all .15s"
+             onmouseenter="this.style.borderColor='rgba(121,168,224,0.3)'" onmouseleave="this.style.borderColor='rgba(255,255,255,0.06)'">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="font-size:13px;font-weight:700;color:var(--text)">${escHtml(r.owner || 'Unknown')}</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:800;color:${scoreColor}">${s.score}%</div>
+          </div>
+          <div style="font-size:11px;color:var(--text3);line-height:1.6">
+            ${r.upc ? `<span style="font-family:monospace;color:var(--accent2)">UPC ${escHtml(r.upc)}</span> · ` : ''}
+            ${r.plat ? `Plat: ${escHtml(r.plat)}` : ''}
+            ${r.trs ? ` · TRS: ${escHtml(r.trs)}` : ''}
+            ${r.book ? ` · Bk ${escHtml(r.book)}/${escHtml(r.page || '')}` : ''}
+          </div>
+          ${shared.length ? `
+          <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">
+            ${shared.map(s => `<span style="font-size:9px;padding:2px 6px;border-radius:6px;background:rgba(121,168,224,0.1);border:1px solid rgba(121,168,224,0.2);color:#79a8e0">${escHtml(s)}</span>`).join('')}
+          </div>` : ''}
+          <div style="display:flex;gap:8px;margin-top:6px;font-size:10px;color:var(--text3)">
+            <span title="TRS Match">🏠 ${s.components.trs_match}%</span>
+            <span title="Text Similarity">📝 ${s.components.text_similarity}%</span>
+            <span title="Cabinet Overlap">🗄️ ${s.components.cab_overlap}%</span>
+            <span title="Name Overlap">👤 ${s.components.name_overlap}%</span>
+          </div>
+        </div>`;
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+
+  } catch (e) {
+    if (container) {
+      container.innerHTML = `<div class="empty-state text-danger">Search failed: ${e.message}</div>`;
+    }
+  }
+}
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SAAS AUTH — Login, Register, Account Badge, Upgrade Modal
 // ─────────────────────────────────────────────────────────────────────────────
@@ -7150,36 +7038,10 @@ function _applyProFeatureLocks() {
       if (orig) { dxfBtn.setAttribute('onclick', orig); dxfBtn.removeAttribute('data-original-onclick'); }
       if (!dxfBtn.querySelector('.btn-icon')) {
         dxfBtn.innerHTML = '<span class="btn-icon">💾</span> Generate & Save DXF';
->>>>>>> origin/main
       }
     }
   }
 
-<<<<<<< HEAD
-  // ── Data Conflicts Count ───────────────────────────────────────────────
-  if (conflictsRes.status === 'fulfilled' && conflictsRes.value.success) {
-    const c = conflictsRes.value;
-    const el = document.getElementById('aiConflictCount');
-    if (el) {
-      const total = c.conflict_count || 0;
-      el.textContent = total;
-      el.style.color = total === 0 ? '#56d3a0' : total <= 10 ? '#e3c55a' : '#ff7b72';
-    }
-  }
-
-  // ── Research Analytics ─────────────────────────────────────────────────
-  if (analyticsRes.status === 'fulfilled' && analyticsRes.value.success) {
-    const a = analyticsRes.value;
-    const jobsEl = document.getElementById('aiJobsScanned');
-    if (jobsEl) {
-      jobsEl.textContent = a.scanned_jobs || 0;
-      jobsEl.style.color = a.scanned_jobs > 0 ? '#79a8e0' : 'var(--text3)';
-    }
-
-    // Show prediction if we have data
-    if (a.predictions) {
-      _showPrediction(a.predictions);
-=======
   // Adjoiner Discovery button
   const adjBtn = document.getElementById('btnDiscoverAdjoiners');
   if (adjBtn && !isPro) {
@@ -7210,170 +7072,10 @@ function _applyProFeatureLocks() {
     const dxfTab = [...s6Tabs.querySelectorAll('.tab-btn')].find(b => b.textContent.includes('DXF'));
     if (dxfTab && !dxfTab.querySelector('.pro-badge-inline')) {
       dxfTab.innerHTML += ' <span class="pro-badge-inline">PRO</span>';
->>>>>>> origin/main
     }
   }
 }
 
-<<<<<<< HEAD
-/** Show/update the complexity prediction row */
-function _showPrediction(pred) {
-  const row = document.getElementById('aiPredictionRow');
-  if (!row) return;
-
-  row.classList.remove('hidden');
-
-  const compEl = document.getElementById('aiPredComplexity');
-  const adjEl = document.getElementById('aiPredAdjoiners');
-  const rangeEl = document.getElementById('aiPredRange');
-  const cabsEl = document.getElementById('aiPredCabinets');
-  const confEl = document.getElementById('aiPredConfidence');
-  const simEl = document.getElementById('aiPredSimilar');
-
-  if (compEl) {
-    compEl.textContent = pred.predicted_complexity;
-    compEl.className = 'ai-pred-complexity pred-' + pred.predicted_complexity;
-  }
-  if (adjEl) adjEl.textContent = pred.predicted_adjoiners;
-  if (rangeEl && pred.adjoiner_range) {
-    rangeEl.textContent = `(range: ${pred.adjoiner_range.p25}–${pred.adjoiner_range.p75})`;
-  }
-  if (cabsEl) cabsEl.textContent = (pred.likely_cabinets || []).map(c => 'Cab ' + c).join(', ');
-  if (confEl) {
-    confEl.textContent = pred.confidence;
-    confEl.style.color = pred.confidence === 'high' ? '#56d3a0'
-                        : pred.confidence === 'medium' ? '#e3c55a'
-                        : '#ff7b72';
-  }
-  if (simEl) simEl.textContent = pred.similar_jobs_count || 0;
-}
-
-/** Re-predict when job type changes in Step 1 */
-async function _onJobTypeChanged() {
-  const typeEl = document.getElementById('setupJobType');
-  if (!typeEl) return;
-  try {
-    const res = await apiFetch('/research-analytics/predict', 'POST', {
-      job_type: typeEl.value,
-    });
-    if (res.success) _showPrediction(res);
-  } catch (_) {}
-}
-
-// Wire up job type dropdown to update predictions
-document.addEventListener('DOMContentLoaded', () => {
-  const typeEl = document.getElementById('setupJobType');
-  if (typeEl) typeEl.addEventListener('change', _onJobTypeChanged);
-
-  // Load AI insights after a brief delay (don't block initial render)
-  setTimeout(() => refreshAiInsights(), 800);
-});
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// LEGAL DESCRIPTION SIMILARITY SEARCH
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Search for parcels with similar legal descriptions.
- * Uses the property description extracted from the current deed.
- */
-async function findSimilarDescriptions() {
-  // Get the extracted description from the current session
-  const descWrap = document.getElementById('deedPropertyDescArea');
-  if (!descWrap) {
-    showToast('No property description available', 'warn');
-    return;
-  }
-
-  // Try to get the description text from the prop-desc-text element
-  const descEl = descWrap.querySelector('.prop-desc-text');
-  const text = descEl ? descEl.textContent.trim() : '';
-
-  if (!text || text.length < 20) {
-    showToast('Extract the property description first (📜 Get Description)', 'warn');
-    return;
-  }
-
-  const container = document.getElementById('deedTabAnalysis');
-  if (container) {
-    container.innerHTML = `<div class="loading-state flex-col gap-2"><div class="spinner"></div>Searching for similar descriptions…</div>`;
-    // Switch to analysis tab
-    switchDeedTab('analysis');
-  }
-
-  try {
-    const res = await apiFetch('/similar-descriptions', 'POST', {
-      text: text,
-      min_score: 15,
-      limit: 15,
-    });
-
-    if (!container) return;
-
-    if (!res.success) {
-      container.innerHTML = `<div class="empty-state text-danger">Error: ${escHtml(res.error || 'Unknown')}</div>`;
-      return;
-    }
-
-    if (res.count === 0) {
-      container.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><p>No similar descriptions found in the parcel index.</p></div>`;
-      return;
-    }
-
-    let html = `
-      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:rgba(121,168,224,0.05)">
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#79a8e0;margin-bottom:4px">
-          🔍 Similar Descriptions Found
-        </div>
-        <div style="font-size:12px;color:var(--text2)">${res.count} parcels match this legal description</div>
-      </div>
-      <div style="padding:8px;overflow-y:auto;max-height:500px">`;
-
-    for (const r of res.results) {
-      const s = r.similarity;
-      const scoreColor = s.score >= 60 ? '#56d3a0' : s.score >= 30 ? '#e3c55a' : '#79a8e0';
-      const shared = [];
-      if (s.shared_trs.length) shared.push('TRS: ' + s.shared_trs.join(', '));
-      if (s.shared_cabs.length) shared.push('Cabs: ' + s.shared_cabs.join(', '));
-      if (s.shared_names.length) shared.push('Names: ' + s.shared_names.join(', '));
-
-      html += `
-        <div style="padding:10px 12px;margin:4px;border-radius:8px;background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.06);cursor:default;transition:all .15s"
-             onmouseenter="this.style.borderColor='rgba(121,168,224,0.3)'" onmouseleave="this.style.borderColor='rgba(255,255,255,0.06)'">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <div style="font-size:13px;font-weight:700;color:var(--text)">${escHtml(r.owner || 'Unknown')}</div>
-            <div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:800;color:${scoreColor}">${s.score}%</div>
-          </div>
-          <div style="font-size:11px;color:var(--text3);line-height:1.6">
-            ${r.upc ? `<span style="font-family:monospace;color:var(--accent2)">UPC ${escHtml(r.upc)}</span> · ` : ''}
-            ${r.plat ? `Plat: ${escHtml(r.plat)}` : ''}
-            ${r.trs ? ` · TRS: ${escHtml(r.trs)}` : ''}
-            ${r.book ? ` · Bk ${escHtml(r.book)}/${escHtml(r.page || '')}` : ''}
-          </div>
-          ${shared.length ? `
-          <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">
-            ${shared.map(s => `<span style="font-size:9px;padding:2px 6px;border-radius:6px;background:rgba(121,168,224,0.1);border:1px solid rgba(121,168,224,0.2);color:#79a8e0">${escHtml(s)}</span>`).join('')}
-          </div>` : ''}
-          <div style="display:flex;gap:8px;margin-top:6px;font-size:10px;color:var(--text3)">
-            <span title="TRS Match">🏠 ${s.components.trs_match}%</span>
-            <span title="Text Similarity">📝 ${s.components.text_similarity}%</span>
-            <span title="Cabinet Overlap">🗄️ ${s.components.cab_overlap}%</span>
-            <span title="Name Overlap">👤 ${s.components.name_overlap}%</span>
-          </div>
-        </div>`;
-    }
-
-    html += '</div>';
-    container.innerHTML = html;
-
-  } catch (e) {
-    if (container) {
-      container.innerHTML = `<div class="empty-state text-danger">Search failed: ${e.message}</div>`;
-    }
-  }
-}
-=======
 /**
  * Launch Stripe Checkout for upgrading.
  * Called from the upgrade modal "Join Waitlist" area when Stripe is configured.
@@ -8098,4 +7800,3 @@ function _applyTeamVisibility(userTier, userRole) {
     }, 900);
   });
 })();
->>>>>>> origin/main
