@@ -197,11 +197,12 @@ class TestSimplifyRing:
         ring = [[i * 0.01, i * 0.01] for i in range(100)]
         result = _simplify_ring(ring, max_pts=20)
         assert len(result) <= 20
-        # First and last points should be preserved
-        assert result[0] == [round(ring[0][0], 4), round(ring[0][1], 4)]
-        assert result[-1] == [round(ring[-1][0], 4), round(ring[-1][1], 4)]
+        # First and last points should be preserved (rounded to 7dp)
+        assert result[0] == [round(ring[0][0], 7), round(ring[0][1], 7)]
+        assert result[-1] == [round(ring[-1][0], 7), round(ring[-1][1], 7)]
 
     def test_coords_rounded(self):
+        """Coordinates should be rounded to 7 decimal places (~1cm accuracy)."""
         ring = [[0.123456789, 1.987654321]]
         result = _simplify_ring(ring, max_pts=10)
-        assert result[0] == [0.1235, 1.9877]
+        assert result[0] == [0.1234568, 1.9876543]

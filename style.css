@@ -151,6 +151,19 @@ h1, h2, h3, h4 { font-family: 'Outfit', sans-serif; letter-spacing: -0.02em; }
   transform: translateY(-1px);
 }
 
+.btn-accent2 {
+  background: linear-gradient(135deg, var(--accent2), var(--accent));
+  color: #fff;
+  border: none;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(64,194,159,.3);
+}
+.btn-accent2:hover:not(:disabled) {
+  box-shadow: 0 4px 16px rgba(64,194,159,.4);
+  transform: translateY(-1px);
+  filter: brightness(1.1);
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--text2);

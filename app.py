@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, Response, make_response, g
+from flask import Flask, request, jsonify, send_from_directory, send_file, Response, make_response, g
 import requests as req_lib
 from bs4 import BeautifulSoup
 import os
@@ -317,9 +317,11 @@ def detect_survey_drive(force: bool = False) -> str | None:
         if candidate.exists():
             _detected_drive = override
             return _detected_drive
-    # Scan all drive letters
+    # Scan preferred drives first (J = primary SSD), then remaining letters
     import string
-    for letter in string.ascii_uppercase:
+    _PREFERRED = ['J', 'K', 'I', 'H', 'G', 'F', 'E']
+    _REMAINING = [c for c in string.ascii_uppercase if c not in _PREFERRED]
+    for letter in _PREFERRED + _REMAINING:
         root = Path(f"{letter}:\\")
         if not root.exists():
             continue
@@ -416,6 +418,72 @@ def _session() -> req_lib.Session:
     return _get_web_session(pid)
 
 # ── helpers (load_config / save_config defined above, before drive detection) ──
+
+def _trigger_portal_pdf(doc_no: str):
+    """Visit the portal document detail page to force PDF generation in WebTemp.
+
+    The e.halFILE / 1stNMTitle portal only creates WebTemp/{doc_no}.pdf
+    after the document detail page (hfpage.asp) is visited.  Call this
+    before fetching the PDF when the document hasn't been viewed yet
+    (e.g. Step 3 online plat save, direct download, etc.).
+    """
+    try:
+        cfg = load_config()
+        fuser = ""
+        try:
+            pid = request.cookies.get("profile_id")
+        except RuntimeError:
+            pid = None
+        if pid:
+            prof = get_profile(pid)
+            if prof:
+                fuser = prof.get("firstnm_user", "")
+        if not fuser:
+            fuser = cfg.get("firstnm_user", "")
+        trigger_url = (f"{_get_portal_url()}/scripts/hfpage.asp"
+                       f"?Appl=FNM&Doctype=TP&DocNo={doc_no}&FormUser={fuser}")
+        _session().get(trigger_url, timeout=15)
+    except Exception:
+        pass  # best-effort — the PDF might already be cached
+
+
+def _fetch_portal_pdf(doc_no: str, pdf_url: str = "", max_retries: int = 3):
+    """Trigger the portal and fetch the PDF with automatic retry.
+
+    The portal may need a moment after the trigger visit to generate
+    the WebTemp PDF.  This helper retries with increasing delays
+    (1s, 2s, 3s) if the first fetch returns 404.
+
+    Returns (response, error_string).  On success error_string is None.
+    """
+    import time as _time
+    if not pdf_url:
+        pdf_url = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
+
+    _trigger_portal_pdf(doc_no)
+
+    last_status = 0
+    for attempt in range(max_retries):
+        if attempt > 0:
+            _time.sleep(attempt)  # 1s, 2s on retries
+            print(f"[pdf-fetch] Retry {attempt}/{max_retries} for {doc_no}…", flush=True)
+            _trigger_portal_pdf(doc_no)  # re-trigger on retry
+
+        pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
+        last_status = pdf_resp.status_code
+
+        if pdf_resp.status_code == 200:
+            # Verify we got an actual PDF, not an HTML error page
+            ct = pdf_resp.headers.get("Content-Type", "")
+            if "html" in ct.lower():
+                return None, "Portal returned HTML instead of PDF — session may have expired"
+            return pdf_resp, None
+
+        if pdf_resp.status_code != 404:
+            # Non-404 error — don't retry
+            return None, f"PDF fetch failed: {pdf_resp.status_code}"
+
+    return None, f"PDF fetch failed after {max_retries} attempts (last status: {last_status})"
 
 def next_job_info():
     """Scan Survey Data to find the next job number and its range folder."""
@@ -2585,9 +2653,9 @@ def api_find_plat_online():
         hits      = []
         seen_docs = set()
 
-        def _do_online_search(name_last, label):
-            """Run one surname search and append any survey hits found."""
-            if not name_last or len(name_last) < 2:
+        def _do_online_search(search_name, label):
+            """Run one name search (full 'LAST, FIRST' format) and append any survey hits found."""
+            if not search_name or len(search_name) < 2:
                 return
             try:
                 search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
@@ -2598,7 +2666,7 @@ def api_find_plat_online():
                 fd = _scrape_form_data(soup)
                 if not fd:
                     return
-                fd["CROSSNAMEFIELD"] = name_last
+                fd["CROSSNAMEFIELD"] = search_name
                 fd["CROSSNAMETYPE"]  = "begin"
                 # NOTE: Do NOT set FIELD7="SUR" here — it conflicts with the form
                 # and may suppress all results. Instrument-type filtering is done
@@ -2633,27 +2701,33 @@ def api_find_plat_online():
             except Exception:
                 pass
 
-        # Build ordered list of last names to search (most specific first)
-        names_to_search = []   # list of (last_name, label) tuples
-        seen_lasts = set()
+        # Build ordered list of full names to search (most specific first).
+        # Previously this only sent the last name (e.g. "SMITH"), which was
+        # far too broad.  Now we send the full "LAST, FIRST" just like the
+        # Step 2 deed search does — the portal supports this natively.
+        names_to_search = []   # list of (full_name, label) tuples
+        seen_names = set()
 
-        def _add_last(raw, label):
+        def _add_name(raw, label):
             if not raw:
                 return
-            last = raw.split(",")[0].strip().upper()
-            if last and len(last) >= 2 and last not in seen_lasts:
-                seen_lasts.add(last)
-                names_to_search.append((last, label))
+            # Normalise to "LAST, FIRST" — the portal's CROSSNAMEFIELD
+            # accepts this format and matches much more precisely.
+            full = raw.strip().upper()
+            # Deduplicate on the normalised full name
+            if full and len(full) >= 2 and full not in seen_names:
+                seen_names.add(full)
+                names_to_search.append((full, label))
 
         # Priority 1: client_name (current owner — most likely survey grantor)
-        _add_last(client_name, "client")
+        _add_name(client_name, "client")
         # Priority 2: grantee from deed (same person as client in Step 3)
-        _add_last(grantee, "grantee")
+        _add_name(grantee, "grantee")
         # Priority 3: grantor from deed (the seller — less likely to have a survey here)
-        _add_last(grantor, "grantor")
+        _add_name(grantor, "grantor")
 
-        for last, label in names_to_search:
-            _do_online_search(last, label)
+        for full_name, label in names_to_search:
+            _do_online_search(full_name, label)
 
         return jsonify({"success": True, "online": hits})
     except Exception as e:
@@ -2711,9 +2785,11 @@ def api_save_plat():
             shutil.copy2(file_path, dest)
         elif source == "online":
             pdf_url  = data.get("pdf_url", f"{_get_portal_url()}/WebTemp/{doc_no}.pdf")
-            pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
-            if pdf_resp.status_code != 200:
-                return jsonify({"success": False, "error": f"PDF fetch failed: {pdf_resp.status_code}"})
+
+            # Fetch with retry (portal may need a moment to generate PDF)
+            pdf_resp, pdf_err = _fetch_portal_pdf(doc_no, pdf_url)
+            if pdf_err:
+                return jsonify({"success": False, "error": pdf_err})
             with open(dest, "wb") as f:
                 for chunk in pdf_resp.iter_content(8192):
                     f.write(chunk)
@@ -2892,11 +2968,11 @@ def api_download():
                 "subject_id":   subject_id,
             })
 
-        # Download
+        # Download — trigger portal to generate PDF, then fetch with retry
         pdf_url  = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
-        pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
-        if pdf_resp.status_code != 200:
-            return jsonify({"success": False, "error": f"PDF fetch failed: {pdf_resp.status_code}"})
+        pdf_resp, pdf_err = _fetch_portal_pdf(doc_no, pdf_url)
+        if pdf_err:
+            return jsonify({"success": False, "error": pdf_err})
 
         with open(save_path, "wb") as f:
             for chunk in pdf_resp.iter_content(8192):
@@ -2928,7 +3004,115 @@ def api_download():
         return jsonify({"success": False, "error": str(e)})
 
 
+# ── download deed PDF → user's browser ────────────────────────────────────────
+
+@app.route("/api/download-to-browser", methods=["POST"])
+def api_download_to_browser():
+    """Stream a deed/plat PDF from the county portal directly to the user's browser.
+
+    Unlike /api/download which saves to the server filesystem, this endpoint
+    streams the PDF bytes with Content-Disposition: attachment so the user's
+    browser downloads the file to their own computer.
+
+    Body: { doc_no: str, grantor: str, grantee: str, location: str, filename: str (optional) }
+    """
+    try:
+        data     = request.get_json() or {}
+        doc_no   = data.get("doc_no", "")
+        grantor  = data.get("grantor", "")
+        grantee  = data.get("grantee", "")
+        location = data.get("location", "")
+        filename = data.get("filename", "")
+
+        if not doc_no:
+            return jsonify({"success": False, "error": "doc_no is required"}), 400
+
+        # Build filename if not provided
+        if not filename:
+            loc_clean = re.sub(r'^[A-Z]', '', location.strip())
+            def _cn(n):
+                parts = n.split(",")
+                return parts[0].strip().title() if parts else n.title()
+            filename = f"{loc_clean} {_cn(grantor)} to {_cn(grantee)}.pdf"
+            filename = re.sub(r'[<>:"/\\|?*]', '', filename).strip()
+            if not filename.endswith(".pdf"):
+                filename += ".pdf"
+
+        # Trigger portal to generate PDF, then fetch with retry
+        pdf_url  = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
+        pdf_resp, pdf_err = _fetch_portal_pdf(doc_no, pdf_url)
+        if pdf_err:
+            return jsonify({"success": False, "error": pdf_err}), 502
+
+        # Stream the response to the browser
+        def generate():
+            for chunk in pdf_resp.iter_content(8192):
+                yield chunk
+
+        response = Response(generate(), content_type="application/pdf")
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── serve a local file → user's browser ───────────────────────────────────────
+
+@app.route("/api/serve-local-file", methods=["POST"])
+def api_serve_local_file():
+    """Serve a local file (cabinet plat, saved deed, DXF, etc.) for browser download.
+
+    Security: only allows files within the survey drive or project directories.
+
+    Body: { path: str, filename: str (optional — defaults to file's basename) }
+    """
+    try:
+        data      = request.get_json() or {}
+        file_path = data.get("path", "").strip()
+        filename  = data.get("filename", "").strip()
+
+        if not file_path:
+            return jsonify({"success": False, "error": "path is required"}), 400
+
+        p = Path(file_path)
+        if not p.exists() or not p.is_file():
+            return jsonify({"success": False, "error": "File not found"}), 404
+
+        # Security: restrict to survey drive and project directories
+        try:
+            resolved = p.resolve()
+        except Exception:
+            return jsonify({"success": False, "error": "Invalid path"}), 400
+
+        drive = detect_survey_drive()
+        project_dir = Path(__file__).resolve().parent
+        allowed = False
+        if drive and str(resolved).upper().startswith(f"{drive}:\\"):
+            allowed = True
+        elif str(resolved).startswith(str(project_dir)):
+            allowed = True
+        if not allowed:
+            return jsonify({"success": False, "error": "Path not within allowed directories"}), 403
+
+        if not filename:
+            filename = p.name
+
+        return send_file(
+            str(resolved),
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ── extract deed info (lightweight — for Step 5 adjoiner plat targeting) ────────
+
 
 @app.route("/api/extract-deed-info", methods=["POST"])
 def api_extract_deed_info():

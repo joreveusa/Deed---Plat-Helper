@@ -885,6 +885,8 @@ async function loadS2Detail(docNo, idx, trEl) {
       <div class="detail-actions">
         <button class="btn btn-primary flex-1" id="btnS2Save" onclick="saveClientDeed('${docNo}')">
           &#11015; Save Client Deed &rarr;</button>
+        <button class="btn btn-accent2" onclick="downloadDeedToBrowser('${docNo}', state.selectedDetail)" title="Download this deed PDF to your own computer">
+          ⬇ Download to My PC</button>
         <button class="btn btn-outline" onclick="extractPropertyDescription('${docNo}', '')" title="Extract property description from deed PDF">
           📜 Get Description</button>
         <button class="btn btn-outline" onclick="findSimilarDescriptions()" title="Find parcels with similar legal descriptions">
@@ -2447,7 +2449,14 @@ async function onCabinetSelectChange(val) {
           '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
           '<span class="plat-meta">Cabinet ' + (f.cabinet || '') + ' \u00A0\u00B7\u00A0 ' + stratLabel + docNumBadge + '</span>' +
           '</div>' +
+          '<div style="display:flex;gap:4px">' +
+          (f.path ? '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:3px 7px" ' +
+            'onclick="event.stopPropagation(); showPlatPreview(\x27' + escHtml(f.path).replace(/'/g, "\\\\'") + '\x27,\x27' + escHtml(f.display_name || f.file).replace(/'/g, "\\\\'") + '\x27,\x27savePlatByIndex(' + fi + ')\x27)">\ud83d\udc41 Preview</button>' : '') +
           '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
+          '<button class="btn btn-sm" style="background:var(--accent2);color:#fff;font-size:10px" ' +
+          'onclick="downloadLocalFileToBrowser(\'' + escHtml(f.path).replace(/'/g, "\\\\'") + '\')" ' +
+          'title="Download to your computer">⬇ My PC</button>' +
+          '</div>' +
           '</div>';
       }).join('');
       if (targetingReason) {
@@ -2467,8 +2476,7 @@ async function doStep3Search() {
 
   const clientName = state.researchSession && state.researchSession.client_name
     ? state.researchSession.client_name : '';
-
-  // If no deed was selected, still run a name-only search using client_name.
+    // If no deed was selected, still run a name-only search using client_name.
   // Show a soft warning banner, but don't block the search.
   const noDeed = !state.selectedDetail;
   const noDeedBanner = noDeed
@@ -2528,20 +2536,8 @@ async function doStep3Search() {
           '<button class="btn btn-outline btn-sm" onclick="showPropertyPicker()" title="Open the map to visually identify the client parcel">🗺️ Use Map Picker</button>' +
           '</div></div>';
       } else {
-        onlCards.innerHTML = surveyHits.map(r =>
-          '<div class="plat-item">' +
-          '<div class="plat-info">' +
-          '<span class="plat-name" title="' + escHtml(r.location || '') + '">' +
-          escHtml((r.grantor || '').split(',')[0] || r.grantor || '') + '</span>' +
-          '<span class="plat-meta">' + escHtml(r.instrument_type || '') +
-          ' &nbsp;&nbsp; ' + escHtml(r.recorded_date || r.date || '') +
-          ' &nbsp;&nbsp; Doc <span class="text-accent2">' + escHtml(r.doc_no) + '</span></span>' +
-          '</div>' +
-          '<button class="btn btn-outline btn-sm" ' +
-          'onclick="saveClientPlatOnline(\'' + r.doc_no + '\',\'' + escHtml(r.location || '') + '\')">' +
-          '\u2B07 Download</button>' +
-          '</div>'
-        ).join('');
+        state._onlineSurveyHits = surveyHits;
+        _renderOnlineSurveyHits(onlCards, surveyHits, '');
       }
     })
     .catch(() => {
@@ -2643,6 +2639,9 @@ async function doStep3Search() {
             '<div style="display:flex;gap:6px;align-items:center">' +
             previewBtn +
             '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
+            '<button class="btn btn-sm" style="background:var(--accent2);color:#fff;font-size:10px" ' +
+            'onclick="downloadLocalFileToBrowser(\'' + escHtml(f.path).replace(/'/g, "\\\\'") + '\')" ' +
+            'title="Download to your computer">⬇ My PC</button>' +
             '</div>' +
             '</div>';
         }).join('');
@@ -2894,7 +2893,12 @@ async function _executeKmlCabinetSearch(pi) {
           '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
           '<span class="plat-meta">Cabinet ' + (f.cabinet || '') + ' \u00A0\u00B7\u00A0 ' + stratLabel + docNumBadge + '</span>' +
           '</div>' +
+          '<div style="display:flex;gap:4px">' +
           '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
+          '<button class="btn btn-sm" style="background:var(--accent2);color:#fff;font-size:10px" ' +
+          'onclick="downloadLocalFileToBrowser(\'' + escHtml(f.path).replace(/'/g, "\\\\'") + '\')" ' +
+          'title="Download to your computer">⬇ My PC</button>' +
+          '</div>' +
           '</div>';
       }).join('');
 
@@ -3521,6 +3525,16 @@ function renderResearchBoard() {
   adjoiners.forEach(s => { html += buildSubjectCard(s, rs); });
   grid.innerHTML = html;
 
+  // Add export button at the bottom of the grid
+  grid.insertAdjacentHTML('beforeend', `
+    <div style="grid-column:1/-1;text-align:center;padding:16px 0;border-top:1px solid var(--border);margin-top:8px">
+      <button class="btn btn-primary btn-sm" onclick="exportResearchReport()" style="padding:8px 24px">
+        📊 Export Research Report
+      </button>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px">Opens a printable summary of all findings in a new tab</div>
+    </div>
+  `);
+
   // Update the bottom progress bar
   _updateBoardProgress(rs, client, adjoiners);
 }
@@ -3584,10 +3598,10 @@ function buildSubjectCard(s, rs) {
   const accentColor = isClient ? "var(--accent)" : "#7a4f9a";
 
   const deedChip = s.deed_saved
-    ? `<span class="chip chip-done">✓ Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="Open deed" onclick="openFile('${s.deed_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">📄</button>` : ""}`
+    ? `<span class="chip chip-done">✓ Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="View deed" onclick="viewSubjectFile('${s.id}','deed')">👁️</button><button class="btn-icon-sm ml-1" title="Download" onclick="downloadLocalFileToBrowser('${s.deed_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">⬇</button>` : ""}`
     : `<span class="chip chip-todo">Deed</span>`;
   const platChip = s.plat_saved
-    ? `<span class="chip chip-done">✓ Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="Open plat" onclick="openFile('${s.plat_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">📐</button>` : ""}`
+    ? `<span class="chip chip-done">✓ Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="View plat" onclick="viewSubjectFile('${s.id}','plat')">👁️</button><button class="btn-icon-sm ml-1" title="Download" onclick="downloadLocalFileToBrowser('${s.plat_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">⬇</button>` : ""}`
     : `<span class="chip chip-todo">Plat</span>`;
 
   const statusColors = { done: "#1a3028;color:#56d3a0", na: "#281a1a;color:#888", pending: "var(--bg3);color:var(--text3)" };
@@ -4742,7 +4756,12 @@ async function doGenerateDxf() {
     if (!res.success) { showToast("DXF failed: " + res.error, "error"); status.textContent = "Error: " + res.error; return; }
 
     showToast(` DXF saved: ${res.filename}`, "success");
-    status.innerHTML = `<span class="text-accent2"> ${escHtml(res.filename)}</span>`;
+    status.innerHTML = `<span class="text-accent2"> ${escHtml(res.filename)}</span> &nbsp;
+      <button class="btn btn-sm" style="background:var(--accent2);color:#fff;font-size:10px;margin-left:8px"
+        onclick="downloadDxfToBrowser({saved_to:'${escHtml(res.saved_to).replace(/'/g, "\\'")}',filename:'${escHtml(res.filename).replace(/'/g, "\\'")}'})">
+        ⬇ Download to My PC</button>`;
+    // Auto-download to user's browser
+    downloadDxfToBrowser(res);
     setTimeout(() => {
       const dir = res.saved_to.substring(0, res.saved_to.lastIndexOf("\\"));
       apiFetch("/open-folder", "POST", { path: dir }).catch(() => { });
@@ -5625,7 +5644,9 @@ async function _loadPropPickerMapData() {
       return;
     }
     if (!res.total) {
-      countEl.textContent = 'No parcels in index. Build KML index first.';
+      countEl.innerHTML = '<span style="color:#ff7b72">No parcels in index.</span> ' +
+        '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 8px;margin-left:6px" ' +
+        'onclick="showKmlIndexModal()">🗺️ Build KML Index</button>';
       return;
     }
     _propPicker.geojsonData = res.geojson;
@@ -6369,6 +6390,23 @@ function _onKmlParcelClick(f, l) { _onPropParcelClick(f, l); }
 function _doKmlOwnerSearch(q) { _doPropPickerSearch(q); }
 function _addClientPulseRings() { /* pulse rings removed */ }
 
+/** Build KML index on demand (triggered from "No parcels" message) */
+async function showKmlIndexModal() {
+  showToast('🗺️ Building parcel index from KML/KMZ files…', 'info');
+  try {
+    const res = await apiFetch('/xml/build-index', 'POST');
+    if (res.success) {
+      showToast(`✓ Index built: ${res.total || 0} parcels in ${res.elapsed_sec || '?'}s`, 'success');
+      // Reload map data
+      await _loadPropPickerMapData();
+    } else {
+      showToast('Index build failed: ' + (res.error || 'Unknown error'), 'error');
+    }
+  } catch (e) {
+    showToast('Index build error: ' + e.message, 'error');
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PLAT PREVIEW PANEL (Feature #1)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -6383,12 +6421,12 @@ function showPlatPreview(filePath, filename, saveAction) {
   title.textContent = '📄 ' + (filename || 'Plat Preview');
   body.innerHTML = '<div class="loading-state"><div class="spinner"></div> Rendering PDF…</div>';
 
-  // Build action buttons
+  // Build action buttons — download always works (even for LAN clients)
   let actionsHtml = '';
   if (saveAction) {
     actionsHtml += `<button class="btn btn-success flex-1" onclick="${saveAction}">⬇ Save to Project</button>`;
   }
-  actionsHtml += `<button class="btn btn-outline flex-1" onclick="openFile('${escHtml(filePath).replace(/'/g, "\\'")}')">📂 Open Externally</button>`;
+  actionsHtml += `<button class="btn btn-primary flex-1" onclick="downloadLocalFileToBrowser('${escHtml(filePath).replace(/'/g, "\\'")}')">⬇ Download</button>`;
   actionsHtml += `<button class="btn btn-outline" onclick="closePlatPreview()">Close</button>`;
   actions.innerHTML = actionsHtml;
 
@@ -6403,7 +6441,15 @@ function showPlatPreview(filePath, filename, saveAction) {
     body.appendChild(img);
   };
   img.onerror = () => {
-    body.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠️</div><p>Could not render PDF preview.<br>Try opening the file externally.</p></div>';
+    body.innerHTML = `<div class="empty-state" style="padding:30px">
+      <div class="empty-icon">⚠️</div>
+      <p>Could not render PDF preview.</p>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-primary btn-sm" onclick="downloadLocalFileToBrowser('${escHtml(filePath).replace(/'/g, "\\'")}')">⬇ Download to View</button>
+        <button class="btn btn-outline btn-sm" onclick="openFile('${escHtml(filePath).replace(/'/g, "\\'")}')">Open on Server</button>
+      </div>
+      <div style="font-size:10px;color:var(--text3);margin-top:8px">Download sends the file to your browser. “Open on Server” only works if you’re on the server machine.</div>
+    </div>`;
   };
   img.src = url;
   img.alt = filename || 'Plat PDF preview';
@@ -6430,11 +6476,11 @@ function updateFileBadges() {
   let html = '';
   if (client.deed_saved && client.deed_path) {
     const fname = client.deed_path.split(/[/\\]/).pop();
-    html += `<span class="file-badge file-badge-deed" onclick="openFile('${escHtml(client.deed_path).replace(/'/g, "\\'")}')" title="${escHtml(client.deed_path)}">✅ ${escHtml(fname)}</span>`;
+    html += `<span class="file-badge file-badge-deed" onclick="downloadLocalFileToBrowser('${escHtml(client.deed_path).replace(/'/g, "\\'")}')" title="${escHtml(client.deed_path)}">✅ ${escHtml(fname)}</span>`;
   }
   if (client.plat_saved && client.plat_path) {
     const fname = client.plat_path.split(/[/\\]/).pop();
-    html += `<span class="file-badge file-badge-plat" onclick="openFile('${escHtml(client.plat_path).replace(/'/g, "\\'")}')" title="${escHtml(client.plat_path)}">📄 ${escHtml(fname)}</span>`;
+    html += `<span class="file-badge file-badge-plat" onclick="downloadLocalFileToBrowser('${escHtml(client.plat_path).replace(/'/g, "\\'")}')" title="${escHtml(client.plat_path)}">📄 ${escHtml(fname)}</span>`;
   }
   container.innerHTML = html;
 }
@@ -6715,6 +6761,301 @@ async function apiFetch(path, method = "GET", body = null, { signal } = {}) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+
+// ── Browser Download Helpers ─────────────────────────────────────────────────
+// These stream files to the user's own computer via the browser's download
+// mechanism, rather than saving to the server's filesystem.
+
+/**
+ * Download a deed/plat PDF from the county portal → user's browser.
+ * @param {string} docNo  - Document number
+ * @param {object} detail - Deed detail object (Grantor, Grantee, Location)
+ * @param {string} [customFilename] - Optional override filename
+ */
+async function downloadDeedToBrowser(docNo, detail, customFilename) {
+  if (!docNo) { showToast('No document number', 'error'); return; }
+  showToast(`⬇ Downloading ${docNo} to your computer…`, 'info');
+  try {
+    const res = await fetch(API + '/download-to-browser', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        doc_no: docNo,
+        grantor: detail?.Grantor || detail?.grantor || '',
+        grantee: detail?.Grantee || detail?.grantee || '',
+        location: detail?.Location || detail?.location || '',
+        filename: customFilename || '',
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      showToast('Download failed: ' + (err.error || res.statusText), 'error');
+      return;
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const filenameMatch = cd.match(/filename="(.+?)"/);
+    const fname = filenameMatch ? filenameMatch[1] : `${docNo}.pdf`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fname;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`✓ Downloaded ${fname}`, 'success');
+  } catch (e) {
+    showToast('Download error: ' + e.message, 'error');
+  }
+}
+
+/**
+ * Download a local file (cabinet plat, saved deed, DXF) → user's browser.
+ * @param {string} filePath - Server-side absolute path to the file
+ * @param {string} [customFilename] - Optional override filename
+ */
+async function downloadLocalFileToBrowser(filePath, customFilename) {
+  if (!filePath) { showToast('No file path', 'error'); return; }
+  showToast(`⬇ Downloading to your computer…`, 'info');
+  try {
+    const res = await fetch(API + '/serve-local-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath, filename: customFilename || '' }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      showToast('Download failed: ' + (err.error || res.statusText), 'error');
+      return;
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const filenameMatch = cd.match(/filename="(.+?)"/);
+    const fname = filenameMatch ? filenameMatch[1] : (customFilename || filePath.split(/[/\\]/).pop());
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fname;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`✓ Downloaded ${fname}`, 'success');
+  } catch (e) {
+    showToast('Download error: ' + e.message, 'error');
+  }
+}
+
+/**
+ * Generate DXF on server, then stream it to the user's browser.
+ * @param {object} dxfResult - The result from /api/generate-dxf (must have saved_to, filename)
+ */
+async function downloadDxfToBrowser(dxfResult) {
+  if (!dxfResult?.saved_to) { showToast('No DXF file path', 'error'); return; }
+  await downloadLocalFileToBrowser(dxfResult.saved_to, dxfResult.filename);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ONLINE SURVEY RESULTS — FILTER BAR (Sticky Note: "Refine Search")
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Render online survey results with a compact filter bar above them.
+ * Stores raw hits in state._onlineSurveyHits for client-side filtering.
+ */
+function _renderOnlineSurveyHits(container, hits, searchName) {
+  state._onlineSurveyHits = hits;
+
+  // Filter bar
+  const filterBar = '<div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">' +
+    '<input id="s3OnlineFilter" class="inp" style="flex:1;min-width:100px;font-size:11px;padding:4px 8px;height:26px" ' +
+    'placeholder="Filter name or doc#…" oninput="filterOnlineSurveyHits()">' +
+    '<select id="s3OnlineYearFilter" class="inp" style="width:80px;font-size:11px;padding:4px;height:26px" onchange="filterOnlineSurveyHits()">' +
+    '<option value="">All Years</option>' +
+    _buildYearOptions(hits) +
+    '</select>' +
+    '<span style="font-size:10px;color:var(--text3)" id="s3OnlineCount">' + hits.length + ' records</span>' +
+    '</div>';
+
+  container.innerHTML = filterBar + _buildOnlineHitRows(hits);
+}
+
+/** Build year <option> tags from distinct years in the hits */
+function _buildYearOptions(hits) {
+  const years = new Set();
+  hits.forEach(r => {
+    const d = r.recorded_date || r.date || '';
+    const m = d.match(/(\d{4})/);
+    if (m) years.add(m[1]);
+  });
+  return [...years].sort().reverse().map(y => '<option value="' + y + '">' + y + '</option>').join('');
+}
+
+/** Build the HTML rows for online survey hits */
+function _buildOnlineHitRows(hits) {
+  return hits.map(r => {
+    const name = escHtml((r.grantor || '').split(',')[0] || r.grantor || '');
+    const docNo = escHtml(r.doc_no || '');
+    const loc = escHtml(r.location || '');
+    const itype = escHtml(r.instrument_type || '');
+    const date = escHtml(r.recorded_date || r.date || '');
+
+    return '<div class="plat-item">' +
+      '<div class="plat-info">' +
+      '<span class="plat-name" title="' + loc + '">' + name + '</span>' +
+      '<span class="plat-meta">' + itype +
+      ' &nbsp;&nbsp; ' + date +
+      ' &nbsp;&nbsp; Doc <span class="text-accent2">' + docNo + '</span></span>' +
+      '</div>' +
+      '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
+      '<button class="btn btn-outline btn-sm" ' +
+      'onclick="saveClientPlatOnline(\'' + r.doc_no + '\',\'' + escHtml(r.location || '').replace(/'/g, "\\\\'") + '\')">' +
+      '\u2B07 Save</button>' +
+      '<button class="btn btn-sm" style="background:var(--accent2);color:#fff;font-size:10px" ' +
+      'onclick="downloadDeedToBrowser(\'' + r.doc_no + '\', {grantor:\'' + escHtml((r.grantor||'').replace(/'/g, "\\\\'")) + '\',location:\'' + escHtml((r.location||'').replace(/'/g, "\\\\'")) + '\'})" ' +
+      'title="Download to your computer">\u2B07 Download</button>' +
+      '</div>' +
+      '</div>';
+  }).join('');
+}
+
+/** Client-side filter for online survey results */
+function filterOnlineSurveyHits() {
+  const hits = state._onlineSurveyHits || [];
+  const q = (document.getElementById('s3OnlineFilter')?.value || '').trim().toLowerCase();
+  const yearFilter = document.getElementById('s3OnlineYearFilter')?.value || '';
+  const countEl = document.getElementById('s3OnlineCount');
+  const container = document.getElementById('s3OnlinePlats');
+
+  let filtered = hits;
+  if (q) {
+    filtered = filtered.filter(r =>
+      (r.grantor || '').toLowerCase().includes(q) ||
+      (r.doc_no || '').toLowerCase().includes(q) ||
+      (r.location || '').toLowerCase().includes(q) ||
+      (r.grantee || '').toLowerCase().includes(q)
+    );
+  }
+  if (yearFilter) {
+    filtered = filtered.filter(r => {
+      const d = r.recorded_date || r.date || '';
+      return d.includes(yearFilter);
+    });
+  }
+
+  if (countEl) countEl.textContent = filtered.length + ' of ' + hits.length + ' records';
+
+  // Re-render just the results (keep the filter bar intact)
+  const filterBar = container.querySelector('div:first-child');
+  const rows = _buildOnlineHitRows(filtered);
+  // Remove everything after the filter bar
+  while (container.children.length > 1) container.removeChild(container.lastChild);
+  container.insertAdjacentHTML('beforeend', rows || '<div class="empty-state text-text3 text-sm p-3">No matches for filter.</div>');
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP 5: RESEARCH EXPORT (Sticky Note: "View what it's found & Save it")
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Export the current research session as a printable HTML report.
+ * Opens in a new tab with all findings formatted for printing.
+ */
+function exportResearchReport() {
+  const rs = state.researchSession;
+  if (!rs) { showToast('No active session', 'warn'); return; }
+
+  const subjects = rs.subjects || [];
+  const client = subjects.find(s => s.type === 'client');
+  const adjoiners = subjects.filter(s => s.type === 'adjoiner');
+
+  let html = '<!DOCTYPE html><html><head>';
+  html += '<title>Research Report — Job #' + rs.job_number + ' ' + escHtml(rs.client_name) + '</title>';
+  html += '<style>';
+  html += 'body{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:auto;padding:30px;color:#222}';
+  html += 'h1{border-bottom:3px solid #2d8a6e;padding-bottom:8px;color:#1a3028}';
+  html += 'h2{color:#2d8a6e;margin-top:24px}';
+  html += 'table{width:100%;border-collapse:collapse;margin:12px 0}';
+  html += 'th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:13px}';
+  html += 'th{background:#f5f5f5;font-weight:700;text-transform:uppercase;font-size:11px;letter-spacing:.3px}';
+  html += '.status-done{color:#2d8a6e;font-weight:700} .status-pending{color:#999}';
+  html += '.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}';
+  html += '.badge-ok{background:#e6f7f1;color:#2d8a6e} .badge-todo{background:#f5f5f5;color:#999}';
+  html += '@media print{body{padding:10px}h1{font-size:20px}}';
+  html += '</style></head><body>';
+
+  html += '<h1>\ud83d\udcc1 Research Report</h1>';
+  html += '<table>';
+  html += '<tr><th>Job Number</th><td>#' + rs.job_number + '</td></tr>';
+  html += '<tr><th>Client</th><td>' + escHtml(rs.client_name) + '</td></tr>';
+  html += '<tr><th>Job Type</th><td>' + escHtml(rs.job_type || 'BDY') + '</td></tr>';
+  html += '<tr><th>Date</th><td>' + new Date().toLocaleDateString() + '</td></tr>';
+  html += '<tr><th>Total Subjects</th><td>' + subjects.length + ' (' + adjoiners.length + ' adjoiners)</td></tr>';
+  html += '</table>';
+
+  // Client section
+  if (client) {
+    html += '<h2>\u2605 Client: ' + escHtml(client.name) + '</h2>';
+    html += '<table>';
+    html += '<tr><th>Deed</th><td>' + (client.deed_saved ? '<span class="badge badge-ok">\u2713 Saved</span>' : '<span class="badge badge-todo">Pending</span>');
+    if (client.deed_path) html += ' <br><small>' + escHtml(client.deed_path.split(/[/\\]/).pop()) + '</small>';
+    html += '</td></tr>';
+    html += '<tr><th>Plat</th><td>' + (client.plat_saved ? '<span class="badge badge-ok">\u2713 Saved</span>' : '<span class="badge badge-todo">Pending</span>');
+    if (client.plat_path) html += ' <br><small>' + escHtml(client.plat_path.split(/[/\\]/).pop()) + '</small>';
+    html += '</td></tr>';
+    if (client.property_description) html += '<tr><th>Description</th><td style="font-size:11px;font-family:monospace;white-space:pre-wrap">' + escHtml(client.property_description.substring(0, 500)) + '</td></tr>';
+    if (client.doc_no) html += '<tr><th>Doc#</th><td>' + escHtml(client.doc_no) + '</td></tr>';
+    html += '</table>';
+  }
+
+  // Adjoiners table
+  if (adjoiners.length) {
+    html += '<h2>\u2B21 Adjoiners (' + adjoiners.length + ')</h2>';
+    html += '<table><tr><th>#</th><th>Name</th><th>Deed</th><th>Plat</th><th>Status</th><th>Notes</th></tr>';
+    adjoiners.forEach((s, i) => {
+      const st = s.status || 'pending';
+      const stClass = st === 'done' ? 'status-done' : 'status-pending';
+      html += '<tr>';
+      html += '<td>' + (i + 1) + '</td>';
+      html += '<td><strong>' + escHtml(s.name) + '</strong>' + (s.upc ? '<br><small>UPC ' + escHtml(s.upc) + '</small>' : '') + '</td>';
+      html += '<td>' + (s.deed_saved ? '\u2713' : '\u2014') + '</td>';
+      html += '<td>' + (s.plat_saved ? '\u2713' : '\u2014') + '</td>';
+      html += '<td class="' + stClass + '">' + st.charAt(0).toUpperCase() + st.slice(1) + '</td>';
+      html += '<td style="font-size:11px">' + escHtml(s.notes || '') + '</td>';
+      html += '</tr>';
+    });
+    html += '</table>';
+  }
+
+  html += '<div style="margin-top:40px;padding-top:12px;border-top:1px solid #ddd;font-size:11px;color:#999">';
+  html += 'Generated by Deed & Plat Helper \u2014 ' + new Date().toLocaleString();
+  html += '</div>';
+  html += '</body></html>';
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  showToast('\ud83d\udcca Research report opened in new tab \u2014 use Ctrl+P to print', 'success');
+}
+
+/**
+ * View a saved deed or plat file from the research board.
+ * Shows it in the plat preview panel (reuses existing infrastructure).
+ */
+function viewSubjectFile(subjectId, fileType) {
+  const rs = state.researchSession;
+  if (!rs) return;
+  const subj = rs.subjects.find(s => s.id === subjectId);
+  if (!subj) return;
+
+  const path = fileType === 'deed' ? subj.deed_path : subj.plat_path;
+  if (!path) {
+    showToast('No ' + fileType + ' file saved yet', 'warn');
+    return;
+  }
+  const filename = path.split(/[/\\]/).pop();
+  showPlatPreview(path, filename, '');
+}
+
 
 //  Toast 
 let _toastEl;
@@ -7223,8 +7564,26 @@ function closeUpgradeModal() {
   document.getElementById('upgradeOverlay').classList.add('hidden');
 }
 
+/** Detect if we're running on a local/LAN server (no SaaS billing applies). */
+function _isLocalMode() {
+  const h = window.location.hostname;
+  return h === 'localhost' || h === '127.0.0.1' || h.startsWith('192.168.') || h.startsWith('10.') || h.endsWith('.local');
+}
+
+/**
+ * Returns true if the current SaaS user has Pro or Team.
+ * In local/LAN mode, always returns true — no payment required.
+ */
+function _hasPro() {
+  if (_isLocalMode()) return true;
+  if (!_saasUser) return false;
+  const tier = _saasUser.tier || 'free';
+  return tier === 'pro' || tier === 'team';
+}
+
 /** Call this when an API returns upgrade_required: true */
 function handleUpgradeRequired(res, featureName) {
+  if (_isLocalMode()) return;   // No paywall on LAN
   const msg = res.error || 'This feature requires a Pro subscription.';
   if (!_saasUser) {
     showAuthModal('login');
@@ -7455,9 +7814,22 @@ async function apiFetch(path, method = 'GET', body = null, opts = {}) {
   if (body) fetchOpts.body = JSON.stringify(body);
   if (opts.signal) fetchOpts.signal = opts.signal;
   const res = await fetch(API + path, fetchOpts);
-  const data = await res.json();
-  // Surface auth/upgrade errors before caller sees them
-  if (!res.ok) {
+
+  // Safely parse the response — guard against HTML error pages
+  let data;
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  if (ct.includes('application/json')) {
+    try { data = await res.json(); }
+    catch (_) { data = { success: false, error: `Invalid JSON from ${path} (HTTP ${res.status})` }; }
+  } else {
+    // Server returned HTML (error page, redirect, etc.) — don't try to parse as JSON
+    const snippet = (await res.text()).slice(0, 120);
+    console.warn(`[apiFetch] ${path} returned non-JSON (${res.status}):`, snippet);
+    data = { success: false, error: `Server error (HTTP ${res.status})` };
+  }
+
+  // Surface auth/upgrade errors before caller sees them (production only)
+  if (!res.ok && !_isLocalMode()) {
     if (data.auth_required) { showAuthModal('login'); }
     else if (data.upgrade_required) { handleUpgradeRequired(data); }
   }
@@ -7490,16 +7862,6 @@ function _checkUpgradeSuccess() {
 }
 
 /**
- * Returns true if the current SaaS user has Pro or Team.
- * Falls back to false (free) if not logged in.
- */
-function _hasPro() {
-  if (!_saasUser) return false;
-  const tier = _saasUser.tier || 'free';
-  return tier === 'pro' || tier === 'team';
-}
-
-/**
  * Guard a pro-only action.
  * If user has pro → call fn(). Otherwise show auth/upgrade modal.
  * @param {string} featureName  - Display name for the feature
@@ -7507,6 +7869,7 @@ function _hasPro() {
  * @param {Function} fn         - The action to run if allowed
  */
 function requirePro(featureName, featureKey, fn) {
+  if (_isLocalMode()) { fn(); return; }   // No paywall on LAN
   if (!_saasUser) {
     showAuthModal('login');
     showToast('Sign in to use ' + featureName, 'warn');

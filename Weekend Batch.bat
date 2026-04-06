@@ -98,7 +98,7 @@ if errorlevel 1 (
 :: ── Detect survey data drive ─────────────────────────────────────────────
 call :info "Detecting survey data drive..."
 set SURVEY_DRIVE=
-for %%L in (E F G H I J K D) do (
+for %%L in (J K I H G F E D) do (
     if exist "%%L:\AI DATA CENTER\Survey Data" (
         set SURVEY_DRIVE=%%L
         goto :drive_found
@@ -187,10 +187,10 @@ if not exist "%CABINET_PATH%" (
     goto :phase6
 )
 
-call :info "Pre-processing unscanned cabinet PDFs (up to 50 per cabinet)..."
-call :info "This can take a while -- each PDF requires OCR..."
+call :info "Pre-processing ALL unscanned cabinet PDFs (full batch scan)..."
+call :info "This can take several hours -- each PDF requires OCR..."
 
-%PY% scripts\batch_ocr_warmup.py "%CABINET_PATH%" 50 >> "%LOGFILE%" 2>&1
+%PY% scripts\batch_ocr_warmup.py "%CABINET_PATH%" 9999 >> "%LOGFILE%" 2>&1
 if errorlevel 1 (
     call :error "OCR cache warm-up encountered errors"
 ) else (
