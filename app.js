@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 const API = "/api";  // Use relative URL to avoid CORS issues
 
 
@@ -1491,8 +1491,45 @@ function renderPropertyDescriptionCard(desc) {
     }
   }
 
-  // Calls table (collapsed by default)
-  if (desc.calls?.length) {
+  // ── Boundary Plot + Calls Table (combined section) ───────────────────
+  if (desc.calls?.length && desc.coords?.length > 1) {
+    // Color palette for segments (12 alternating colors)
+    const segColors = [
+      '#4fc3f7','#81c784','#ffb74d','#e57373','#ba68c8','#4dd0e1',
+      '#aed581','#ff8a65','#f06292','#7986cb','#a1887f','#90a4ae'
+    ];
+
+    html += `<div class="boundary-plot-section">
+      <div class="boundary-plot-header">
+        <div class="boundary-plot-title">
+          <span class="boundary-plot-icon">🗺️</span>
+          <span>Boundary Plot</span>
+          <span class="boundary-plot-badge">${desc.calls.length} calls</span>
+          ${desc.closure_err !== undefined ? `<span class="boundary-plot-closure ${desc.closure_err <= 1 ? 'closure-ok' : desc.closure_err <= 5 ? 'closure-warn' : 'closure-err'}">
+            ${desc.closure_err <= 0.5 ? '✅' : desc.closure_err <= 5 ? '⚠️' : '❌'} Closure: ${desc.closure_err.toFixed(2)} ft${desc.closure_ratio ? ' (' + desc.closure_ratio + ')' : ''}
+          </span>` : ''}
+          <button class="btn btn-outline btn-sm" onclick="generateClosureReport()" style="margin-left:auto;font-size:10px;padding:3px 10px">📊 Closure Report</button>
+        </div>
+      </div>
+      <div class="boundary-plot-body">
+        <div class="boundary-plot-canvas" id="boundaryPlotCanvas"></div>
+        <div class="boundary-plot-calls">
+          <table class="data-table calls-table calls-table-editable" style="font-size:11px" id="boundaryCallsTable">
+            <thead><tr><th>#</th><th>Bearing</th><th>Distance</th></tr></thead>
+            <tbody>${desc.calls.map((c, i) =>
+      `<tr data-call-idx="${i}" class="call-row${c.curve ? ' row-curve' : ''}" onclick="highlightBoundarySegment(${i})" style="cursor:pointer">
+              <td class="mono text-text3"><span class="call-color-dot" style="background:${segColors[i % segColors.length]}"></span>${i + 1}</td>
+              <td class="mono"><input type="text" class="call-edit-input call-bearing-input" data-idx="${i}" data-field="bearing" value="${escHtml(c.bearing)}" onchange="handleCallEdit(${i},'bearing',this.value)" onfocus="highlightBoundarySegment(${i})" spellcheck="false"></td>
+              <td class="mono"><input type="text" class="call-edit-input call-dist-input" data-idx="${i}" data-field="distance" value="${c.distance}" onchange="handleCallEdit(${i},'distance',this.value)" onfocus="highlightBoundarySegment(${i})" spellcheck="false"><span class="call-unit-label">ft</span></td>
+            </tr>`
+    ).join('')}</tbody>
+          </table>
+          <div class="calls-edit-hint">✏️ Edit bearings or distances to see the plot update live</div>
+        </div>
+      </div>
+    </div>`;
+  } else if (desc.calls?.length) {
+    // Fallback: calls table only (no coords for plotting)
     html += `<div class="prop-desc-calls-section">
       <button class="prop-desc-calls-toggle" onclick="togglePropDescCalls()">
         🧭 ${desc.calls.length} Bearing/Distance Calls
@@ -1515,6 +1552,14 @@ function renderPropertyDescriptionCard(desc) {
 
   html += `</div>`;
   descArea.innerHTML = html;
+
+  // Store desc for live editing
+  state._boundaryDesc = desc;
+
+  // ── Render the SVG boundary plot after DOM is ready ──────────────────
+  if (desc.coords?.length > 1) {
+    requestAnimationFrame(() => renderBoundaryPlot(desc));
+  }
 }
 
 /** Toggle expand/collapse of the property description text */
@@ -1535,6 +1580,361 @@ function togglePropDescCalls() {
   if (!el) return;
   el.classList.toggle('hidden');
   if (chev) chev.textContent = el.classList.contains('hidden') ? '▸' : '▾';
+}
+
+// ── INTERACTIVE SVG BOUNDARY PLOTTER ──────────────────────────────────────────
+
+/**
+ * Render an interactive SVG boundary plot from parsed deed coordinates.
+ * Inspired by DeedReaderPro's visual plotting — rendered inline in the browser.
+ */
+function renderBoundaryPlot(desc) {
+  const container = document.getElementById('boundaryPlotCanvas');
+  if (!container || !desc.coords || desc.coords.length < 2) return;
+
+  const coords = desc.coords;
+  const calls = desc.calls || [];
+  const segColors = [
+    '#4fc3f7','#81c784','#ffb74d','#e57373','#ba68c8','#4dd0e1',
+    '#aed581','#ff8a65','#f06292','#7986cb','#a1887f','#90a4ae'
+  ];
+
+  // ── Compute bounding box ──────────────────────────────────────────────
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of coords) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const padding = 40;
+  const svgW = container.clientWidth || 400;
+  const svgH = Math.max(280, Math.min(svgW * 0.75, 500));
+  const plotW = svgW - padding * 2;
+  const plotH = svgH - padding * 2;
+  const scale = Math.min(plotW / rangeX, plotH / rangeY);
+
+  // Transform: survey coords (Y=North) to SVG coords (Y=down)
+  const tx = (x) => padding + (x - minX) * scale + (plotW - rangeX * scale) / 2;
+  const ty = (y) => padding + (maxY - y) * scale + (plotH - rangeY * scale) / 2;
+
+  // ── Build SVG ─────────────────────────────────────────────────────────
+  let svg = `<svg class="boundary-svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}" xmlns="http://www.w3.org/2000/svg">`;
+
+  // Defs: arrow marker, glow filter
+  svg += `<defs>
+    <marker id="plotArrow" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+      <polygon points="0 0, 6 2, 0 4" fill="rgba(255,255,255,0.5)"/>
+    </marker>
+    <filter id="plotGlow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>`;
+
+  // ── Grid lines (subtle) ───────────────────────────────────────────────
+  const gridStep = _niceGridStep(Math.max(rangeX, rangeY));
+  if (gridStep > 0) {
+    svg += `<g class="plot-grid">`;
+    for (let gx = Math.ceil(minX / gridStep) * gridStep; gx <= maxX; gx += gridStep) {
+      const sx = tx(gx);
+      svg += `<line x1="${sx}" y1="${padding}" x2="${sx}" y2="${svgH - padding}" stroke="rgba(255,255,255,0.05)" stroke-width="0.5"/>`;
+      svg += `<text x="${sx}" y="${svgH - padding + 12}" fill="rgba(255,255,255,0.15)" font-size="8" text-anchor="middle">${Math.round(gx)}'</text>`;
+    }
+    for (let gy = Math.ceil(minY / gridStep) * gridStep; gy <= maxY; gy += gridStep) {
+      const sy = ty(gy);
+      svg += `<line x1="${padding}" y1="${sy}" x2="${svgW - padding}" y2="${sy}" stroke="rgba(255,255,255,0.05)" stroke-width="0.5"/>`;
+      svg += `<text x="${padding - 4}" y="${sy + 3}" fill="rgba(255,255,255,0.15)" font-size="8" text-anchor="end">${Math.round(gy)}'</text>`;
+    }
+    svg += `</g>`;
+  }
+
+  // ── Boundary segments ─────────────────────────────────────────────────
+  for (let i = 0; i < coords.length - 1; i++) {
+    const [x1, y1] = coords[i];
+    const [x2, y2] = coords[i + 1];
+    const color = segColors[i % segColors.length];
+    const call = calls[i] || {};
+    const tooltip = `${call.bearing || ''} ${call.distance ? call.distance.toLocaleString() : ''} ft`.trim();
+
+    svg += `<line class="plot-segment" data-idx="${i}"
+      x1="${tx(x1)}" y1="${ty(y1)}" x2="${tx(x2)}" y2="${ty(y2)}"
+      stroke="${color}" stroke-width="2.5" stroke-linecap="round"
+      marker-end="url(#plotArrow)"
+      onclick="highlightBoundarySegment(${i})"
+      style="cursor:pointer">
+      <title>${escHtml(tooltip)}</title>
+    </line>`;
+
+    // Midpoint label — only show if segment is long enough on screen
+    const mx = (tx(x1) + tx(x2)) / 2;
+    const my = (ty(y1) + ty(y2)) / 2;
+    const segLenPx = Math.hypot(tx(x2) - tx(x1), ty(y2) - ty(y1));
+
+    if (segLenPx > 50) {
+      const angle = Math.atan2(ty(y2) - ty(y1), tx(x2) - tx(x1)) * (180 / Math.PI);
+      const rot = (angle > 90 || angle < -90) ? angle + 180 : angle;
+      const perpX = -(ty(y2) - ty(y1)) / segLenPx * 10;
+      const perpY = (tx(x2) - tx(x1)) / segLenPx * 10;
+
+      svg += `<text class="plot-label" data-idx="${i}"
+        x="${mx + perpX}" y="${my + perpY}"
+        fill="${color}" font-size="8" text-anchor="middle"
+        transform="rotate(${rot.toFixed(1)}, ${mx + perpX}, ${my + perpY})"
+        opacity="0.8">${escHtml(call.bearing || '')}</text>`;
+      svg += `<text class="plot-dist-label" data-idx="${i}"
+        x="${mx - perpX}" y="${my - perpY}"
+        fill="rgba(255,255,255,0.5)" font-size="7" text-anchor="middle"
+        transform="rotate(${rot.toFixed(1)}, ${mx - perpX}, ${my - perpY})"
+        opacity="0.7">${call.distance ? call.distance.toLocaleString() : ''}'</text>`;
+    }
+  }
+
+  // ── Closure gap (red dashed) ──────────────────────────────────────────
+  if (desc.closure_err && desc.closure_err > 0.1 && coords.length >= 3) {
+    const [lx, ly] = coords[coords.length - 1];
+    const [fx, fy] = coords[0];
+    svg += `<line class="plot-closure-gap"
+      x1="${tx(lx)}" y1="${ty(ly)}" x2="${tx(fx)}" y2="${ty(fy)}"
+      stroke="#ff1744" stroke-width="1.5" stroke-dasharray="5 3" opacity="0.8">
+      <title>Closure gap: ${desc.closure_err.toFixed(2)} ft</title>
+    </line>`;
+  }
+
+  // ── Vertex dots ───────────────────────────────────────────────────────
+  for (let i = 0; i < coords.length; i++) {
+    const [x, y] = coords[i];
+    const color = i === 0 ? '#00e676' : segColors[(i - 1) % segColors.length];
+    const r = i === 0 ? 5 : 3;
+    svg += `<circle cx="${tx(x)}" cy="${ty(y)}" r="${r}" fill="${color}" stroke="rgba(0,0,0,0.5)" stroke-width="1"
+      ${i === 0 ? 'filter="url(#plotGlow)"' : ''}>
+      <title>${i === 0 ? 'POB (Point of Beginning)' : 'Point ' + (i + 1)}</title>
+    </circle>`;
+  }
+
+  // ── POB label ─────────────────────────────────────────────────────────
+  if (coords.length > 0) {
+    const [px, py] = coords[0];
+    svg += `<text x="${tx(px) + 8}" y="${ty(py) - 8}"
+      fill="#00e676" font-size="9" font-weight="700" filter="url(#plotGlow)">POB</text>`;
+  }
+
+  // ── North arrow ───────────────────────────────────────────────────────
+  const naX = svgW - 25, naY = 30;
+  svg += `<g transform="translate(${naX}, ${naY})">
+    <line x1="0" y1="12" x2="0" y2="-12" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/>
+    <polygon points="-4,0 0,-12 4,0" fill="rgba(255,255,255,0.4)"/>
+    <text x="0" y="-16" fill="rgba(255,255,255,0.5)" font-size="9" text-anchor="middle" font-weight="700">N</text>
+  </g>`;
+
+  svg += `</svg>`;
+  container.innerHTML = svg;
+}
+
+/**
+ * Highlight a boundary segment and its corresponding table row.
+ */
+function highlightBoundarySegment(idx) {
+  document.querySelectorAll('.plot-segment.active').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.call-row.active').forEach(el => el.classList.remove('active'));
+
+  const seg = document.querySelector(`.plot-segment[data-idx="${idx}"]`);
+  if (seg) {
+    seg.classList.add('active');
+    seg.setAttribute('stroke-width', '5');
+    document.querySelectorAll('.plot-segment:not(.active)').forEach(el => el.setAttribute('stroke-width', '2.5'));
+  }
+
+  const row = document.querySelector(`.call-row[data-call-idx="${idx}"]`);
+  if (row) {
+    row.classList.add('active');
+    row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  document.querySelectorAll('.plot-label, .plot-dist-label').forEach(el => {
+    el.setAttribute('opacity', el.dataset.idx == idx ? '1' : '0.4');
+  });
+}
+
+/** Calculate a nice grid step size for the plot. */
+function _niceGridStep(range) {
+  if (range <= 0) return 0;
+  const rough = range / 5;
+  const pow10 = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / pow10;
+  let nice;
+  if (norm <= 1) nice = 1;
+  else if (norm <= 2) nice = 2;
+  else if (norm <= 5) nice = 5;
+  else nice = 10;
+  return nice * pow10;
+}
+
+// ── EDITABLE CALL TABLE — LIVE REPLOT ──────────────────────────────────────────
+
+/** Parse a bearing label like "N 45°30'00\" E" into components. */
+function _parseBearingLabel(str) {
+  const m = str.match(/^\s*([NS])\s*(\d{1,3})[°\s]+(\d{0,2})['\u2032\s]*(\d{0,2})["\u2033\s]*([EW])\s*$/i);
+  if (!m) return null;
+  return { ns: m[1].toUpperCase(), deg: parseFloat(m[2])||0, min: parseFloat(m[3])||0, sec: parseFloat(m[4])||0, ew: m[5].toUpperCase() };
+}
+
+/** Convert quadrant bearing to azimuth. */
+function _bearingToAzimuth(ns, deg, mn, sec, ew) {
+  const dd = deg + mn / 60.0 + sec / 3600.0;
+  if (ns === 'N' && ew === 'E') return dd;
+  if (ns === 'S' && ew === 'E') return 180.0 - dd;
+  if (ns === 'S' && ew === 'W') return 180.0 + dd;
+  if (ns === 'N' && ew === 'W') return 360.0 - dd;
+  return 0;
+}
+
+/** Recompute coordinates from calls (client-side, mirrors backend). */
+function _callsToCoords(calls) {
+  const pts = [[0, 0]];
+  let x = 0, y = 0;
+  for (const c of calls) {
+    if (c._azimuth !== undefined && c.distance) {
+      const az = c._azimuth * Math.PI / 180;
+      x += c.distance * Math.sin(az);
+      y += c.distance * Math.cos(az);
+      pts.push([Math.round(x * 10000) / 10000, Math.round(y * 10000) / 10000]);
+    }
+  }
+  return pts;
+}
+
+/** Handle an edit to a bearing or distance field in the calls table. */
+function handleCallEdit(idx, field, value) {
+  const desc = state._boundaryDesc;
+  if (!desc || !desc.calls || !desc.calls[idx]) return;
+  const call = desc.calls[idx];
+  const origClosure = desc.closure_err || 0;
+
+  if (field === 'bearing') {
+    const parsed = _parseBearingLabel(value);
+    if (!parsed) {
+      const inp = document.querySelector(`.call-bearing-input[data-idx="${idx}"]`);
+      if (inp) { inp.classList.add('call-edit-error'); setTimeout(() => inp.classList.remove('call-edit-error'), 1200); }
+      return;
+    }
+    call.bearing = value.trim();
+    call._azimuth = _bearingToAzimuth(parsed.ns, parsed.deg, parsed.min, parsed.sec, parsed.ew);
+    call.azimuth = call._azimuth;
+  } else if (field === 'distance') {
+    const num = parseFloat(value.replace(/,/g, ''));
+    if (isNaN(num) || num <= 0) {
+      const inp = document.querySelector(`.call-dist-input[data-idx="${idx}"]`);
+      if (inp) { inp.classList.add('call-edit-error'); setTimeout(() => inp.classList.remove('call-edit-error'), 1200); }
+      return;
+    }
+    call.distance = num;
+  }
+
+  for (const c of desc.calls) {
+    if (c._azimuth === undefined && c.bearing) {
+      const p = _parseBearingLabel(c.bearing);
+      if (p) c._azimuth = _bearingToAzimuth(p.ns, p.deg, p.min, p.sec, p.ew);
+      else if (c.azimuth !== undefined) c._azimuth = c.azimuth;
+    }
+  }
+
+  const newCoords = _callsToCoords(desc.calls);
+  desc.coords = newCoords;
+  if (newCoords.length >= 2) {
+    const [fx,fy] = newCoords[0]; const [lx,ly] = newCoords[newCoords.length-1];
+    desc.closure_err = Math.round(Math.hypot(lx-fx, ly-fy) * 10000) / 10000;
+    const perimeter = desc.calls.reduce((s,c) => s + (c.distance||0), 0);
+    desc.closure_ratio = desc.closure_err > 0.001 && perimeter > 0 ? `1:${Math.round(perimeter / desc.closure_err)}` : '';
+  }
+
+  renderBoundaryPlot(desc);
+
+  const closureEl = document.querySelector('.boundary-plot-closure');
+  if (closureEl && desc.closure_err !== undefined) {
+    const err = desc.closure_err;
+    const icon = err <= 0.5 ? '✅' : err <= 5 ? '⚠️' : '❌';
+    const cls = err <= 1 ? 'closure-ok' : err <= 5 ? 'closure-warn' : 'closure-err';
+    closureEl.className = `boundary-plot-closure ${cls}`;
+    closureEl.innerHTML = `${icon} Closure: ${err.toFixed(2)} ft${desc.closure_ratio ? ' (' + desc.closure_ratio + ')' : ''}`;
+    const delta = err - origClosure;
+    if (Math.abs(delta) > 0.01) {
+      closureEl.innerHTML += ` <span class="closure-delta ${delta < 0 ? 'delta-better' : 'delta-worse'}">${delta > 0 ? '+' : ''}${delta.toFixed(2)}</span>`;
+    }
+  }
+
+  const inp = document.querySelector(`.call-edit-input[data-idx="${idx}"][data-field="${field}"]`);
+  if (inp) inp.classList.add('call-edited');
+  highlightBoundarySegment(idx);
+}
+
+// ── CLOSURE REPORT GENERATOR ──────────────────────────────────────────────────
+
+/** Generate a printable Closure Report and open in a new window. */
+function generateClosureReport() {
+  const desc = state._boundaryDesc;
+  if (!desc || !desc.calls?.length) { showToast('No boundary data available', 'warn'); return; }
+
+  const rs = state.researchSession;
+  const client = rs?.subjects?.find(s => s.type === 'client');
+  const jobNum = rs?.job_number || 'N/A';
+  const clientName = client?.name || 'Unknown';
+  const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const segColors = ['#4fc3f7','#81c784','#ffb74d','#e57373','#ba68c8','#4dd0e1','#aed581','#ff8a65','#f06292','#7986cb','#a1887f','#90a4ae'];
+
+  const coords = desc.coords || [];
+  let plotSvg = '';
+  if (coords.length > 1) {
+    let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+    for (const [x,y] of coords) { if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y; }
+    const rX=maxX-minX||1, rY=maxY-minY||1, pad=50, W=600, H=450;
+    const sc=Math.min((W-pad*2)/rX,(H-pad*2)/rY);
+    const tx=(x)=>pad+(x-minX)*sc+((W-pad*2)-rX*sc)/2;
+    const ty=(y)=>pad+(maxY-y)*sc+((H-pad*2)-rY*sc)/2;
+    plotSvg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="border:1px solid #ccc;background:#fafafa">`;
+    for (let i=0;i<coords.length-1;i++) {
+      const [x1,y1]=coords[i],[x2,y2]=coords[i+1];
+      plotSvg+=`<line x1="${tx(x1)}" y1="${ty(y1)}" x2="${tx(x2)}" y2="${ty(y2)}" stroke="${segColors[i%segColors.length]}" stroke-width="2"/>`;
+      plotSvg+=`<text x="${(tx(x1)+tx(x2))/2}" y="${(ty(y1)+ty(y2))/2-5}" fill="#333" font-size="7" text-anchor="middle" font-family="monospace">${i+1}</text>`;
+    }
+    if (desc.closure_err>0.1) { const [lx,ly]=coords[coords.length-1],[fx,fy]=coords[0]; plotSvg+=`<line x1="${tx(lx)}" y1="${ty(ly)}" x2="${tx(fx)}" y2="${ty(fy)}" stroke="red" stroke-width="1" stroke-dasharray="4 2"/>`; }
+    for (let i=0;i<coords.length;i++) { const [x,y]=coords[i]; plotSvg+=`<circle cx="${tx(x)}" cy="${ty(y)}" r="${i===0?4:2.5}" fill="${i===0?'green':segColors[(i-1)%segColors.length]}" stroke="#333" stroke-width="0.5"/>`; }
+    plotSvg+=`<text x="${tx(coords[0][0])+6}" y="${ty(coords[0][1])-6}" fill="green" font-size="9" font-weight="bold">POB</text></svg>`;
+  }
+
+  const callRows = desc.calls.map((c,i)=>`<tr><td style="text-align:center;color:${segColors[i%segColors.length]};font-weight:bold">${i+1}</td><td style="font-family:monospace">${c.bearing||'-'}</td><td style="font-family:monospace;text-align:right">${c.distance?.toLocaleString()||'-'}</td></tr>`).join('');
+  const err = desc.closure_err||0;
+  const quality = err<=0.5?'Excellent':err<=2?'Good':err<=5?'Fair':'Poor';
+  const qColor = err<=0.5?'#228B22':err<=2?'#2E8B57':err<=5?'#B8860B':'#CC0000';
+  const perimeter = desc.calls.reduce((s,c)=>s+(c.distance||0),0);
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Closure Report — ${escHtml(clientName)}</title>
+<style>body{font-family:'Segoe UI',Arial,sans-serif;max-width:800px;margin:0 auto;padding:30px;color:#222}h1{font-size:20px;border-bottom:2px solid #333;padding-bottom:8px}
+.sub{color:#666;font-size:12px;margin-bottom:20px}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px 30px;margin-bottom:20px;font-size:13px}
+.ml{font-weight:700;color:#555;text-transform:uppercase;font-size:10px;letter-spacing:.5px}table{width:100%;border-collapse:collapse;margin:16px 0;font-size:12px}
+th,td{padding:6px 10px;border:1px solid #ddd}th{background:#f5f5f5;font-size:10px;text-transform:uppercase}
+.cb{padding:14px 18px;border-radius:8px;margin:16px 0}.pc{text-align:center;margin:16px 0}
+.ft{margin-top:30px;padding-top:12px;border-top:1px solid #ddd;font-size:10px;color:#999;text-align:center}@media print{.np{display:none}}</style></head><body>
+<h1>📊 Boundary Closure Report</h1><div class="sub">Generated ${dateStr} by Deed & Plat Helper</div>
+<div class="meta"><div><span class="ml">Job #</span><br>${escHtml(String(jobNum))}</div><div><span class="ml">Client</span><br>${escHtml(clientName)}</div>
+<div><span class="ml">Description Type</span><br>Metes & Bounds (${desc.calls.length} calls)</div><div><span class="ml">TRS</span><br>${desc.trs_refs?.join(', ')||'N/A'}</div></div>
+<div class="cb" style="background:${qColor}15;border:1px solid ${qColor}40"><strong style="color:${qColor};font-size:15px">${quality} Closure</strong><br>
+<span style="font-family:monospace;font-size:14px">Error: ${err.toFixed(4)} ft${desc.closure_ratio?' ('+desc.closure_ratio+')':''}</span><br>
+<span style="font-size:12px;color:#666">Perimeter: ${perimeter.toLocaleString()} ft | Area: ${desc.area_acres||0} acres</span></div>
+<div class="pc">${plotSvg}</div><h3 style="font-size:14px;margin-top:24px">Call Table</h3>
+<table><thead><tr><th>#</th><th>Bearing</th><th>Distance (ft)</th></tr></thead><tbody>${callRows}</tbody>
+<tfoot><tr><th colspan="2" style="text-align:right">Total Perimeter</th><th style="text-align:right;font-family:monospace">${perimeter.toLocaleString()} ft</th></tr></tfoot></table>
+${desc.monuments?.length?`<p style="font-size:12px"><strong>Monuments:</strong> ${desc.monuments.join(', ')}</p>`:''}
+<div class="ft">Deed & Plat Helper — Jore Ve USA Land Surveying<br>This report is for reference only and does not constitute a legal survey.</div>
+<div class="np" style="text-align:center;margin-top:20px"><button onclick="window.print()" style="padding:10px 30px;font-size:14px;cursor:pointer;border-radius:6px;border:1px solid #ccc;background:#f8f8f8">🖨️ Print / Save as PDF</button></div>
+</body></html>`;
+
+  const w = window.open('', '_blank', 'width=850,height=1000');
+  if (w) { w.document.write(html); w.document.close(); }
+  else showToast('Popup blocked — allow popups for this site', 'warn');
 }
 
 /**
