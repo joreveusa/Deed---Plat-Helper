@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-04-06T09:09:33",
+  "stats": {
+    "total_jobs": 5,
+    "total_subjects": 13,
+    "total_deeds": 1,
+    "total_plats": 1,
+    "avg_adjoiners": 1.6,
+    "median_adjoiners": 0,
+    "max_adjoiners": 8,
+    "avg_completion_pct": 2.2,
+    "jobs_by_type": {
+      "BDY": 5
+    },
+    "cabinet_distribution": {},
+    "monthly_activity": [
+      {
+        "month": "2026-04",
+        "jobs": 3
+      },
+      {
+        "month": "2026-03",
+        "jobs": 2
+      }
+    ],
+    "completion_tiers": {
+      "excellent": 0,
+      "good": 0,
+      "partial": 0,
+      "minimal": 5
+    },
+    "date_range": {
+      "oldest": "2026-03-31",
+      "newest": "2026-04-03"
+    }
+  },
+  "incomplete_jobs": [
+    {
+      "job": 3001,
+      "client": "garza, veronica",
+      "pct": 11.1,
+      "adj": 8
+    }
+  ]
+}

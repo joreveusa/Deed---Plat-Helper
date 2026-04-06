@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deed &amp; Plat Helper — Connect</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: linear-gradient(135deg, #0d1117 0%, #171d24 100%);
+      color: #e6edf3;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: rgba(35, 41, 48, 0.6);
+      border: 1px solid rgba(100, 110, 120, 0.2);
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 500px;
+      width: 100%;
+      text-align: center;
+      backdrop-filter: blur(12px);
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .sub { color: #40c29f; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 24px; }
+    .icon { font-size: 48px; margin-bottom: 16px; }
+    p { color: #8b949e; font-size: 14px; line-height: 1.6; margin-bottom: 20px; }
+    .link-box {
+      background: rgba(0,0,0,0.3);
+      border: 2px solid #2d8a6e;
+      border-radius: 10px;
+      padding: 16px 20px;
+      font-size: 20px;
+      font-weight: 700;
+      font-family: 'Consolas', 'Courier New', monospace;
+      color: #40c29f;
+      margin-bottom: 20px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-decoration: none;
+      display: block;
+    }
+    .link-box:hover { background: rgba(45, 138, 110, 0.15); transform: translateY(-2px); border-color: #40c29f; }
+    .btn {
+      display: inline-block;
+      padding: 12px 32px;
+      background: linear-gradient(135deg, #2d8a6e, #1f6b54);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+    .btn:hover { transform: translateY(-2px); filter: brightness(1.1); }
+    .steps { text-align: left; margin: 20px 0; }
+    .steps li { color: #8b949e; margin-bottom: 10px; font-size: 13px; }
+    .steps li strong { color: #e6edf3; }
+    .note { font-size: 11px; color: #6e7681; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">🦅</div>
+    <h1>Deed &amp; Plat Helper</h1>
+    <div class="sub">Red Tail Surveying</div>
+
+    <p>Click below to open the app. You'll pick your profile on first visit.</p>
+
+    <a class="link-box" href="http://192.168.0.127:5000" id="appLink">
+      http://192.168.0.127:5000
+    </a>
+
+    <a class="btn" href="http://192.168.0.127:5000">Open App →</a>
+
+    <ol class="steps">
+      <li>Make sure <strong>Tina's computer is on</strong> and the app is running</li>
+      <li>Click the link above or type the address in your browser</li>
+      <li>Pick your name (or create a new profile) when prompted</li>
+      <li>You're in! Your session is separate from everyone else's</li>
+    </ol>
+
+    <div class="note">
+      If the link doesn't work, the server might not be running on Tina's machine.<br>
+      Ask Tina to double-click "Deed &amp; Plat Helper" on her Desktop.
+    </div>
+  </div>
+</body>
+</html>

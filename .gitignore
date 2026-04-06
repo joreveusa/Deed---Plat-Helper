@@ -1,0 +1,51 @@
+# Python
+users.json           # SaaS user database — NEVER commit (contains emails + hashed passwords)
+_patch_routes.py     # one-off maintenance scripts
+backups/             # auto-generated users.json backups — never commit
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Environment / secrets — NEVER commit
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# App data / generated
+*.ocr.json           # Tesseract OCR cache files alongside cabinet PDFs
+parcel_index.json    # KML index (rebuilt from source KML/KMZ files)
+
+# Config — intentionally excluded (contains 1stNMTitle credentials)
+config.json
+profiles/
+
+# Survey data (never commit actual client data)
+Survey Data/
+dev-data/
+
+# OS / editor
+.vscode/settings.json
+Thumbs.db
+.DS_Store
+
+# Security — never commit these
+github-recovery-codes.txt
+*recovery-codes*.txt
+*.recovery
+
+# Logs
+*.log
+server.log
+server_err.log
+data/cabinet_index.json
+client_config.json
