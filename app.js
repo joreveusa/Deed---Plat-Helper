@@ -7639,6 +7639,16 @@ async function obSaveAndFinish() {
 
 let _adminPassword = '';
 
+async function _loadSearchHistory() {
+  try {
+    const res = await fetch('/auth/history', { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) _searchHistory = data.history || [];
+    }
+  } catch(e) {}
+}
+
 function showAdminPanel() {
   document.getElementById('adminOverlay')?.classList.remove('hidden');
   document.getElementById('adminAuthGate').style.display = '';
@@ -7926,12 +7936,7 @@ window.openAccountMenu = function(...args) {
 
 let _searchHistory = [];
 
-async function _loadSearchHistory() {
-  try {
-    const res = await apiFetch('/auth/history');
-    if (res.success) _searchHistory = res.history || [];
-  } catch(e) {}
-}
+
 
 /** Render a compact history dropdown below the name search input. */
 function _renderSearchHistory(inputEl, containerEl) {

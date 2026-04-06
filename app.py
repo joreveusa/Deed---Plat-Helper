@@ -4488,8 +4488,6 @@ def analyze_deed(detail: dict, pdf_path: str = "") -> dict:
 
 
 @app.route("/api/extract-deed-description", methods=["POST"])
-@require_auth
-@require_pro
 def api_extract_deed_description():
     """
     Extract the full property description from a deed PDF.
