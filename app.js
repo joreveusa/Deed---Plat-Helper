@@ -1068,6 +1068,64 @@ function jumpToPlatByOwner(ownerName) {
   goToStep(3);
 }
 
+// ── BLM GLO Records URL builders ──────────────────────────────────────────
+// Build a URL to the BLM General Land Office survey plat viewer.
+// Input: TRS object { trs, township, range, section } or string "T26N R13E S12"
+// Returns: URL to glorecords.blm.gov survey plat search, or null if unparseable.
+function buildGloUrl(trsInput) {
+  try {
+    let twp, tDir, rng, rDir, sec;
+    if (typeof trsInput === 'object' && trsInput !== null) {
+      const tm = (trsInput.township || '').match(/T\.?(\d+)([NS])/i);
+      const rm = (trsInput.range || '').match(/R\.?(\d+)([EW])/i);
+      if (!tm || !rm) return null;
+      twp = tm[1]; tDir = tm[2].toUpperCase();
+      rng = rm[1]; rDir = rm[2].toUpperCase();
+      sec = trsInput.section || '';
+    } else {
+      const m = String(trsInput).match(/T\.?\s*(\d+)\s*([NS])\s*R\.?\s*(\d+)\s*([EW])(?:\s*S(?:ec)?\s*(\d+))?/i);
+      if (!m) return null;
+      twp = m[1]; tDir = m[2].toUpperCase();
+      rng = m[3]; rDir = m[4].toUpperCase();
+      sec = m[5] || '';
+    }
+    // NM Principal Meridian
+    const params = new URLSearchParams({
+      state: 'NM', survey_type: 'RR',
+      township: twp, township_dir: tDir, range: rng, range_dir: rDir,
+    });
+    if (sec) params.set('section', sec);
+    return `https://glorecords.blm.gov/results/default.aspx?${params.toString()}#tabIndex=0&SurveyState=NM`;
+  } catch { return null; }
+}
+
+// Build a URL to search GLO land patents by TRS.
+function buildGloPatentUrl(trsInput) {
+  try {
+    let twp, tDir, rng, rDir, sec;
+    if (typeof trsInput === 'object' && trsInput !== null) {
+      const tm = (trsInput.township || '').match(/T\.?(\d+)([NS])/i);
+      const rm = (trsInput.range || '').match(/R\.?(\d+)([EW])/i);
+      if (!tm || !rm) return null;
+      twp = tm[1]; tDir = tm[2].toUpperCase();
+      rng = rm[1]; rDir = rm[2].toUpperCase();
+      sec = trsInput.section || '';
+    } else {
+      const m = String(trsInput).match(/T\.?\s*(\d+)\s*([NS])\s*R\.?\s*(\d+)\s*([EW])(?:\s*S(?:ec)?\s*(\d+))?/i);
+      if (!m) return null;
+      twp = m[1]; tDir = m[2].toUpperCase();
+      rng = m[3]; rDir = m[4].toUpperCase();
+      sec = m[5] || '';
+    }
+    const params = new URLSearchParams({
+      state: 'NM', searchType: 'Patent',
+      township: twp, township_dir: tDir, range: rng, range_dir: rDir,
+    });
+    if (sec) params.set('section', sec);
+    return `https://glorecords.blm.gov/results/default.aspx?${params.toString()}#tabIndex=1&SurveyState=NM`;
+  } catch { return null; }
+}
+
 function extractDeedData(d, docNo, searchRow) {
   const docNumbers = [{ label: 'Doc #', value: docNo, type: 'docnum' }];
   ['Document Number', 'Document No', 'Instrument Number', 'Instrument No'].forEach(k => {

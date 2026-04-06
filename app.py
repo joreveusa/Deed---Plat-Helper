@@ -3124,6 +3124,195 @@ def api_research_predict():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route("/api/session-completeness", methods=["POST"])
+def api_session_completeness():
+    """Score a research session's completeness.
+
+    Body: { job_number: str, client_name: str, job_type: str (default "BDY") }
+    Returns: { success, overall_score, deed_score, plat_score, status, missing_items }
+    """
+    try:
+        data = request.get_json() or {}
+        job_number  = data.get("job_number", "")
+        client_name = data.get("client_name", "")
+        job_type    = data.get("job_type", "BDY")
+
+        if not job_number or not client_name:
+            return jsonify({"success": False, "error": "job_number and client_name required"})
+
+        session_data = load_research(job_number, client_name, job_type)
+        result = _score_session_completeness(session_data)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ── AI Surveyor Bridge endpoints ─────────────────────────────────────────────
+
+@app.route("/api/session/status", methods=["GET"])
+def api_session_status():
+    """Return the current research session status for the AI Surveyor bridge.
+
+    Query: ?job_number=<str>&client_name=<str>&job_type=<str>
+    Returns: {
+        success, session, step, progress,
+        property_description, calls_count, closure_error,
+        subjects_summary: [{name, type, deed_saved, plat_saved}]
+    }
+    """
+    try:
+        job_number  = request.args.get("job_number", "")
+        client_name = request.args.get("client_name", "")
+        job_type    = request.args.get("job_type", "BDY")
+
+        if not job_number or not client_name:
+            return jsonify({"success": False, "error": "job_number + client_name required"})
+
+        data = load_research(job_number, client_name, job_type)
+        subjects = data.get("subjects", [])
+        client = next((s for s in subjects if s.get("type") == "client"), None)
+
+        # Determine current step based on what data exists
+        step = 1  # Job Setup
+        if client:
+            if client.get("deed_saved"):
+                step = 3  # Plat search
+            elif client.get("name"):
+                step = 2  # Deed search
+            if any(s.get("type") == "adjoiner" for s in subjects):
+                step = max(step, 4)  # Adjoiner board
+            if all(s.get("deed_saved") and s.get("plat_saved") for s in subjects if s.get("type") == "adjoiner"):
+                step = 6  # Export
+
+        # Property description summary
+        prop_desc = client.get("property_description", "") if client else ""
+        calls_count = client.get("calls_count", 0) if client else 0
+
+        total = len(subjects)
+        deeds = sum(1 for s in subjects if s.get("deed_saved"))
+        plats = sum(1 for s in subjects if s.get("plat_saved"))
+
+        return jsonify({
+            "success": True,
+            "job_number": job_number,
+            "client_name": client_name,
+            "step": step,
+            "progress": {"total": total, "deeds": deeds, "plats": plats},
+            "has_property_description": bool(prop_desc),
+            "calls_count": calls_count,
+            "desc_type": client.get("desc_type", "") if client else "",
+            "trs_refs": client.get("trs_refs", []) if client else [],
+            "subjects_summary": [
+                {
+                    "name": s.get("name", ""),
+                    "type": s.get("type", ""),
+                    "deed_saved": bool(s.get("deed_saved")),
+                    "plat_saved": bool(s.get("plat_saved")),
+                    "upc": s.get("upc", ""),
+                }
+                for s in subjects
+            ],
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/session/advance", methods=["POST"])
+def api_session_advance():
+    """Allow the AI Surveyor bridge to advance the research session.
+
+    Body: {
+        job_number: str, client_name: str, job_type: str,
+        action: str (one of: "add_adjoiner", "mark_deed", "mark_plat", "set_description"),
+        subject_name: str (for adjoiner actions),
+        upc: str (optional),
+        description: str (for set_description),
+        desc_type: str (for set_description),
+    }
+    Returns: { success, message }
+    """
+    try:
+        body = request.get_json() or {}
+        job_number  = body.get("job_number", "")
+        client_name = body.get("client_name", "")
+        job_type    = body.get("job_type", "BDY")
+        action      = body.get("action", "")
+
+        if not job_number or not client_name:
+            return jsonify({"success": False, "error": "job_number + client_name required"})
+        if not action:
+            return jsonify({"success": False, "error": "action required"})
+
+        data = load_research(job_number, client_name, job_type)
+        subjects = data.get("subjects", [])
+
+        if action == "add_adjoiner":
+            name = body.get("subject_name", "").strip()
+            upc  = body.get("upc", "").strip()
+            if not name and not upc:
+                return jsonify({"success": False, "error": "subject_name or upc required"})
+            # Check for duplicates
+            existing = any(
+                s.get("name", "").lower() == name.lower() or
+                (upc and s.get("upc", "") == upc)
+                for s in subjects if s.get("type") == "adjoiner"
+            )
+            if existing:
+                return jsonify({"success": True, "message": f"Adjoiner '{name}' already exists"})
+            subjects.append({
+                "type": "adjoiner",
+                "name": name or f"UPC {upc}",
+                "upc": upc,
+                "deed_saved": False,
+                "plat_saved": False,
+            })
+            data["subjects"] = subjects
+            save_research(job_number, client_name, data, job_type)
+            return jsonify({"success": True, "message": f"Added adjoiner '{name or upc}'"})
+
+        elif action == "mark_deed":
+            target = body.get("subject_name", "").strip()
+            for s in subjects:
+                if s.get("name", "").lower() == target.lower():
+                    s["deed_saved"] = True
+                    break
+            else:
+                return jsonify({"success": False, "error": f"Subject '{target}' not found"})
+            save_research(job_number, client_name, data, job_type)
+            return jsonify({"success": True, "message": f"Marked deed saved for '{target}'"})
+
+        elif action == "mark_plat":
+            target = body.get("subject_name", "").strip()
+            for s in subjects:
+                if s.get("name", "").lower() == target.lower():
+                    s["plat_saved"] = True
+                    break
+            else:
+                return jsonify({"success": False, "error": f"Subject '{target}' not found"})
+            save_research(job_number, client_name, data, job_type)
+            return jsonify({"success": True, "message": f"Marked plat saved for '{target}'"})
+
+        elif action == "set_description":
+            desc_text = body.get("description", "").strip()
+            desc_type = body.get("desc_type", "unknown")
+            client = next((s for s in subjects if s.get("type") == "client"), None)
+            if not client:
+                return jsonify({"success": False, "error": "No client subject in session"})
+            client["property_description"] = desc_text
+            client["desc_type"] = desc_type
+            save_research(job_number, client_name, data, job_type)
+            return jsonify({"success": True, "message": "Property description updated"})
+
+        else:
+            return jsonify({"success": False, "error": f"Unknown action: {action}"})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
 # ── legal description similarity search ───────────────────────────────────────
 
 @app.route("/api/similar-descriptions", methods=["POST"])
