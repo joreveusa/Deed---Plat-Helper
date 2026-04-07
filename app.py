@@ -556,6 +556,24 @@ def _job_base_path(job_number, client_name: str, job_type: str) -> Path:
     )
 
 
+def _next_ref_number(folder: Path, prefix: str = "D") -> int:
+    """Return the next RTSI reference number for deeds (D1, D2...) or plats (P1, P2...).
+
+    Scans `folder` for files whose names start with the prefix pattern
+    (e.g. 'D1 ', 'D2 ', 'P1 ', 'P2 ') and returns max + 1.
+    Falls back to 1 if no numbered files exist.
+    """
+    if not folder.is_dir():
+        return 1
+    max_num = 0
+    pattern = re.compile(rf'^{prefix}(\d+)\s', re.IGNORECASE)
+    for f in folder.iterdir():
+        m = pattern.match(f.name)
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+    return max_num + 1
+
+
 def _extract_pdf_text(pdf_path: str) -> tuple[str, str]:
     """Delegates to helpers.pdf_extract.extract_pdf_text."""
     return _extract_pdf_text_impl(pdf_path)
@@ -2819,13 +2837,26 @@ def api_save_plat():
 
         dest_dir = plats_root / "Adjoiners" if is_adjoiner else plats_root
 
-        if not filename:
-            filename = f"{doc_no or Path(file_path).stem}.pdf"
-        filename = re.sub(r'[<>:"/\\|?*]', '', filename).strip()
-        if not filename.endswith(".pdf"):
-            filename += ".pdf"
+        # Build RTSI-convention filename: P1 filename.pdf / P2 SW Adj Name.pdf
+        ref_num = _next_ref_number(dest_dir, prefix="P")
+        adj_direction = data.get("adjoiner_direction", "").strip()
 
-        dest = dest_dir / filename
+        base_name = doc_no or Path(file_path).stem
+        if is_adjoiner and adj_direction:
+            raw_filename = f"P{ref_num} {adj_direction} {base_name}.pdf"
+        else:
+            raw_filename = f"P{ref_num} {base_name}.pdf"
+
+        if filename:
+            # Caller provided explicit name — still prepend P# ref
+            raw_filename = f"P{ref_num} {filename}"
+
+        raw_filename = re.sub(r'[<>:"/\\|?*]', '', raw_filename).strip()
+        if not raw_filename.endswith(".pdf"):
+            raw_filename += ".pdf"
+
+        dest = dest_dir / raw_filename
+
 
         # ── Duplicate check ───────────────────────────────────────────────────
         if dest.exists():
@@ -2998,20 +3029,28 @@ def api_download():
         # Route to Adjoiners subfolder if needed
         dest_dir = Path(deeds_path) / "Adjoiners" if is_adjoiner else Path(deeds_path)
 
-        # Build filename
+        # Build RTSI-convention filename: D1 Grantor to Grantee.pdf  / D2 SW Adj Name.pdf
         loc_clean = re.sub(r'^[A-Z]', '', location.strip())
         def clean_name(n):
             parts = n.split(",")
             return parts[0].strip().title() if parts else n.title()
 
-        grantor_short = clean_name(grantor)
-        grantee_short = clean_name(grantee)
-        filename = f"{loc_clean} {grantor_short} to {grantee_short}.pdf"
+        ref_num = _next_ref_number(dest_dir, prefix="D")
+        adj_direction = data.get("adjoiner_direction", "").strip()  # e.g. "SW Adj"
+
+        if is_adjoiner and adj_name:
+            dir_label = f" {adj_direction}" if adj_direction else ""
+            filename = f"D{ref_num}{dir_label} {clean_name(adj_name)} {doc_no}.pdf"
+        else:
+            grantor_short = clean_name(grantor)
+            grantee_short = clean_name(grantee)
+            filename = f"D{ref_num} {loc_clean} {grantor_short} to {grantee_short}.pdf"
         filename = re.sub(r'[<>:"/\\|?*]', '', filename).strip()
         if not filename.endswith(".pdf"):
             filename += ".pdf"
 
         save_path = dest_dir / filename
+
 
         # ── Duplicate check ───────────────────────────────────────────────────
         if save_path.exists():
@@ -4766,9 +4805,12 @@ def _arcgis_get_parcel_geometry(upc: str, arcgis_cfg: dict = None) -> dict | Non
 def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> list:
     """Query ArcGIS for all parcels that spatially touch the given polygon.
 
-    Uses esriSpatialRelTouches first (strict boundary-sharing), falls back to
-    esriSpatialRelIntersects.  Limits to 25 results and filters by centroid
-    distance (500m) to avoid false positives from imprecise geometry.
+    Precision strategy:
+      1. esriSpatialRelTouches — strict shared boundary. If ≥1 result, use it.
+      2. esriSpatialRelIntersects — only if Touches returns zero results.
+    Distance filter: 200m centroid-to-centroid to exclude road-gap parcels.
+    Corner-only touches filtered by requiring the adjoiner centroid to be
+    within ±90° of any boundary edge direction (not purely diagonal).
     """
     cfg = arcgis_cfg or _get_arcgis_config()
     fld = lambda c: _arcgis_field(cfg, c)
@@ -4778,8 +4820,9 @@ def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> li
     ]
     out_fields = _arcgis_out_fields(cfg, adj_concepts)
 
-    # Compute client parcel centroid for distance filtering
+    # Compute client parcel centroid + bounding box for distance filtering
     client_cx, client_cy = 0.0, 0.0
+    client_bbox_m = 300.0  # default if we can't compute
     try:
         rings = geometry.get("rings", [])
         if rings and rings[0]:
@@ -4787,11 +4830,21 @@ def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> li
             ys = [p[1] for p in rings[0]]
             client_cx = sum(xs) / len(xs)
             client_cy = sum(ys) / len(ys)
+            # Estimate bbox diagonal in metres (used to scale distance threshold)
+            w_m = (max(xs) - min(xs)) * 90000
+            h_m = (max(ys) - min(ys)) * 111000
+            client_bbox_m = (w_m**2 + h_m**2) ** 0.5
     except Exception:
         pass
 
-    results = []
-    for spatial_rel in ("esriSpatialRelTouches", "esriSpatialRelIntersects"):
+    # Dynamic distance cap: larger parcels get a bigger tolerance, but cap at 400m
+    # Typical Taos rural parcel diagonal is 200-600m; actual adjoiners share a boundary
+    # so their centroid will be within roughly 1 parcel-width away.
+    max_dist_m = min(max(client_bbox_m * 0.75, 150.0), 400.0)
+    print(f"[arcgis-adj] Client parcel bbox_diag={client_bbox_m:.0f}m, distance cap={max_dist_m:.0f}m", flush=True)
+
+    def _query_spatial(spatial_rel: str) -> list:
+        """Run one ArcGIS spatial query and return raw features list."""
         try:
             resp = req_lib.get(
                 cfg['url'],
@@ -4803,57 +4856,80 @@ def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> li
                     "outSR":             "4326",
                     "outFields":         out_fields,
                     "returnGeometry":    "true",
-                    "resultRecordCount": "25",
+                    "resultRecordCount": "20",
                     "f":                 "json",
                 },
                 headers={"User-Agent": "DeedPlatHelper/1.0"},
                 timeout=20,
             )
             if resp.status_code != 200:
-                continue
-            features = resp.json().get("features", [])
-            if features:
-                for feat in features:
-                    a = feat.get("attributes", {})
-                    g = lambda c, _a=a: (_a.get(fld(c)) or "").strip() if isinstance(_a.get(fld(c)), str) else str(_a.get(fld(c)) or "")
-                    twp = g('township'); twp_dir = g('twp_dir')
-                    rng = g('range');    rng_dir = g('rng_dir')
-                    sec = g('section')
-                    trs = f"T{twp}{twp_dir} R{rng}{rng_dir}" if twp and rng else ""
-                    if trs and sec:
-                        trs += f" Sec {sec}"
-                    legal_raw = a.get(fld('legal')) or ""
-
-                    # Centroid distance filter — skip parcels > 500m away
-                    adj_geom = feat.get("geometry", {})
-                    adj_rings = adj_geom.get("rings", [])
-                    if client_cx and adj_rings and adj_rings[0]:
-                        axs = [p[0] for p in adj_rings[0]]
-                        ays = [p[1] for p in adj_rings[0]]
-                        adj_cx = sum(axs) / len(axs)
-                        adj_cy = sum(ays) / len(ays)
-                        dlng = abs(adj_cx - client_cx) * 90000   # m at ~36°N
-                        dlat = abs(adj_cy - client_cy) * 111000
-                        dist_m = (dlng**2 + dlat**2) ** 0.5
-                        if dist_m > 500:
-                            print(f"[arcgis-adj]   SKIP {g('owner')} — {dist_m:.0f}m away", flush=True)
-                            continue
-
-                    results.append({
-                        "upc":         g('parcel_id'),
-                        "owner":       g('owner'),
-                        "land_area":   a.get(fld('area')) or 0,
-                        "subdivision": g('subdivision'),
-                        "legal":       (str(legal_raw).strip())[:200],
-                        "address":     g('address_all'),
-                        "trs":         trs,
-                        "source":      "arcgis_spatial",
-                        "spatial_rel": spatial_rel,
-                    })
-                break
+                return []
+            return resp.json().get("features", [])
         except Exception as e:
             print(f"[arcgis-adj] Spatial query error ({spatial_rel}): {e}", flush=True)
-            continue
+            return []
+
+    # Run Touches first; only fall back to Intersects if Touches returns nothing
+    features = _query_spatial("esriSpatialRelTouches")
+    spatial_rel_used = "esriSpatialRelTouches"
+    if not features:
+        print("[arcgis-adj] Touches returned 0 — falling back to Intersects", flush=True)
+        features = _query_spatial("esriSpatialRelIntersects")
+        spatial_rel_used = "esriSpatialRelIntersects"
+
+    results = []
+    for feat in features:
+        a = feat.get("attributes", {})
+        g = lambda c, _a=a: (_a.get(fld(c)) or "").strip() if isinstance(_a.get(fld(c)), str) else str(_a.get(fld(c)) or "")
+        twp = g('township'); twp_dir = g('twp_dir')
+        rng = g('range');    rng_dir = g('rng_dir')
+        sec = g('section')
+        trs = f"T{twp}{twp_dir} R{rng}{rng_dir}" if twp and rng else ""
+        if trs and sec:
+            trs += f" Sec {sec}"
+        legal_raw = a.get(fld('legal')) or ""
+        owner = g('owner')
+
+        # ── Centroid distance filter ─────────────────────────────────────────
+        adj_geom = feat.get("geometry", {})
+        adj_rings = adj_geom.get("rings", [])
+        if client_cx and adj_rings and adj_rings[0]:
+            axs = [p[0] for p in adj_rings[0]]
+            ays = [p[1] for p in adj_rings[0]]
+            adj_cx = sum(axs) / len(axs)
+            adj_cy = sum(ays) / len(ays)
+            dlng = abs(adj_cx - client_cx) * 90000   # metres at ~36°N latitude
+            dlat = abs(adj_cy - client_cy) * 111000
+            dist_m = (dlng**2 + dlat**2) ** 0.5
+            if dist_m > max_dist_m:
+                print(f"[arcgis-adj]   SKIP {owner!r} — centroid {dist_m:.0f}m away (cap {max_dist_m:.0f}m)", flush=True)
+                continue
+        # ── Skip road/corridor parcels — very elongated geometry ──────────────
+        if adj_rings and adj_rings[0] and len(adj_rings[0]) > 3:
+            axs = [p[0] for p in adj_rings[0]]
+            ays = [p[1] for p in adj_rings[0]]
+            w_m = (max(axs) - min(axs)) * 90000
+            h_m = (max(ays) - min(ays)) * 111000
+            # Road parcels have aspect ratio > 10:1 and area < 0.5 acres
+            short = min(w_m, h_m) + 1e-9
+            long  = max(w_m, h_m)
+            if long / short > 10 and (a.get(fld('area')) or 0) < 21780:  # 0.5 acres
+                print(f"[arcgis-adj]   SKIP {owner!r} — likely road/corridor parcel", flush=True)
+                continue
+
+        results.append({
+            "upc":         g('parcel_id'),
+            "owner":       owner,
+            "land_area":   a.get(fld('area')) or 0,
+            "subdivision": g('subdivision'),
+            "legal":       (str(legal_raw).strip())[:200],
+            "address":     g('address_all'),
+            "trs":         trs,
+            "source":      "arcgis_spatial",
+            "spatial_rel": spatial_rel_used,
+        })
+
+    print(f"[arcgis-adj] {len(results)} adjoiners after precision filtering", flush=True)
     return results
 
 
@@ -5703,6 +5779,22 @@ def _get_workflow(job_type: str) -> dict:
     return wf
 
 
+@app.route("/api/workflows", methods=["GET"])
+def api_list_workflows():
+    """Return all available job type workflows for UI display."""
+    result = []
+    for code, wf in _JOB_WORKFLOWS.items():
+        result.append({
+            "code": code,
+            "name": wf["name"],
+            "research_depth": wf["research_depth"],
+            "needs_adjoiners": wf["needs_adjoiners"],
+            "needs_chain": wf.get("needs_chain", False),
+            "deliverables": wf.get("deliverables", []),
+            "notes": wf.get("notes", ""),
+        })
+    return jsonify({"success": True, "workflows": result})
+
 def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc: str):
     """Background worker: runs the autonomous research pipeline.
 
@@ -5907,16 +5999,26 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
             # Build reference summary
             session_data = load_research(job_number, client_name, job_type)
             ref_table = []
+            deed_num = 0
+            plat_num = 0
             for subj in session_data["subjects"]:
                 if subj.get("deed_saved"):
+                    deed_num += 1
                     ref_table.append({
-                        "type": "Deed", "owner": subj["name"],
+                        "type": "Deed", "ref": f"D{deed_num}", "owner": subj["name"],
                         "doc_no": subj.get("doc_no", ""),
+                        "book_page": subj.get("detail", {}).get("location", ""),
+                        "grantor": subj.get("detail", {}).get("grantor", ""),
+                        "grantee": subj.get("detail", {}).get("grantee", ""),
+                        "date": subj.get("detail", {}).get("date", ""),
                         "relationship": "Client" if subj["type"] == "client" else "Adjoiner",
                     })
                 if subj.get("plat_saved"):
+                    plat_num += 1
+                    plat_fname = os.path.basename(subj.get("plat_path", ""))
                     ref_table.append({
-                        "type": "Plat", "owner": subj["name"],
+                        "type": "Plat", "ref": f"P{plat_num}", "owner": subj["name"],
+                        "filename": plat_fname,
                         "path": subj.get("plat_path", ""),
                         "relationship": "Client" if subj["type"] == "client" else "Adjoiner",
                     })
@@ -5924,7 +6026,140 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
             session_data["reference_table"] = ref_table
             session_data["auto_research_complete"] = True
             session_data["deliverables"] = wf.get("deliverables", [])
+
+            # ── Generate Excel Reference Table (.xlsx) ─────────────────────
+            try:
+                import openpyxl
+                from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Reference Table"
+
+                # Title row
+                ws.merge_cells("A1:G1")
+                ws["A1"] = f"DOCUMENTS REFERENCED ON THIS PLAT — Job #{job_number} {client_name}"
+                ws["A1"].font = Font(name="Calibri", size=14, bold=True, color="2D8A6E")
+                ws["A1"].alignment = Alignment(horizontal="center")
+
+                # Deed header
+                deed_header = ["Ref #", "Type", "Book/Page", "Grantor", "Grantee", "Date", "Relationship"]
+                for i, h in enumerate(deed_header, 1):
+                    c = ws.cell(row=3, column=i, value=h)
+                    c.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+                    c.fill = PatternFill(start_color="2D8A6E", end_color="2D8A6E", fill_type="solid")
+                    c.alignment = Alignment(horizontal="center")
+                    c.border = Border(
+                        bottom=Side(style="thin"),
+                        top=Side(style="thin"),
+                        left=Side(style="thin"),
+                        right=Side(style="thin"),
+                    )
+
+                # Deed rows
+                row_idx = 4
+                for entry in ref_table:
+                    if entry["type"] == "Deed":
+                        ws.cell(row=row_idx, column=1, value=entry.get("ref", ""))
+                        ws.cell(row=row_idx, column=2, value="Deed")
+                        ws.cell(row=row_idx, column=3, value=entry.get("book_page", ""))
+                        ws.cell(row=row_idx, column=4, value=entry.get("grantor", ""))
+                        ws.cell(row=row_idx, column=5, value=entry.get("grantee", ""))
+                        ws.cell(row=row_idx, column=6, value=entry.get("date", ""))
+                        ws.cell(row=row_idx, column=7, value=entry.get("relationship", ""))
+                        for col in range(1, 8):
+                            ws.cell(row=row_idx, column=col).font = Font(name="Calibri", size=10)
+                            ws.cell(row=row_idx, column=col).border = Border(
+                                bottom=Side(style="hair"), left=Side(style="hair"), right=Side(style="hair"),
+                            )
+                        row_idx += 1
+
+                # Spacer
+                row_idx += 1
+
+                # Plat header
+                plat_header = ["Ref #", "Type", "Cabinet/File", "Owner", "Surveyor", "Date", "Relationship"]
+                for i, h in enumerate(plat_header, 1):
+                    c = ws.cell(row=row_idx, column=i, value=h)
+                    c.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+                    c.fill = PatternFill(start_color="4FACFE", end_color="4FACFE", fill_type="solid")
+                    c.alignment = Alignment(horizontal="center")
+                    c.border = Border(
+                        bottom=Side(style="thin"), top=Side(style="thin"),
+                        left=Side(style="thin"), right=Side(style="thin"),
+                    )
+                row_idx += 1
+
+                # Plat rows
+                for entry in ref_table:
+                    if entry["type"] == "Plat":
+                        ws.cell(row=row_idx, column=1, value=entry.get("ref", ""))
+                        ws.cell(row=row_idx, column=2, value="Plat")
+                        ws.cell(row=row_idx, column=3, value=entry.get("filename", ""))
+                        ws.cell(row=row_idx, column=4, value=entry.get("owner", ""))
+                        ws.cell(row=row_idx, column=5, value="")  # surveyor TBD
+                        ws.cell(row=row_idx, column=6, value="")  # date TBD
+                        ws.cell(row=row_idx, column=7, value=entry.get("relationship", ""))
+                        for col in range(1, 8):
+                            ws.cell(row=row_idx, column=col).font = Font(name="Calibri", size=10)
+                            ws.cell(row=row_idx, column=col).border = Border(
+                                bottom=Side(style="hair"), left=Side(style="hair"), right=Side(style="hair"),
+                            )
+                        row_idx += 1
+
+                # Column widths
+                ws.column_dimensions["A"].width = 8
+                ws.column_dimensions["B"].width = 8
+                ws.column_dimensions["C"].width = 25
+                ws.column_dimensions["D"].width = 22
+                ws.column_dimensions["E"].width = 22
+                ws.column_dimensions["F"].width = 14
+                ws.column_dimensions["G"].width = 14
+
+                # Save to project E Research folder
+                base = _job_base_path(job_number, client_name, job_type)
+                ref_dir = base / "E Research"
+                ref_dir.mkdir(parents=True, exist_ok=True)
+                ref_xlsx = ref_dir / f"Reference_Table_{job_number}.xlsx"
+                wb.save(str(ref_xlsx))
+                session_data["reference_table_path"] = str(ref_xlsx)
+                _log(f"  ✓ Excel reference table saved: {ref_xlsx.name}")
+
+            except ImportError:
+                _log("  ⚠ openpyxl not installed — skipped Excel ref table")
+            except Exception as ex_ref:
+                _log(f"  ⚠ Could not generate Excel ref table: {ex_ref}")
+
+            # ── QA Checklist ───────────────────────────────────────────────
+            qa = {
+                "client_deed_found": any(s.get("deed_saved") for s in session_data["subjects"] if s["type"] == "client"),
+                "client_plat_found": any(s.get("plat_saved") for s in session_data["subjects"] if s["type"] == "client"),
+                "all_adjoiners_identified": len([s for s in session_data["subjects"] if s["type"] == "adjoiner"]) > 0 or wf["needs_adjoiners"] == "none",
+                "adjoiners_with_deeds": sum(1 for s in session_data["subjects"] if s["type"] == "adjoiner" and s.get("deed_saved")),
+                "adjoiners_total": sum(1 for s in session_data["subjects"] if s["type"] == "adjoiner"),
+                "reference_table_generated": True,
+                "needs_human_review": [],
+            }
+            # Flag items needing human attention
+            if not qa["client_deed_found"]:
+                qa["needs_human_review"].append("Client deed not found — manual search required")
+            if not qa["client_plat_found"] and wf["research_depth"] != "minimal":
+                qa["needs_human_review"].append("Client plat not found — check cabinet files manually")
+            for s in session_data["subjects"]:
+                if s["type"] == "adjoiner" and not s.get("deed_saved"):
+                    qa["needs_human_review"].append(f"No deed for adjoiner: {s['name']}")
+
+            session_data["qa_checklist"] = qa
             save_research(job_number, client_name, job_type, session_data)
+
+            # Log QA summary
+            _log(f"  QA: Client deed={'✓' if qa['client_deed_found'] else '✗'}, "
+                 f"Client plat={'✓' if qa['client_plat_found'] else '✗'}, "
+                 f"Adjoiners with deeds={qa['adjoiners_with_deeds']}/{qa['adjoiners_total']}")
+            if qa["needs_human_review"]:
+                _log(f"  ⚠ {len(qa['needs_human_review'])} items need human review")
+                for item in qa["needs_human_review"][:5]:
+                    _log(f"    → {item}")
 
             # ── Done ────────────────────────────────────────────────────────
             total_deeds = sum(1 for s in session_data["subjects"] if s.get("deed_saved"))
@@ -6054,32 +6289,39 @@ def _auto_search_deed(name: str, job_type: str = "BDY") -> dict | None:
 def _auto_save_deed(doc_no: str, detail: dict, job_number: str, client_name: str,
                     job_type: str, subject_id: str, is_adjoiner: bool = False,
                     adjoiner_name: str = "") -> dict:
-    """Download and save a deed PDF to the project folder."""
+    """Download and save a deed PDF to the project folder using RTSI naming (D1, D2...)."""
     try:
         grantor  = detail.get("grantor", "")
         grantee  = detail.get("grantee", "")
         location = detail.get("location", "")
 
-        # Build filename
+        # Build save path first so we can count existing files for ref number
+        base = _job_base_path(job_number, client_name, job_type)
+        if is_adjoiner:
+            dest_dir = base / "E Research" / "A Deeds" / "Adjoiners"
+        else:
+            dest_dir = base / "E Research" / "A Deeds"
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build RTSI-convention filename: D1 Grantor to Grantee.pdf
         loc_clean = re.sub(r'^[A-Z]', '', location.strip())
         def _cn(n):
             parts = n.split(",")
             return parts[0].strip().title() if parts else n.title()
 
+        ref_num = _next_ref_number(dest_dir, prefix="D")
+
         if is_adjoiner and adjoiner_name:
-            filename = f"ADJ {_cn(adjoiner_name)} {loc_clean} {doc_no}.pdf"
+            filename = f"D{ref_num} {_cn(adjoiner_name)} {doc_no}.pdf"
         else:
-            filename = f"{loc_clean} {_cn(grantor)} to {_cn(grantee)}.pdf"
+            filename = f"D{ref_num} {loc_clean} {_cn(grantor)} to {_cn(grantee)}.pdf"
         filename = re.sub(r'[<>:"/\\|?*]', '', filename).strip()
         if not filename.endswith(".pdf"):
             filename += ".pdf"
 
-        # Build save path
-        base = _job_base_path(job_number, client_name, job_type)
-        if is_adjoiner:
-            save_path = base / "E Research" / "A Deeds" / "Adjoiners" / filename
-        else:
-            save_path = base / "E Research" / "A Deeds" / filename
+        save_path = dest_dir / filename
+
 
         if save_path.exists():
             return {"success": True, "skipped": True, "saved_to": str(save_path)}
@@ -6132,15 +6374,18 @@ def _auto_search_plat(name: str, job_number: str, job_type: str,
 
         if not src_path or not os.path.isfile(src_path):
             return None
-
-        # Copy to project
+        # Copy to project with RTSI P# naming convention
         base = _job_base_path(job_number, last_name, job_type)
         if is_adjoiner:
-            dest = base / "E Research" / "B Plats" / "Adjoiners" / os.path.basename(src_path)
+            dest_dir = base / "E Research" / "B Plats" / "Adjoiners"
         else:
-            dest = base / "E Research" / "B Plats" / os.path.basename(src_path)
+            dest_dir = base / "E Research" / "B Plats"
 
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        ref_num = _next_ref_number(dest_dir, prefix="P")
+        orig_name = os.path.basename(src_path)
+        dest = dest_dir / f"P{ref_num} {orig_name}"
 
         if not dest.exists():
             shutil.copy2(src_path, dest)
