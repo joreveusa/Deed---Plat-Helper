@@ -2218,16 +2218,19 @@ function renderBoundaryPlot(desc) {
   const container = document.getElementById('boundaryPlotCanvas');
   if (!container || !desc.coords || desc.coords.length < 2) return;
 
-  const coords = desc.coords;
-  const calls = desc.calls || [];
+  const coords    = desc.coords;
+  const tieCoords = desc.tie_coords || [];   // path from distant monument to POB
+  const calls     = desc.calls || [];
+  const hasTie    = tieCoords.length > 1;
   const segColors = [
     '#4fc3f7','#81c784','#ffb74d','#e57373','#ba68c8','#4dd0e1',
     '#aed581','#ff8a65','#f06292','#7986cb','#a1887f','#90a4ae'
   ];
 
-  // ── Compute bounding box ──────────────────────────────────────────────
+  // ── Compute bounding box (include tie path so everything fits) ────────
+  const allPts = [...coords, ...tieCoords];
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const [x, y] of coords) {
+  for (const [x, y] of allPts) {
     if (x < minX) minX = x;
     if (x > maxX) maxX = x;
     if (y < minY) minY = y;
@@ -2276,6 +2279,26 @@ function renderBoundaryPlot(desc) {
       svg += `<text x="${padding - 4}" y="${sy + 3}" fill="rgba(255,255,255,0.15)" font-size="8" text-anchor="end">${Math.round(gy)}'</text>`;
     }
     svg += `</g>`;
+  }
+
+
+  // Tie path (dashed): distant monument to POB
+  if (hasTie && tieCoords.length >= 2) {
+    for (let i = 0; i < tieCoords.length - 1; i++) {
+      const [x1, y1] = tieCoords[i];
+      const [x2, y2] = tieCoords[i + 1];
+      svg += '<line class="plot-tie" x1="' + tx(x1) + '" y1="' + ty(y1) + '" x2="' + tx(x2) + '" y2="' + ty(y2) + '" stroke="rgba(255,255,255,0.25)" stroke-width="1.5" stroke-dasharray="8 4" marker-end="url(#plotArrow)"><title>Tie (not boundary)</title></line>';
+      const tmx=(tx(x1)+tx(x2))/2, tmy=(ty(y1)+ty(y2))/2;
+      const tpx=Math.hypot(tx(x2)-tx(x1),ty(y2)-ty(y1));
+      if (tpx>40) {
+        const ang=Math.atan2(ty(y2)-ty(y1),tx(x2)-tx(x1))*(180/Math.PI);
+        const rot=(ang>90||ang<-90)?ang+180:ang;
+        svg+='<text x="'+tmx+'" y="'+(tmy-6)+'" fill="rgba(255,255,255,0.3)" font-size="7" text-anchor="middle" font-style="italic" transform="rotate('+rot.toFixed(1)+','+tmx+','+(tmy-6)+')">tie</text>';
+      }
+    }
+    const [moX,moY]=tieCoords[0];
+    svg+='<circle cx="'+tx(moX)+'" cy="'+ty(moY)+'" r="4" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"><title>COMMENCING point</title></circle>';
+    svg+='<text x="'+(tx(moX)+7)+'" y="'+(ty(moY)-6)+'" fill="rgba(255,255,255,0.35)" font-size="8" font-style="italic">Monument</text>';
   }
 
   // ── Boundary segments ─────────────────────────────────────────────────
@@ -11089,3 +11112,202 @@ async function showAnalyticsInNova() {
     _appendChatMsg('ai', `❌ Analytics error: ${e.message}`);
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 4: AUTONOMOUS PIPELINE DASHBOARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _pipelinePollTimer = null;
+let _pipelineActiveId = null;
+
+/**
+ * Refresh the pipeline panel on the Step 1 dashboard.
+ * Loads inquiry list and checks for any active (in-progress) research.
+ */
+async function refreshPipelinePanel() {
+  const listEl = document.getElementById('pipelineList');
+  if (!listEl) return;
+
+  try {
+    const res = await fetch(API + '/api/inquiry/list', { credentials: 'include' });
+    const data = await res.json();
+    if (!data.success) { listEl.innerHTML = '<div style="font-size:11px;color:var(--text3);text-align:center;padding:12px">No inquiries yet</div>'; return; }
+
+    const inquiries = data.inquiries || [];
+    if (inquiries.length === 0) {
+      listEl.innerHTML = '<div style="font-size:11px;color:var(--text3);text-align:center;padding:12px">No inquiries yet &mdash; use the website form or click ▶ Auto-Research</div>';
+      return;
+    }
+
+    // Check for active research
+    const active = inquiries.find(i => i.status === 'researching' || i.status === 'starting');
+    if (active) {
+      _pipelineActiveId = active.id;
+      _startPipelinePolling();
+    }
+
+    const statusBadge = (s) => {
+      const map = {
+        pending:     { bg: 'rgba(255,255,255,.06)', fg: 'var(--text3)', label: 'Pending' },
+        starting:    { bg: 'rgba(79,172,254,.12)', fg: '#4facfe', label: 'Starting' },
+        researching: { bg: 'rgba(45,138,110,.12)', fg: 'var(--accent2)', label: 'Running' },
+        complete:    { bg: 'rgba(86,211,160,.12)', fg: '#56d3a0', label: 'Complete' },
+        error:       { bg: 'rgba(218,54,51,.12)', fg: '#da3633', label: 'Error' },
+      };
+      const c = map[s] || map.pending;
+      return `<span style="padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;background:${c.bg};color:${c.fg}">${c.label}</span>`;
+    };
+
+    listEl.innerHTML = inquiries.slice(0, 10).map(inq => `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer"
+           onclick="_viewInquiry('${inq.id}')">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(inq.client_name)}</div>
+          <div style="font-size:10px;color:var(--text3)">${inq.job_type} &middot; ${inq.id} &middot; ${inq.created_at ? inq.created_at.slice(0, 10) : ''}</div>
+        </div>
+        ${statusBadge(inq.status)}
+      </div>
+    `).join('');
+
+  } catch (e) {
+    listEl.innerHTML = '<div style="font-size:11px;color:var(--text3);text-align:center;padding:12px">Could not load inquiries</div>';
+  }
+}
+
+/**
+ * View inquiry details — poll status.
+ */
+async function _viewInquiry(inquiryId) {
+  _pipelineActiveId = inquiryId;
+  await _updatePipelineActivePanel();
+  document.getElementById('pipelineActive')?.classList.remove('hidden');
+}
+
+/**
+ * Trigger auto-research for the current session.
+ */
+async function triggerAutoResearch() {
+  const clientName = document.getElementById('setupClient')?.value?.trim()
+    || state.researchSession?.client_name;
+  const jobType = document.getElementById('setupJobType')?.value
+    || state.researchSession?.job_type || 'BDY';
+  const upc = state.selectedParcel?.upc || state.researchSession?.client_upc || '';
+
+  if (!clientName) {
+    showToast('Enter a client name first', 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('btnAutoResearch');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Starting...'; }
+
+  try {
+    const res = await fetch(API + '/api/auto-research', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_name: clientName, job_type: jobType, upc }),
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      _pipelineActiveId = data.inquiry_id;
+      showToast(`Auto-research started: ${data.inquiry_id}`, 'success');
+      document.getElementById('pipelineActive')?.classList.remove('hidden');
+      _startPipelinePolling();
+    } else {
+      showToast('Auto-research failed: ' + (data.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    showToast('Network error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Auto-Research'; }
+  }
+}
+
+function _startPipelinePolling() {
+  if (_pipelinePollTimer) clearInterval(_pipelinePollTimer);
+  _updatePipelineActivePanel();
+  _pipelinePollTimer = setInterval(_updatePipelineActivePanel, 3000);
+}
+
+const _PIPE_STEP_LABELS = ['Setup', 'Deed', 'Plat', 'Adjoiners', 'Research', 'Package'];
+
+async function _updatePipelineActivePanel() {
+  if (!_pipelineActiveId) return;
+  try {
+    const res = await fetch(API + '/api/inquiry/status/' + _pipelineActiveId, { credentials: 'include' });
+    const d = await res.json();
+    if (!d.success) return;
+
+    // Show active panel
+    const panel = document.getElementById('pipelineActive');
+    if (panel) panel.classList.remove('hidden');
+
+    // Client name
+    const nameEl = document.getElementById('pipelineActiveClient');
+    if (nameEl) nameEl.textContent = d.client_name + ' — ' + d.job_type;
+
+    // Badge
+    const badgeEl = document.getElementById('pipelineActiveBadge');
+    if (badgeEl) {
+      const colors = {
+        pending: { bg: 'rgba(255,255,255,.06)', fg: 'var(--text3)', t: '⏳ Pending' },
+        starting: { bg: 'rgba(79,172,254,.12)', fg: '#4facfe', t: '🚀 Starting' },
+        researching: { bg: 'rgba(45,138,110,.12)', fg: 'var(--accent2)', t: '🤖 Running' },
+        complete: { bg: 'rgba(86,211,160,.12)', fg: '#56d3a0', t: '✅ Done' },
+        error: { bg: 'rgba(218,54,51,.12)', fg: '#da3633', t: '❌ Error' },
+      };
+      const c = colors[d.status] || colors.pending;
+      badgeEl.style.background = c.bg;
+      badgeEl.style.color = c.fg;
+      badgeEl.textContent = c.t;
+    }
+
+    // Step bar
+    const barEl = document.getElementById('pipelineStepBar');
+    if (barEl) {
+      barEl.innerHTML = _PIPE_STEP_LABELS.map((label, i) => {
+        const n = i + 1;
+        const done = d.step > n;
+        const active = d.step === n;
+        const bg = done ? 'var(--accent)' : active ? 'rgba(79,172,254,.6)' : 'rgba(255,255,255,.06)';
+        return `<div style="flex:1;text-align:center">
+          <div style="height:3px;border-radius:2px;background:${bg};margin-bottom:4px;transition:background .3s"></div>
+          <div style="font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:${done ? 'var(--accent2)' : active ? '#4facfe' : 'var(--text3)'}">${done ? '✓' : ''} ${label}</div>
+        </div>`;
+      }).join('');
+    }
+
+    // Stats
+    const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    setTxt('pipelineStep', d.step || 0);
+    setTxt('pipelineSubjects', d.subjects_count || 0);
+    setTxt('pipelineDeeds', d.deeds_saved || 0);
+    setTxt('pipelinePlats', d.plats_saved || 0);
+
+    // Last log
+    const logEl = document.getElementById('pipelineLastLog');
+    if (logEl && d.log?.length) {
+      logEl.textContent = d.log[d.log.length - 1];
+    }
+
+    // Stop polling when done
+    if (d.status === 'complete' || d.status === 'error') {
+      clearInterval(_pipelinePollTimer);
+      _pipelinePollTimer = null;
+      refreshPipelinePanel(); // refresh the list
+
+      if (d.status === 'complete' && d.job_number) {
+        showToast(`✅ Auto-research complete! Job #${d.job_number}`, 'success');
+      }
+    }
+  } catch (_) {}
+}
+
+// Auto-load pipeline on Step 1 init
+(function _initPipeline() {
+  // Delay to run after DOM is ready
+  setTimeout(() => { refreshPipelinePanel(); }, 2000);
+})();
+

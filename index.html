@@ -245,6 +245,52 @@
           </div>
         </div>
 
+        <!-- AUTONOMOUS PIPELINE PANEL -->
+        <div class="glass-card" id="pipelineCard" style="margin-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h3 class="card-title" style="margin:0">🤖 Auto-Research Pipeline</h3>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-outline btn-sm" onclick="triggerAutoResearch()"
+                id="btnAutoResearch"
+                title="Start autonomous research for the current session"
+                style="font-size:10px;padding:3px 10px;border-color:rgba(45,138,110,.3);color:var(--accent2)">
+                ▶ Auto-Research
+              </button>
+              <button class="btn btn-outline btn-sm" onclick="refreshPipelinePanel()"
+                style="font-size:10px;padding:3px 10px">⟳</button>
+            </div>
+          </div>
+
+          <!-- Active Research Status (hidden until something is running) -->
+          <div id="pipelineActive" class="hidden" style="margin-bottom:12px">
+            <div style="background:linear-gradient(135deg,rgba(45,138,110,.06),rgba(79,172,254,.04));
+                        border:1px solid rgba(45,138,110,.2);border-radius:10px;padding:14px 16px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--accent2)">
+                  📡 Live Research — <span id="pipelineActiveClient"></span>
+                </div>
+                <div id="pipelineActiveBadge" style="padding:3px 10px;border-radius:12px;font-size:10px;font-weight:700"></div>
+              </div>
+              <!-- Progress bar -->
+              <div id="pipelineStepBar" style="display:flex;gap:3px;margin-bottom:10px"></div>
+              <!-- Mini stats -->
+              <div style="display:flex;gap:16px;font-size:11px;color:var(--text2)">
+                <span>Step <strong id="pipelineStep">0</strong>/6</span>
+                <span>Subjects: <strong id="pipelineSubjects">0</strong></span>
+                <span>Deeds: <strong id="pipelineDeeds">0</strong></span>
+                <span>Plats: <strong id="pipelinePlats">0</strong></span>
+              </div>
+              <!-- Last log line -->
+              <div id="pipelineLastLog" style="margin-top:8px;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+            </div>
+          </div>
+
+          <!-- Inquiry List -->
+          <div id="pipelineList" style="max-height:200px;overflow-y:auto">
+            <div style="font-size:11px;color:var(--text3);text-align:center;padding:12px">Loading inquiries...</div>
+          </div>
+        </div>
+
         <div class="glass-card recent-jobs-card">
           <h3 class="card-title">🕒 Recent &amp; Pinned Jobs</h3>
           <div id="setupRecentJobs" class="recent-jobs-list">
@@ -1514,6 +1560,7 @@
       <button class="ai-quick-btn" onclick="aiQuickAction('predict')">📊 Predict Job</button>
       <button class="ai-quick-btn" onclick="aiQuickAction('graph')">🕸️ Graph Stats</button>
       <button class="ai-quick-btn" onclick="aiQuickAction('anomaly')">⚠️ QA Check</button>
+      <button class="ai-quick-btn" onclick="showAnalyticsInNova()">📈 Analytics</button>
     </div>
 
     <div class="ai-chat-messages" id="aiChatMessages">
