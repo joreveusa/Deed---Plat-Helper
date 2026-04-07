@@ -53,6 +53,7 @@
         <div class="status-dot offline"></div>
         <span id="statusText">Offline</span>
       </div>
+      <button class="btn btn-outline btn-sm" onclick="showDataQualityPanel()" title="Data Quality Dashboard" style="border-color:rgba(121,168,224,.3);color:#79a8e0">📊 Data Quality</button>
       <button class="btn btn-outline btn-sm" onclick="showSettingsModal()">⚙️ Settings</button>
     </div>
   </header>
@@ -89,7 +90,30 @@
       </button>
     </nav>
 
-    <div class="step-content-area">
+    <!-- PROPERTY CONTEXT PANEL — persistent color-coded mini-map + subject list (steps 2–6) -->
+    <div class="property-context-panel" id="propertyContextPanel">
+      <div class="pcp-minimap-wrap" id="pcpMinimapWrap">
+        <canvas id="pcpMiniCanvas" width="400" height="280"></canvas>
+        <div class="pcp-minimap-label">Property Map</div>
+      </div>
+      <div class="pcp-divider"></div>
+      <div class="pcp-subjects" id="pcpSubjects">
+        <div class="pcp-subjects-header">
+          <span class="pcp-subjects-title">Subjects</span>
+          <span class="pcp-subject-count" id="pcpSubjectCount">0</span>
+        </div>
+        <!-- Populated by JS -->
+      </div>
+      <button class="pcp-toggle" onclick="togglePropertyContextPanel()" title="Collapse property panel" style="position:relative;transform:none;top:auto;right:auto;margin-left:auto;align-self:flex-start;border:1px solid var(--border);border-radius:6px">
+        <span class="pcp-chevron">▲</span>
+      </button>
+    </div>
+
+    <div class="step-content-area" style="position:relative">
+      <!-- Toggle tab to re-open the context panel when collapsed -->
+      <button class="pcp-toggle hidden" id="pcpReopenTab" onclick="togglePropertyContextPanel()" title="Show property panel" style="position:absolute;top:0;right:24px;z-index:11;border-radius:0 0 6px 6px;border:1px solid var(--border);border-top:none">
+        🗺️ <span class="pcp-chevron">▼</span>
+      </button>
 
       <!-- STEP 1: JOB SETUP -->
       <section class="step-panel active" id="step1Panel">
@@ -144,8 +168,17 @@
 
           <div class="form-group">
             <label for="setupClient">Client Name <span class="hint">(e.g. Garza, Veronica)</span></label>
-            <input type="text" id="setupClient" class="inp" placeholder="Last, First"
-              oninput="onClientNameTyped()">
+            <div style="position:relative">
+              <input type="text" id="setupClient" class="inp" placeholder="Last, First"
+                oninput="onClientNameTyped()"
+                onblur="setTimeout(()=>{ const d=document.getElementById('kgClientDropdown'); if(d) d.classList.add('hidden'); }, 200)"
+                autocomplete="off">
+              <div id="kgClientDropdown" class="hidden"
+                style="position:absolute;top:100%;left:0;right:0;z-index:200;margin-top:2px;
+                  background:var(--surface);border:1px solid rgba(121,168,224,.3);border-radius:8px;
+                  box-shadow:0 8px 24px rgba(0,0,0,.4);max-height:180px;overflow-y:auto">
+              </div>
+            </div>
           </div>
 
           <div class="setup-actions">
@@ -157,7 +190,16 @@
         <div class="glass-card ai-insights-card" id="aiInsightsCard">
           <div class="row-layout justify-between mb-2" style="align-items:center">
             <h3 class="card-title" style="margin:0">🧠 AI Insights</h3>
-            <button class="btn btn-outline btn-sm" onclick="refreshAiInsights()" title="Refresh AI analytics" style="font-size:10px;padding:3px 10px">⟳ Refresh</button>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-outline btn-sm" onclick="kgPopulateFromArchive()" id="btnKgPopulate"
+                title="Rebuild knowledge graph from archive training data"
+                style="font-size:10px;padding:3px 10px;border-color:rgba(121,168,224,.3);color:#79a8e0">
+                🕸️ Update KG
+              </button>
+              <button class="btn btn-outline btn-sm" onclick="refreshAiInsights(true)"
+                title="Refresh AI analytics — runs full conflict scan"
+                style="font-size:10px;padding:3px 10px">⟳ Refresh</button>
+            </div>
           </div>
 
           <!-- Index Health Row -->
@@ -280,10 +322,10 @@
               <div class="table-wrap">
                 <table class="data-table" id="s2ResultsTable">
                   <thead>
-                    <tr><th>Doc #</th><th>Grantor</th><th>Type</th><th>Book/Page</th><th>Year</th><th style="width:80px">Relevance</th></tr>
+                    <tr><th>Doc #</th><th>Grantor</th><th>Grantee</th><th>Type</th><th>Book/Page</th><th>Year</th><th style="width:80px">Relevance</th></tr>
                   </thead>
                   <tbody id="s2ResultsBody">
-                    <tr><td colspan="6" class="empty-cell">Enter a search above or start session.</td></tr>
+                    <tr><td colspan="7" class="empty-cell">Enter a search above or start session.</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -399,6 +441,21 @@
              <button class="btn btn-outline" onclick="manualAddAdjoiner()">+ Add</button>
           </div>
         </div>
+
+        <!-- KG Historical Suggestions -->
+        <div class="glass-card mt-3 hidden" id="s4KgSuggestions">
+          <div class="row-layout justify-between mb-2">
+            <div>
+              <h3 class="card-title text-sm" style="color:#79a8e0">🧠 AI: Past Adjoiners from History</h3>
+              <p class="card-desc" style="font-size:10px">Found in the knowledge graph from previous jobs involving this client.</p>
+            </div>
+            <button class="btn btn-outline btn-sm" onclick="kgAddAllSuggestions()" id="btnKgAddAll"
+              style="border-color:rgba(121,168,224,.3);color:#79a8e0;font-size:11px">
+              ✚ Add All
+            </button>
+          </div>
+          <div id="s4KgGrid" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
       </section>
 
       <!-- STEP 5: ADJOINER RESEARCH -->
@@ -432,6 +489,7 @@
               <div class="tabs-nav" id="s6Tabs">
                 <button class="tab-btn active" onclick="switchS6Tab('calls')">Client Calls</button>
                 <button class="tab-btn" onclick="switchS6Tab('parcels')">Adjoiner Parcels</button>
+                <button class="tab-btn" onclick="switchS6Tab('references')">📑 References</button>
                 <button class="tab-btn" onclick="switchS6Tab('options')">DXF Options</button>
               </div>
 
@@ -484,6 +542,40 @@
                 <div class="form-group mt-2">
                   <label>Closure Tolerance (ft) <span class="hint">- for warning text</span></label>
                   <input type="number" id="optCloseTol" class="inp" value="0.5" step="0.1">
+                </div>
+              </div>
+
+              <!-- References Tab: auto-generated reference table for plat -->
+              <div class="tab-content hidden flex-col p-3" id="s6TabReferences" style="gap:12px">
+                <div class="row-layout gap-2" style="justify-content:space-between">
+                  <div>
+                    <div class="card-title" style="font-size:14px;margin:0">📑 Plat Reference Table</div>
+                    <div style="font-size:10px;color:var(--text3)">Auto-generated from research session — all deeds & plats referenced on this survey</div>
+                  </div>
+                  <div class="row-layout gap-2">
+                    <button class="btn btn-outline btn-sm" onclick="copyRefTableToClipboard()" title="Copy table to clipboard for CAD">📋 Copy</button>
+                    <button class="btn btn-outline btn-sm" onclick="printRefTable()" title="Print reference table">🖨️ Print</button>
+                    <button class="btn btn-primary btn-sm" onclick="refreshRefTable()">🔄 Refresh</button>
+                  </div>
+                </div>
+                <div class="table-wrap flex-1" id="s6RefTableWrap" style="overflow:auto">
+                  <table class="data-table" id="s6RefTable" style="font-size:12px">
+                    <thead>
+                      <tr>
+                        <th width="30">#</th>
+                        <th>Type</th>
+                        <th>Owner / Subject</th>
+                        <th>Document #</th>
+                        <th>Book / Page</th>
+                        <th>Cabinet Ref</th>
+                        <th>Date</th>
+                        <th>Relationship</th>
+                      </tr>
+                    </thead>
+                    <tbody id="s6RefTbody">
+                      <tr><td colspan="8" class="empty-cell">Click "Refresh" to generate the reference table.</td></tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
@@ -1391,6 +1483,74 @@
           </div>
 
         </div><!-- /acctDetailContent -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── AI CHAT BUBBLE & PANEL ──────────────────────────────────────────── -->
+  <div id="aiChatBubble" class="ai-chat-bubble" onclick="toggleAiChat()" title="AI Assistant">
+    <span class="ai-bubble-icon">🧠</span>
+    <span class="ai-bubble-pulse"></span>
+    <span class="ai-bubble-badge hidden" id="aiBubbleBadge">!</span>
+  </div>
+
+  <div id="aiChatPanel" class="ai-chat-panel hidden">
+    <div class="ai-chat-header">
+      <div class="ai-chat-header-info">
+        <span class="ai-chat-avatar">🧠</span>
+        <div>
+          <div class="ai-chat-title">Nova AI</div>
+          <div class="ai-chat-subtitle" id="aiChatSubtitle">Surveying Assistant</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="ai-chat-action-btn" onclick="clearAiChat()" title="Clear chat">🗑️</button>
+        <button class="ai-chat-close" onclick="toggleAiChat()" aria-label="Close AI chat">✕</button>
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="ai-chat-quick-actions" id="aiQuickActions">
+      <button class="ai-quick-btn" onclick="aiQuickAction('predict')">📊 Predict Job</button>
+      <button class="ai-quick-btn" onclick="aiQuickAction('graph')">🕸️ Graph Stats</button>
+      <button class="ai-quick-btn" onclick="aiQuickAction('anomaly')">⚠️ QA Check</button>
+    </div>
+
+    <div class="ai-chat-messages" id="aiChatMessages">
+      <div class="ai-message ai-message-ai">
+        <div class="ai-msg-content">
+          👋 I'm Nova, your AI surveying assistant. Ask me about legal descriptions, adjoiners, predictions, or anything survey-related.
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-typing-indicator hidden" id="aiTyping">
+      <span></span><span></span><span></span>
+    </div>
+
+    <div class="ai-chat-input-area">
+      <input type="text" id="aiChatInput" class="ai-chat-input" 
+        placeholder="Ask Nova anything..."
+        onkeydown="if(event.key==='Enter')sendAiMessage()">
+      <button class="ai-chat-send" onclick="sendAiMessage()" title="Send">➤</button>
+    </div>
+  </div>
+
+  <!-- DATA QUALITY DASHBOARD MODAL -->
+  <div class="modal-overlay hidden" id="dqOverlay" onclick="if(event.target===this) closeDataQualityPanel()">
+    <div class="modal glass-card" style="max-width:720px;width:95vw">
+      <div class="modal-header" style="background:linear-gradient(135deg,rgba(121,168,224,.12),rgba(176,128,224,.08))">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:22px">📊</span>
+          <div>
+            <h2 style="margin:0;font-family:'Outfit',sans-serif;font-size:17px;background:linear-gradient(135deg,#79a8e0,#b080e0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Data Quality Dashboard</h2>
+            <div style="font-size:10px;color:var(--text3)">System health · AI models · Conflict scanner</div>
+          </div>
+        </div>
+        <button class="close-btn" onclick="closeDataQualityPanel()" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" style="padding:16px;max-height:65vh;overflow-y:auto" id="dqBody">
+        <div class="loading-state">Loading data quality metrics...</div>
       </div>
     </div>
   </div>

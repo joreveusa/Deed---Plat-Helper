@@ -128,6 +128,15 @@ app.register_blueprint(stripe_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(team_bp)
 
+# AI integration (optional — works without AI deps installed)
+try:
+    from ai.routes import ai_bp
+    app.register_blueprint(ai_bp)
+    print("[ai] AI endpoints registered at /api/ai/*", flush=True)
+except ImportError:
+    print("[ai] AI modules not available — install networkx, scikit-learn to enable", flush=True)
+
+
 # Inject Stripe functions into the Stripe Blueprint (avoids circular import)
 init_stripe(
     available=_STRIPE_AVAILABLE,
@@ -1009,6 +1018,85 @@ def api_arcgis_test():
 
 # County Registry -> moved to routes/admin.py Blueprint
 
+# ── test-connection (onboarding wizard) ────────────────────────────────────────
+
+@app.route("/api/test-connection", methods=["POST"])
+def api_test_connection():
+    """Test portal login with a caller-supplied URL + credentials.
+
+    Body: { url, username, password }
+    Returns: { success, error? }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        portal_url = (data.get("url") or "").strip().rstrip("/")
+        username   = data.get("username", "")
+        password   = data.get("password", "")
+
+        if not portal_url:
+            return jsonify({"success": False, "error": "No portal URL provided"})
+
+        # Use a temporary session so we don't pollute the main one
+        tmp_sess = req_lib.Session()
+        tmp_sess.headers.update({"User-Agent": "DeedPlatHelper/1.0"})
+
+        resp = tmp_sess.get(portal_url + "/", timeout=10)
+        soup = BeautifulSoup(resp.text, "lxml")
+        form = soup.find("form")
+        if not form:
+            return jsonify({"success": False, "error": "Login form not found at that URL"})
+
+        action = form.get("action", "/")
+        if not action.startswith("http"):
+            action = portal_url + "/" + action.lstrip("/")
+
+        form_data = {}
+        for inp in form.find_all("input"):
+            nm = inp.get("name")
+            itype = (inp.get("type") or "text").lower()
+            if nm:
+                if itype == "image":
+                    form_data[nm + ".x"] = "1"
+                    form_data[nm + ".y"] = "1"
+                else:
+                    form_data[nm] = inp.get("value", "")
+
+        # Map credentials
+        mapped = False
+        for inp in form.find_all("input"):
+            nm = inp.get("name", "")
+            if nm == "FormUser":
+                form_data["FormUser"] = username; mapped = True
+            elif nm == "FormPassword":
+                form_data["FormPassword"] = password; mapped = True
+        if not mapped:
+            for inp in form.find_all("input"):
+                itype = (inp.get("type") or "text").lower()
+                iname = (inp.get("name") or "").lower()
+                if itype == "password":
+                    form_data[inp["name"]] = password
+                elif itype == "text" and ("user" in iname or "login" in iname):
+                    form_data[inp["name"]] = username
+
+        post_resp = tmp_sess.post(action, data=form_data, timeout=10)
+        landed_url = post_resp.url.lower()
+        portal_root = portal_url.lower().rstrip("/")
+        success = ("hfweb" in landed_url
+                   or "new search" in post_resp.text.lower()
+                   or ("logout" in post_resp.text.lower()
+                       and landed_url.rstrip("/") != portal_root))
+
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "Invalid credentials or login failed"})
+    except req_lib.exceptions.Timeout:
+        return jsonify({"success": False, "error": "Connection timed out — check the URL"})
+    except req_lib.exceptions.ConnectionError:
+        return jsonify({"success": False, "error": "Cannot reach that URL — check the address"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
 # ── login ──────────────────────────────────────────────────────
 
 @app.route("/api/login", methods=["POST"])
@@ -1867,8 +1955,8 @@ def api_find_adjoiners():
 
         # ── Strategy 3: KML/XML parcel index — neighboring parcels ─────────────
         #   Uses geometry-based adjacency (polygon edge proximity) as primary,
-        #   with UPC-prefix and centroid-distance fallbacks.
-        MAX_KML_PER_SUBSTRATEGY = 12  # cap each sub-strategy
+        #   with centroid-distance fallbacks.
+        MAX_KML_PER_SUBSTRATEGY = 8  # cap each sub-strategy
         kml_upc_count = 0
         kml_geom_count = 0
         kml_prox_count = 0
@@ -1952,7 +2040,7 @@ def api_find_adjoiners():
                             adj_parcels = xml_processor.find_adjacent_parcels(
                                 survey_path, client_upc,
                                 max_results=MAX_KML_PER_SUBSTRATEGY,
-                                edge_threshold_deg=0.0003  # ~33m
+                                edge_threshold_deg=0.0001  # ~11m — actual shared boundaries only
                             )
                             for p in adj_parcels:
                                 if kml_geom_count >= MAX_KML_PER_SUBSTRATEGY:
@@ -1977,51 +2065,19 @@ def api_find_adjoiners():
                         except Exception as geom_err:
                             print(f"[adjoiners][kml] geometry adjacency error: {geom_err}", flush=True)
 
-                    # Step C: UPC-prefix neighbors (same parcel group, adjacent numbers)
-                    if client_upc:
-                        upc_prefix = client_upc[:10]
-                        try:
-                            upc_num = int(client_upc)
-                            for p in parcels:
-                                if kml_upc_count >= MAX_KML_PER_SUBSTRATEGY:
-                                    break
-                                p_upc = p.get("upc", "")
-                                if not p_upc or p_upc == client_upc:
-                                    continue
-                                if not p_upc.startswith(upc_prefix):
-                                    continue
-                                try:
-                                    diff = abs(int(p_upc) - upc_num)
-                                    if diff <= 8:   # within 8 UPC steps = nearby lots
-                                        name = _clean_owner_name(p.get("owner", "").title())
-                                        if not _is_valid_owner(name):
-                                            continue
-                                        key  = name.lower()
-                                        if key not in seen_names:
-                                            seen_names.add(key)
-                                            results.append({
-                                                "name":   name,
-                                                "raw":    p_upc,
-                                                "field":  "KML UPC neighbor",
-                                                "source": "kml_upc",
-                                                "upc":    p_upc,
-                                                "plat":   p.get("plat", ""),
-                                            })
-                                            kml_upc_count += 1
-                                except ValueError:
-                                    pass
-                        except ValueError:
-                            pass
+                    # Step C: UPC-prefix neighbors — DISABLED
+                    # Sequential UPC numbers don't reliably indicate physical adjacency.
+                    # Geometry adjacency (Step B) is far more accurate.
 
-                    # Step D: centroid proximity — fallback for parcels without polygons
-                    #   Widened from 0.0008° (~89m) → 0.002° (~222m) to catch
-                    #   irregularly shaped parcels whose centroids are far apart.
+                    # Step D: centroid proximity — catches across-the-street parcels
+                    #   that don't share a physical edge but are still adjoiners.
                     if client_centroid:
                         clng, clat = client_centroid
-                        RADIUS_DEG = 0.002   # ~222m — wider to catch more neighbors
+                        RADIUS_DEG = 0.0011  # ~120m — catches parcels across a road
+                        MAX_PROX = 6         # hard cap on proximity results
                         BOX = RADIUS_DEG * 1.5
                         for p in parcels:
-                            if kml_prox_count >= MAX_KML_PER_SUBSTRATEGY:
+                            if kml_prox_count >= MAX_PROX:
                                 break
                             pc = p.get("centroid")
                             if not pc or p.get("upc") == client_upc:
@@ -4704,8 +4760,9 @@ def _arcgis_get_parcel_geometry(upc: str, arcgis_cfg: dict = None) -> dict | Non
 def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> list:
     """Query ArcGIS for all parcels that spatially touch the given polygon.
 
-    Uses esriSpatialRelTouches first, falls back to esriSpatialRelIntersects.
-    Returns a list of normalised dicts regardless of the county's field names.
+    Uses esriSpatialRelTouches first (strict boundary-sharing), falls back to
+    esriSpatialRelIntersects.  Limits to 25 results and filters by centroid
+    distance (500m) to avoid false positives from imprecise geometry.
     """
     cfg = arcgis_cfg or _get_arcgis_config()
     fld = lambda c: _arcgis_field(cfg, c)
@@ -4714,6 +4771,18 @@ def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> li
         'address_all', 'township', 'twp_dir', 'range', 'rng_dir', 'section',
     ]
     out_fields = _arcgis_out_fields(cfg, adj_concepts)
+
+    # Compute client parcel centroid for distance filtering
+    client_cx, client_cy = 0.0, 0.0
+    try:
+        rings = geometry.get("rings", [])
+        if rings and rings[0]:
+            xs = [p[0] for p in rings[0]]
+            ys = [p[1] for p in rings[0]]
+            client_cx = sum(xs) / len(xs)
+            client_cy = sum(ys) / len(ys)
+    except Exception:
+        pass
 
     results = []
     for spatial_rel in ("esriSpatialRelTouches", "esriSpatialRelIntersects"):
@@ -4727,8 +4796,8 @@ def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> li
                     "inSR":              "4326",
                     "outSR":             "4326",
                     "outFields":         out_fields,
-                    "returnGeometry":    "false",
-                    "resultRecordCount": "100",
+                    "returnGeometry":    "true",
+                    "resultRecordCount": "25",
                     "f":                 "json",
                 },
                 headers={"User-Agent": "DeedPlatHelper/1.0"},
@@ -4740,7 +4809,7 @@ def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> li
             if features:
                 for feat in features:
                     a = feat.get("attributes", {})
-                    g = lambda c: (a.get(fld(c)) or "").strip() if isinstance(a.get(fld(c)), str) else str(a.get(fld(c)) or "")
+                    g = lambda c, _a=a: (_a.get(fld(c)) or "").strip() if isinstance(_a.get(fld(c)), str) else str(_a.get(fld(c)) or "")
                     twp = g('township'); twp_dir = g('twp_dir')
                     rng = g('range');    rng_dir = g('rng_dir')
                     sec = g('section')
@@ -4748,6 +4817,22 @@ def _arcgis_find_touching_parcels(geometry: dict, arcgis_cfg: dict = None) -> li
                     if trs and sec:
                         trs += f" Sec {sec}"
                     legal_raw = a.get(fld('legal')) or ""
+
+                    # Centroid distance filter — skip parcels > 500m away
+                    adj_geom = feat.get("geometry", {})
+                    adj_rings = adj_geom.get("rings", [])
+                    if client_cx and adj_rings and adj_rings[0]:
+                        axs = [p[0] for p in adj_rings[0]]
+                        ays = [p[1] for p in adj_rings[0]]
+                        adj_cx = sum(axs) / len(axs)
+                        adj_cy = sum(ays) / len(ays)
+                        dlng = abs(adj_cx - client_cx) * 90000   # m at ~36°N
+                        dlat = abs(adj_cy - client_cy) * 111000
+                        dist_m = (dlng**2 + dlat**2) ** 0.5
+                        if dist_m > 500:
+                            print(f"[arcgis-adj]   SKIP {g('owner')} — {dist_m:.0f}m away", flush=True)
+                            continue
+
                     results.append({
                         "upc":         g('parcel_id'),
                         "owner":       g('owner'),
@@ -5167,8 +5252,882 @@ def api_legal_similarity():
         return jsonify({"success": False, "error": str(e)})
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# DATA QUALITY API — powers AI Insights panel + Data Quality admin
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/index-health', methods=['GET'])
+def api_index_health():
+    """Cabinet + KML index health stats."""
+    from helpers.cabinet import _cab_scan_cache, _index_data
+    import time
+
+    cab_stats = {}
+    total_files = 0
+    for letter in "ABCDEF":
+        count = len(_cab_scan_cache.get(letter, []))
+        cab_stats[letter] = count
+        total_files += count
+
+    # KML/parcel index stats
+    kml_parcels = 0
+    kml_arcgis = 0
+    try:
+        idx = _index_data or {}
+        parcels = idx.get("parcels", [])
+        kml_parcels = len(parcels)
+        kml_arcgis = sum(1 for p in parcels if p.get("arcgis_enriched"))
+    except Exception:
+        pass
+
+    # Index freshness
+    idx_path = Path(os.path.dirname(os.path.abspath(__file__))) / "data" / "cabinet_index.json"
+    last_updated = ""
+    is_stale = False
+    if idx_path.exists():
+        mtime = idx_path.stat().st_mtime
+        last_updated = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        is_stale = (time.time() - mtime) > 7 * 86400  # >7 days
+
+    return jsonify({
+        "success": True,
+        "total_cabinet_files": total_files,
+        "cabinet_breakdown": cab_stats,
+        "total_parcels": kml_parcels,
+        "arcgis_enriched": kml_arcgis,
+        "arcgis_pct": round(kml_arcgis / kml_parcels * 100, 1) if kml_parcels else 0,
+        "last_updated": last_updated,
+        "is_stale": is_stale,
+    })
+
+
+@app.route('/api/data-conflicts', methods=['GET'])
+def api_data_conflicts():
+    """Scan for data quality issues across research sessions."""
+    sd = get_survey_data_path()
+    if not sd:
+        return jsonify({"success": True, "conflicts": [], "total": 0})
+
+    conflicts = []
+    survey = Path(sd)
+    scanned = 0
+
+    for range_dir in survey.iterdir():
+        if not range_dir.is_dir() or range_dir.name.startswith("00"):
+            continue
+        for job_dir in range_dir.iterdir():
+            if not job_dir.is_dir():
+                continue
+            m = re.match(r'^(\d{4})\s+(.*)', job_dir.name)
+            if not m:
+                continue
+            job_num = int(m.group(1))
+            client = m.group(2).strip()
+
+            for sub in job_dir.iterdir():
+                if not sub.is_dir():
+                    continue
+                rj = sub / "E Research" / "research.json"
+                if not rj.exists():
+                    continue
+                scanned += 1
+                try:
+                    data = json.loads(rj.read_text(encoding="utf-8"))
+                    subjects = data.get("subjects", [])
+                    adj_count = sum(1 for s in subjects if s.get("type") == "adjoiner")
+                    has_deed = any(s.get("deed_saved") for s in subjects)
+                    has_plat = any(s.get("plat_saved") for s in subjects)
+
+                    if not has_deed and not has_plat:
+                        conflicts.append({
+                            "job": job_num, "client": client,
+                            "level": "warning",
+                            "message": "No deeds or plats saved",
+                        })
+                    if adj_count == 0 and len(subjects) <= 1:
+                        conflicts.append({
+                            "job": job_num, "client": client,
+                            "level": "info",
+                            "message": "No adjoiners found",
+                        })
+                except Exception:
+                    conflicts.append({
+                        "job": job_num, "client": client,
+                        "level": "error",
+                        "message": "Corrupt research.json",
+                    })
+                if scanned >= 200:
+                    break
+            if scanned >= 200:
+                break
+        if scanned >= 200:
+            break
+
+    return jsonify({
+        "success": True,
+        "conflicts": conflicts[:50],
+        "total": len(conflicts),
+        "total_conflicts": len(conflicts),
+        "jobs_scanned": scanned,
+    })
+
+
+@app.route('/api/research-analytics', methods=['GET'])
+def api_research_analytics():
+    """Research analytics: job counts, AI model stats, KG stats."""
+    result = {
+        "success": True,
+        "jobs_scanned": 0,
+        "total_conflicts": 0,
+    }
+
+    # AI subsystem stats
+    try:
+        from ai import get_predictor, get_knowledge_graph, get_anomaly_detector
+        predictor = get_predictor()
+        if predictor:
+            stats = predictor.get_training_stats()
+            result["ml"] = {
+                "trained_at": stats.get("trained_at", "never"),
+                "training_jobs": stats.get("training_jobs", 0),
+                "metrics": stats.get("metrics", {}),
+            }
+            result["jobs_scanned"] = stats.get("training_jobs", 0)
+
+        kg = get_knowledge_graph()
+        if kg:
+            result["knowledge_graph"] = {
+                "nodes": kg.G.number_of_nodes(),
+                "edges": kg.G.number_of_edges(),
+            }
+
+        detector = get_anomaly_detector()
+        if detector:
+            baselines = detector.get_baselines()
+            result["anomaly_detector"] = {
+                "baselines": len(baselines),
+            }
+    except Exception:
+        pass
+
+    return jsonify(result)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTONOMOUS JOB PIPELINE  (Website → Deed Helper → AI Surveyor)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Phase 1: POST /api/inquiry         — accept survey requests
+# Phase 2: POST /api/auto-research   — autonomous 6-step research
+#          GET  /api/inquiry/status   — track progress
+# ══════════════════════════════════════════════════════════════════════════════
+
+import threading
+_INQUIRIES_PATH = Path("data/inquiries.json")
+
+def _load_inquiries() -> list:
+    if _INQUIRIES_PATH.exists():
+        try:
+            return json.loads(_INQUIRIES_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return []
+
+def _save_inquiries(data: list):
+    _INQUIRIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _INQUIRIES_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+def _find_inquiry(inquiry_id: str) -> tuple:
+    """Return (inquiry_dict, index) or (None, -1)."""
+    inquiries = _load_inquiries()
+    for i, inq in enumerate(inquiries):
+        if inq.get("id") == inquiry_id:
+            return inq, i
+    return None, -1
+
+def _update_inquiry(inquiry_id: str, updates: dict):
+    """Merge updates into an inquiry and persist."""
+    inquiries = _load_inquiries()
+    for inq in inquiries:
+        if inq.get("id") == inquiry_id:
+            inq.update(updates)
+            break
+    _save_inquiries(inquiries)
+
+
+@app.route("/api/inquiry", methods=["POST"])
+def api_inquiry():
+    """Accept a survey inquiry from the website.
+
+    Body: {
+        client_name: str,     # "Garza, Veronica"
+        address:     str,     # Optional street address
+        job_type:    str,     # "BDY", "SUB", etc.
+        email:       str,
+        phone:       str,
+        notes:       str,
+        upc:         str,     # Optional parcel ID
+    }
+
+    Returns: { success, inquiry_id, estimated_complexity }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        client_name = (data.get("client_name") or "").strip()
+        if not client_name:
+            return jsonify({"success": False, "error": "Client name is required"}), 400
+
+        job_type = data.get("job_type", "BDY").upper()
+        address  = (data.get("address") or "").strip()
+        email    = (data.get("email") or "").strip()
+        phone    = (data.get("phone") or "").strip()
+        notes    = (data.get("notes") or "").strip()
+        upc      = (data.get("upc") or "").strip()
+
+        # Generate inquiry ID
+        inquiries = _load_inquiries()
+        seq = len(inquiries) + 3001
+        inquiry_id = f"INQ-{seq}"
+
+        # ── ML complexity prediction (optional — fails gracefully) ──
+        complexity = {}
+        try:
+            from ai import get_predictor
+            predictor = get_predictor()
+            if predictor:
+                complexity = predictor.predict_complexity(job_type, client_name)
+        except Exception:
+            pass
+
+        # ── Knowledge Graph lookup (optional — fails gracefully) ──
+        kg_info = {}
+        try:
+            from ai import get_knowledge_graph
+            kg = get_knowledge_graph()
+            if kg:
+                adjoiners = kg.get_adjoiners(client_name)
+                jobs = kg.get_person_jobs(client_name)
+                kg_info = {
+                    "known_adjoiners": [a.get("name", a) if isinstance(a, dict) else a for a in adjoiners[:10]],
+                    "past_jobs": len(jobs),
+                    "in_knowledge_graph": True,
+                }
+        except Exception:
+            kg_info = {"in_knowledge_graph": False}
+
+        # ── Build inquiry record ──
+        inquiry = {
+            "id":           inquiry_id,
+            "client_name":  client_name,
+            "address":      address,
+            "job_type":     job_type,
+            "email":        email,
+            "phone":        phone,
+            "notes":        notes,
+            "upc":          upc,
+            "status":       "pending",
+            "step":         0,
+            "created_at":   datetime.now().isoformat(),
+            "updated_at":   datetime.now().isoformat(),
+            "complexity":   complexity,
+            "kg_info":      kg_info,
+            "research":     {},  # populated by auto-research
+            "log":          [f"Inquiry created at {datetime.now().isoformat()}"],
+        }
+
+        inquiries.append(inquiry)
+        _save_inquiries(inquiries)
+
+        print(f"[inquiry] Created {inquiry_id} for {client_name} ({job_type})", flush=True)
+
+        return jsonify({
+            "success":              True,
+            "inquiry_id":           inquiry_id,
+            "estimated_complexity": complexity,
+            "kg_info":              kg_info,
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/inquiry/list", methods=["GET"])
+def api_inquiry_list():
+    """List all inquiries (for dashboard/admin)."""
+    inquiries = _load_inquiries()
+    # Return summaries, not full detail
+    summaries = []
+    for inq in reversed(inquiries):  # newest first
+        summaries.append({
+            "id":          inq["id"],
+            "client_name": inq["client_name"],
+            "job_type":    inq["job_type"],
+            "status":      inq["status"],
+            "step":        inq.get("step", 0),
+            "created_at":  inq.get("created_at", ""),
+            "updated_at":  inq.get("updated_at", ""),
+        })
+    return jsonify({"success": True, "inquiries": summaries, "count": len(summaries)})
+
+
+@app.route("/api/inquiry/status/<inquiry_id>", methods=["GET"])
+def api_inquiry_status(inquiry_id):
+    """Get the current status and progress of an inquiry."""
+    inq, _ = _find_inquiry(inquiry_id)
+    if not inq:
+        return jsonify({"success": False, "error": "Inquiry not found"}), 404
+
+    # Build progress summary
+    research = inq.get("research", {})
+    subjects = research.get("subjects", [])
+    deeds_saved = sum(1 for s in subjects if s.get("deed_saved"))
+    plats_saved = sum(1 for s in subjects if s.get("plat_saved"))
+
+    return jsonify({
+        "success":         True,
+        "inquiry_id":      inquiry_id,
+        "status":          inq["status"],
+        "step":            inq.get("step", 0),
+        "client_name":     inq["client_name"],
+        "job_type":        inq["job_type"],
+        "subjects_count":  len(subjects),
+        "deeds_saved":     deeds_saved,
+        "plats_saved":     plats_saved,
+        "job_number":      research.get("job_number", ""),
+        "log":             inq.get("log", [])[-20:],  # last 20 log entries
+        "complexity":      inq.get("complexity", {}),
+        "created_at":      inq.get("created_at", ""),
+        "updated_at":      inq.get("updated_at", ""),
+    })
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PHASE 2: AUTONOMOUS RESEARCH ENGINE
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/auto-research", methods=["POST"])
+def api_auto_research():
+    """Trigger autonomous 6-step research for an inquiry or ad-hoc request.
+
+    Body: {
+        inquiry_id:  str (optional — links to existing inquiry),
+        client_name: str (required if no inquiry_id),
+        job_type:    str (default "BDY"),
+        upc:         str (optional — enables spatial adjoiner discovery),
+    }
+
+    Runs the research in a background thread and returns immediately.
+    Poll /api/inquiry/status/<id> for progress.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        inquiry_id  = data.get("inquiry_id", "")
+        client_name = (data.get("client_name") or "").strip()
+        job_type    = data.get("job_type", "BDY").upper()
+        upc         = (data.get("upc") or "").strip()
+
+        # If linked to inquiry, use its data
+        if inquiry_id:
+            inq, _ = _find_inquiry(inquiry_id)
+            if not inq:
+                return jsonify({"success": False, "error": "Inquiry not found"}), 404
+            client_name = client_name or inq["client_name"]
+            job_type    = job_type or inq["job_type"]
+            upc         = upc or inq.get("upc", "")
+
+        if not client_name:
+            return jsonify({"success": False, "error": "client_name is required"}), 400
+
+        # Create inquiry if none exists
+        if not inquiry_id:
+            inquiries = _load_inquiries()
+            seq = len(inquiries) + 3001
+            inquiry_id = f"INQ-{seq}"
+            inquiries.append({
+                "id": inquiry_id, "client_name": client_name,
+                "job_type": job_type, "upc": upc, "status": "starting",
+                "step": 0, "address": "", "email": "", "phone": "",
+                "notes": "Auto-research triggered",
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "complexity": {}, "kg_info": {}, "research": {},
+                "log": [f"Auto-research triggered at {datetime.now().isoformat()}"],
+            })
+            _save_inquiries(inquiries)
+
+        _update_inquiry(inquiry_id, {
+            "status": "starting",
+            "updated_at": datetime.now().isoformat(),
+        })
+
+        # Launch in background thread
+        t = threading.Thread(
+            target=_auto_research_worker,
+            args=(inquiry_id, client_name, job_type, upc),
+            daemon=True,
+        )
+        t.start()
+
+        print(f"[auto-research] Started background worker for {inquiry_id}: {client_name}", flush=True)
+        return jsonify({
+            "success":    True,
+            "inquiry_id": inquiry_id,
+            "message":    f"Auto-research started for {client_name}. Poll /api/inquiry/status/{inquiry_id} for progress.",
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc: str):
+    """Background worker: runs the full 6-step autonomous research pipeline.
+
+    This is the core autonomous engine. It reuses all existing search/save logic
+    but chains each step together without human intervention.
+    """
+    def _log(msg):
+        print(f"[auto-research:{inquiry_id}] {msg}", flush=True)
+        inq, _ = _find_inquiry(inquiry_id)
+        if inq:
+            log_list = inq.get("log", [])
+            log_list.append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+            _update_inquiry(inquiry_id, {"log": log_list, "updated_at": datetime.now().isoformat()})
+
+    try:
+        with app.app_context():
+            _log("Starting autonomous research pipeline...")
+
+            # ── STEP 1: Setup — create project and session ──────────────────
+            _update_inquiry(inquiry_id, {"status": "researching", "step": 1})
+            _log("Step 1: Creating project and session...")
+
+            next_num, _ = _next_job_number()
+            job_number = str(next_num)
+            create_project_folders(job_number, client_name, job_type)
+            _log(f"  Project #{job_number} created")
+
+            # Create research session
+            session_data = load_research(job_number, client_name, job_type)
+            session_data["job_number"] = job_number
+            session_data["client_name"] = client_name
+            session_data["job_type"] = job_type
+            session_data["client_upc"] = upc
+            save_research(job_number, client_name, job_type, session_data)
+
+            _update_inquiry(inquiry_id, {
+                "research": {"job_number": job_number, "subjects": session_data["subjects"]},
+            })
+            _log("  Session created")
+
+            # ── STEP 2: Client Deed Search + Auto-Select ────────────────────
+            _update_inquiry(inquiry_id, {"step": 2})
+            _log("Step 2: Searching for client deed...")
+
+            deed_result = _auto_search_deed(client_name, job_type)
+            if deed_result:
+                _log(f"  Found {deed_result['count']} results, best: {deed_result['best']['doc_no']} (score: {deed_result['best'].get('relevance_score', '?')})")
+
+                # Auto-save if confidence is high enough
+                best = deed_result["best"]
+                score = best.get("relevance_score", 0)
+
+                if score >= 25 or deed_result["count"] == 1:
+                    save_result = _auto_save_deed(
+                        best["doc_no"], best, job_number, client_name,
+                        job_type, "client", is_adjoiner=False,
+                    )
+                    if save_result.get("success"):
+                        # Update session
+                        session_data = load_research(job_number, client_name, job_type)
+                        for s in session_data["subjects"]:
+                            if s["id"] == "client":
+                                s["deed_saved"] = True
+                                s["deed_path"] = save_result.get("saved_to", "")
+                                s["doc_no"] = best["doc_no"]
+                                s["detail"] = best
+                                break
+                        save_research(job_number, client_name, job_type, session_data)
+                        _log(f"  ✓ Client deed saved: {best['doc_no']}")
+                    else:
+                        _log(f"  ✗ Deed save failed: {save_result.get('error', 'unknown')}")
+                else:
+                    _log(f"  ⚠ Low confidence ({score}) — skipping auto-select, needs human review")
+            else:
+                _log("  No deed results found")
+
+            # ── STEP 3: Client Plat Search ──────────────────────────────────
+            _update_inquiry(inquiry_id, {"step": 3})
+            _log("Step 3: Searching for client plat...")
+
+            plat_result = _auto_search_plat(client_name, job_number, job_type)
+            if plat_result:
+                _log(f"  Found plat: {plat_result.get('source', 'unknown')}")
+                # Update session
+                session_data = load_research(job_number, client_name, job_type)
+                for s in session_data["subjects"]:
+                    if s["id"] == "client":
+                        s["plat_saved"] = True
+                        s["plat_path"] = plat_result.get("saved_to", "")
+                        break
+                save_research(job_number, client_name, job_type, session_data)
+                _log("  ✓ Client plat saved")
+            else:
+                _log("  No plat found (may need manual search)")
+
+            # ── STEP 4: Adjoiner Discovery ──────────────────────────────────
+            _update_inquiry(inquiry_id, {"step": 4})
+            _log("Step 4: Discovering adjoiners...")
+
+            adjoiners = []
+            if upc:
+                adjoiners = _auto_discover_adjoiners(upc, client_name)
+                _log(f"  Found {len(adjoiners)} adjoiners via ArcGIS")
+            else:
+                _log("  No UPC — skipping spatial discovery (add adjoiners manually)")
+
+            # Add adjoiners to session
+            session_data = load_research(job_number, client_name, job_type)
+            for adj in adjoiners:
+                adj_name = adj.get("owner", "Unknown")
+                if adj_name.upper() == client_name.upper():
+                    continue  # skip self
+                adj_id = f"adj_{adj.get('upc', '')[:10]}_{len(session_data['subjects'])}"
+                session_data["subjects"].append({
+                    "id": adj_id, "type": "adjoiner", "name": adj_name,
+                    "deed_saved": False, "plat_saved": False,
+                    "status": "pending", "notes": "",
+                    "deed_path": "", "plat_path": "",
+                    "upc": adj.get("upc", ""),
+                })
+            save_research(job_number, client_name, job_type, session_data)
+
+            _update_inquiry(inquiry_id, {
+                "research": {"job_number": job_number, "subjects": session_data["subjects"]},
+            })
+
+            # ── STEP 5: Bulk Adjoiner Research ──────────────────────────────
+            _update_inquiry(inquiry_id, {"step": 5})
+            _log(f"Step 5: Researching {len(adjoiners)} adjoiners...")
+
+            session_data = load_research(job_number, client_name, job_type)
+            adj_subjects = [s for s in session_data["subjects"] if s["type"] == "adjoiner"]
+
+            for i, subj in enumerate(adj_subjects):
+                _log(f"  [{i+1}/{len(adj_subjects)}] Searching for {subj['name']}...")
+
+                # Search deed
+                deed_r = _auto_search_deed(subj["name"], job_type)
+                if deed_r and deed_r["best"]:
+                    best = deed_r["best"]
+                    save_r = _auto_save_deed(
+                        best["doc_no"], best, job_number, client_name,
+                        job_type, subj["id"], is_adjoiner=True,
+                        adjoiner_name=subj["name"],
+                    )
+                    if save_r.get("success"):
+                        subj["deed_saved"] = True
+                        subj["deed_path"] = save_r.get("saved_to", "")
+                        subj["doc_no"] = best["doc_no"]
+                        subj["detail"] = best
+                        _log(f"    ✓ Deed saved: {best['doc_no']}")
+                    else:
+                        _log(f"    ✗ Deed save failed")
+                else:
+                    _log(f"    No deed found")
+
+                # Search plat
+                plat_r = _auto_search_plat(subj["name"], job_number, job_type, is_adjoiner=True)
+                if plat_r:
+                    subj["plat_saved"] = True
+                    subj["plat_path"] = plat_r.get("saved_to", "")
+                    _log(f"    ✓ Plat saved")
+
+                # Brief pause to be polite to the portal
+                import time
+                time.sleep(0.5)
+
+            save_research(job_number, client_name, job_type, session_data)
+            _update_inquiry(inquiry_id, {
+                "research": {"job_number": job_number, "subjects": session_data["subjects"]},
+            })
+
+            # ── STEP 6: Package ─────────────────────────────────────────────
+            _update_inquiry(inquiry_id, {"step": 6})
+            _log("Step 6: Generating reference table and package...")
+
+            # Build reference summary
+            session_data = load_research(job_number, client_name, job_type)
+            ref_table = []
+            for subj in session_data["subjects"]:
+                if subj.get("deed_saved"):
+                    ref_table.append({
+                        "type": "Deed", "owner": subj["name"],
+                        "doc_no": subj.get("doc_no", ""),
+                        "relationship": "Client" if subj["type"] == "client" else "Adjoiner",
+                    })
+                if subj.get("plat_saved"):
+                    ref_table.append({
+                        "type": "Plat", "owner": subj["name"],
+                        "path": subj.get("plat_path", ""),
+                        "relationship": "Client" if subj["type"] == "client" else "Adjoiner",
+                    })
+
+            session_data["reference_table"] = ref_table
+            session_data["auto_research_complete"] = True
+            save_research(job_number, client_name, job_type, session_data)
+
+            # ── Done ────────────────────────────────────────────────────────
+            total_deeds = sum(1 for s in session_data["subjects"] if s.get("deed_saved"))
+            total_plats = sum(1 for s in session_data["subjects"] if s.get("plat_saved"))
+            total_subj  = len(session_data["subjects"])
+
+            _update_inquiry(inquiry_id, {
+                "status": "complete",
+                "step": 6,
+                "research": {"job_number": job_number, "subjects": session_data["subjects"]},
+                "updated_at": datetime.now().isoformat(),
+            })
+            _log(f"✅ COMPLETE — Job #{job_number}: {total_subj} subjects, {total_deeds} deeds, {total_plats} plats")
+
+    except Exception as e:
+        traceback.print_exc()
+        _update_inquiry(inquiry_id, {
+            "status": "error",
+            "error": str(e),
+            "updated_at": datetime.now().isoformat(),
+        })
+        try:
+            inq, _ = _find_inquiry(inquiry_id)
+            if inq:
+                log_list = inq.get("log", [])
+                log_list.append(f"[ERROR] {str(e)}")
+                _update_inquiry(inquiry_id, {"log": log_list})
+        except Exception:
+            pass
+
+
+# ── AUTO-RESEARCH HELPER FUNCTIONS ────────────────────────────────────────────
+
+def _auto_search_deed(name: str, job_type: str = "BDY") -> dict | None:
+    """Search 1stNMTitle for deeds matching `name`, return scored results.
+
+    Returns: { results: [...], best: {...}, count: int } or None on failure.
+    """
+    try:
+        search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
+        sess = _session()
+        resp = sess.get(search_url, timeout=15)
+
+        if 'CROSSNAMEFIELD' not in resp.text:
+            print(f"[auto-search] Session expired — cannot search for {name}", flush=True)
+            return None
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        form_data = _scrape_form_data(soup)
+        if not form_data:
+            return None
+
+        # Search by grantor name
+        form_data["CROSSNAMEFIELD"] = name
+        form_data["CROSSNAMETYPE"] = "begin"
+        form_data["CROSSTYPE"] = "GR"
+
+        action = _get_portal_url() + "/scripts/hflook.asp"
+        post_resp = sess.post(action, data=form_data, timeout=20)
+        soup2 = BeautifulSoup(post_resp.text, "html.parser")
+
+        results = []
+        rows = soup2.find_all("tr")
+        for row in rows:
+            cells = row.find_all("td")
+            if len(cells) < 9:
+                continue
+            doc_link = cells[1].find("a") if len(cells) > 1 else None
+            if not doc_link:
+                continue
+            doc_no = doc_link.text.strip()
+            if not doc_no or not re.match(r'^[A-Z0-9]+$', doc_no):
+                continue
+            r = {
+                "doc_no":          doc_no,
+                "location":        cells[2].text.strip() if len(cells) > 2 else "",
+                "document_code":   cells[3].text.strip() if len(cells) > 3 else "",
+                "instrument_type": cells[5].text.strip() if len(cells) > 5 else "",
+                "recorded_date":   cells[7].text.strip() if len(cells) > 7 else "",
+                "grantor":         cells[9].text.strip() if len(cells) > 9 else "",
+                "grantee":         cells[10].text.strip() if len(cells) > 10 else "",
+            }
+            _score_search_result(r, client_name=name)
+            results.append(r)
+
+        if not results:
+            return None
+
+        # Sort: deed types first, then by relevance score descending, then recency
+        def _rank(r):
+            inst = (r.get("instrument_type") or "").lower()
+            is_deed = any(kw in inst for kw in ['deed', 'warranty', 'quitclaim', 'grant', 'convey'])
+            return (not is_deed, -r.get("relevance_score", 0), r.get("recorded_date", ""))
+
+        results.sort(key=_rank)
+
+        return {"results": results[:20], "best": results[0], "count": len(results)}
+
+    except Exception as e:
+        print(f"[auto-search] Error searching for {name}: {e}", flush=True)
+        traceback.print_exc()
+        return None
+
+
+def _auto_save_deed(doc_no: str, detail: dict, job_number: str, client_name: str,
+                    job_type: str, subject_id: str, is_adjoiner: bool = False,
+                    adjoiner_name: str = "") -> dict:
+    """Download and save a deed PDF to the project folder."""
+    try:
+        grantor  = detail.get("grantor", "")
+        grantee  = detail.get("grantee", "")
+        location = detail.get("location", "")
+
+        # Build filename
+        loc_clean = re.sub(r'^[A-Z]', '', location.strip())
+        def _cn(n):
+            parts = n.split(",")
+            return parts[0].strip().title() if parts else n.title()
+
+        if is_adjoiner and adjoiner_name:
+            filename = f"ADJ {_cn(adjoiner_name)} {loc_clean} {doc_no}.pdf"
+        else:
+            filename = f"{loc_clean} {_cn(grantor)} to {_cn(grantee)}.pdf"
+        filename = re.sub(r'[<>:"/\\|?*]', '', filename).strip()
+        if not filename.endswith(".pdf"):
+            filename += ".pdf"
+
+        # Build save path
+        base = _job_base_path(job_number, client_name, job_type)
+        if is_adjoiner:
+            save_path = base / "E Research" / "A Deeds" / "Adjoiners" / filename
+        else:
+            save_path = base / "E Research" / "A Deeds" / filename
+
+        if save_path.exists():
+            return {"success": True, "skipped": True, "saved_to": str(save_path)}
+
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Fetch PDF from portal
+        pdf_url = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
+        pdf_resp, pdf_err = _fetch_portal_pdf(doc_no, pdf_url)
+        if pdf_err:
+            return {"success": False, "error": pdf_err}
+
+        with open(save_path, "wb") as f:
+            for chunk in pdf_resp.iter_content(8192):
+                f.write(chunk)
+
+        return {"success": True, "skipped": False, "saved_to": str(save_path)}
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _auto_search_plat(name: str, job_number: str, job_type: str,
+                      is_adjoiner: bool = False) -> dict | None:
+    """Search for a plat in the local cabinet index."""
+    try:
+        if not cabinet_index:
+            return None
+
+        last_name = name.split(",")[0].strip().upper()
+        if len(last_name) < 2:
+            return None
+
+        # Search cabinet index
+        matches = []
+        for filename, info in cabinet_index.items():
+            fname_up = filename.upper()
+            if last_name in fname_up:
+                matches.append({
+                    "filename": filename,
+                    "path": info.get("path", info.get("full_path", "")),
+                    "cabinet": info.get("cabinet", ""),
+                })
+
+        if not matches:
+            return None
+
+        # Pick the first/best match
+        best = matches[0]
+        src_path = best["path"]
+
+        if not src_path or not os.path.isfile(src_path):
+            return None
+
+        # Copy to project
+        base = _job_base_path(job_number, name.split(",")[0].strip(), job_type)
+        if is_adjoiner:
+            dest = base / "E Research" / "B Plats" / "Adjoiners" / os.path.basename(src_path)
+        else:
+            dest = base / "E Research" / "B Plats" / os.path.basename(src_path)
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        if not dest.exists():
+            import shutil
+            shutil.copy2(src_path, dest)
+
+        return {"success": True, "saved_to": str(dest), "source": "cabinet", "cabinet": best.get("cabinet", "")}
+
+    except Exception as e:
+        print(f"[auto-plat] Error searching plat for {name}: {e}", flush=True)
+        return None
+
+
+def _auto_discover_adjoiners(upc: str, client_name: str) -> list:
+    """Find adjacent parcels via ArcGIS spatial query."""
+    try:
+        # Get parcel geometry
+        geometry = _arcgis_get_parcel_geometry(upc)
+        if not geometry:
+            # Fallback: KML index
+            survey = get_survey_data_path()
+            polygon = xml_processor.extract_parcel_polygon(survey, upc)
+            if polygon and polygon.get("coordinates"):
+                coords = polygon["coordinates"]
+                geometry = {
+                    "rings": [[[c[0], c[1]] for c in coords]],
+                    "spatialReference": {"wkid": 4326}
+                }
+
+        if not geometry:
+            return []
+
+        raw = _arcgis_find_touching_parcels(geometry)
+
+        # Filter out client's own parcel
+        adjoiners = []
+        seen = set()
+        client_up = client_name.upper()
+        for adj in raw:
+            if adj["upc"] == upc:
+                continue
+            if adj["owner"].upper() == client_up:
+                continue
+            if adj["upc"] in seen:
+                continue
+            seen.add(adj["upc"])
+            adjoiners.append(adj)
+
+        return adjoiners
+
+    except Exception as e:
+        print(f"[auto-adjoiners] Error: {e}", flush=True)
+        return []
+
 
 # ── run ────────────────────────────────────────────────────────────────────────
+
 
 if __name__ == "__main__":
     import socket as _sock

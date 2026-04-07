@@ -31,74 +31,74 @@
     "stripe_customer_id": null,
     "stripe_subscription_id": null,
     "created_at": "2026-04-06T17:09:31.615333",
-    "search_count_this_month": 34,
+    "search_count_this_month": 47,
     "search_reset_date": "2026-05-01",
     "active": true,
     "search_history": [
       {
         "query": "Haines, William David",
         "count": 7,
-        "at": "2026-04-06T18:30:03Z"
+        "at": "2026-04-06T22:13:29Z"
       },
       {
         "query": "Martinez, Frances",
         "count": 304,
-        "at": "2026-04-06T18:30:01Z"
+        "at": "2026-04-06T22:13:23Z"
       },
       {
         "query": "Clodoveo Salazar",
         "count": 0,
-        "at": "2026-04-06T18:29:58Z"
+        "at": "2026-04-06T22:13:20Z"
       },
       {
         "query": "Ester Salazar Garcia",
         "count": 0,
-        "at": "2026-04-06T18:29:56Z"
-      },
-      {
-        "query": "TRUJILLO, PEDRO A",
-        "count": 39,
-        "at": "2026-04-06T18:29:51Z"
-      },
-      {
-        "query": "GUTIERREZ, FEDERICO",
-        "count": 13,
-        "at": "2026-04-06T18:29:49Z"
-      },
-      {
-        "query": "MARTINEZ, ELI",
-        "count": 424,
-        "at": "2026-04-06T18:29:47Z"
+        "at": "2026-04-06T22:13:19Z"
       },
       {
         "query": "Scott A. Salazar",
         "count": 0,
-        "at": "2026-04-06T18:29:45Z"
+        "at": "2026-04-06T22:13:17Z"
+      },
+      {
+        "query": "TRUJILLO, PEDRO A",
+        "count": 39,
+        "at": "2026-04-06T22:13:10Z"
+      },
+      {
+        "query": "GUTIERREZ, FEDERICO",
+        "count": 13,
+        "at": "2026-04-06T22:13:04Z"
+      },
+      {
+        "query": "MARTINEZ, ELI",
+        "count": 424,
+        "at": "2026-04-06T22:12:57Z"
       },
       {
         "query": "GUTIERREZ, LUPITA",
         "count": 7,
-        "at": "2026-04-06T18:29:43Z"
+        "at": "2026-04-06T22:12:53Z"
       },
       {
         "query": "SALAZAR, BERNARDINO",
         "count": 7,
-        "at": "2026-04-06T18:29:41Z"
+        "at": "2026-04-06T22:12:47Z"
       },
       {
         "query": "FRESQUEZ, LOERINA S",
         "count": 2,
-        "at": "2026-04-06T18:29:39Z"
+        "at": "2026-04-06T22:12:41Z"
       },
       {
         "query": "FRESQUEZ, JUNIOR A",
         "count": 8,
-        "at": "2026-04-06T18:29:37Z"
+        "at": "2026-04-06T22:12:39Z"
       },
       {
         "query": "FRESQUEZ, MANUEL A",
         "count": 19,
-        "at": "2026-04-06T18:29:34Z"
+        "at": "2026-04-06T22:12:34Z"
       },
       {
         "query": "Villa, Yolanda M",

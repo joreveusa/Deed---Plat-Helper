@@ -59,10 +59,20 @@ def main():
     cpu_count = os.cpu_count() or 4
     num_workers = min(num_workers, cpu_count)
 
-    # Import after sys.path is set
-    from helpers.cabinet import CABINET_FOLDERS, _init_index_path, _INDEX, _INDEX_LOCK
+    # Read cabinet index directly from JSON (avoids module-level caching issues)
+    import json
+    from helpers.cabinet import CABINET_FOLDERS
 
-    _init_index_path(".")
+    index_path = Path("data") / "cabinet_index.json"
+    if not index_path.exists():
+        print(f"[batch] ERROR: Cabinet index not found at {index_path}", flush=True)
+        print(f"[batch] Run: python scripts/batch_rebuild_cabinet_index.py <cabinet_path>", flush=True)
+        sys.exit(1)
+
+    print(f"[batch] Loading index from {index_path} ({index_path.stat().st_size // 1024}KB)...", flush=True)
+    with open(index_path, "r", encoding="utf-8") as f:
+        raw_index = json.load(f)
+    print(f"[batch] Index loaded: {len(raw_index)} cabinets", flush=True)
 
     ocr_cache_dir = Path("data") / "ocr_cache"
     ocr_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -78,8 +88,7 @@ def main():
             print(f"  Cabinet {letter}: folder not found, skipping", flush=True)
             continue
 
-        with _INDEX_LOCK:
-            entry = _INDEX.get(letter, {})
+        entry = raw_index.get(letter, {})
         files = entry.get("files", [])
         if not files:
             print(f"  Cabinet {letter}: no indexed files, skipping", flush=True)

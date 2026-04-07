@@ -271,7 +271,7 @@ def _parse_polygon_coords(coords_text: str) -> Optional[list]:
         for chunk in coords_text.split():
             parts = chunk.split(",")
             if len(parts) >= 2:
-                points.append([round(float(parts[0]), 6), round(float(parts[1]), 6)])
+                points.append([round(float(parts[0]), 8), round(float(parts[1]), 8)])
         return points if len(points) >= 3 else None
     except (ValueError, IndexError):
         return None

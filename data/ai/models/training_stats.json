@@ -1,0 +1,20 @@
+{
+  "trained_at": "2026-04-07T10:24:46.317043",
+  "training_jobs": 879,
+  "elapsed_seconds": 0.2,
+  "metrics": {
+    "adjoiner": {
+      "mae": 0.02,
+      "train_size": 703,
+      "test_size": 176,
+      "mean_actual": 2.6,
+      "model_selected": "gradient_boosting"
+    },
+    "cabinet": {
+      "error": "Not enough cabinet data"
+    },
+    "duration": {
+      "error": "Not enough duration data"
+    }
+  }
+}

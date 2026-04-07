@@ -14,6 +14,8 @@ const state = {
   adjoinParcels: [],
   searchResults: [],
   _dirty: false,           // tracks unsaved changes
+  _pcpCollapsed: false,    // property context panel collapse state
+  _pcpGeomCache: {},       // UPC → polygon rings for mini-map
   // ── Profile state ──
   activeProfile: null,     // currently active profile object
   profiles: [],            // all available profiles
@@ -328,6 +330,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // checkLogin hits 1stnmtitle.com which can block for up to 30s
   await loadConfig();
   loadRecentJobs(); // fire immediately, no await
+  refreshAiInsights(); // populate AI Insights panel in background
   checkLogin();     // fire in background, no await
 
   // Restore last session fields
@@ -445,6 +448,9 @@ function updateStepUI() {
       setTimeout(() => autoPopulateAdjoiners(true), 600);
     }
   }
+
+  // ── Refresh the property context panel on every step change ──
+  renderPropertyContextPanel();
 }
 
 function updateJobContext() {
@@ -458,6 +464,410 @@ function updateJobContext() {
   document.getElementById("ctxClient").textContent = state.researchSession.client_name;
   document.getElementById("ctxType").textContent = state.researchSession.job_type;
   updateFileBadges();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROPERTY CONTEXT PANEL  (color-coded mini-map + subject list — steps 2–6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Renders (or hides) the persistent property context panel.
+ * Shows a mini-map with client (gold) and adjoiners (purple) plus a
+ * subject list with deed/plat status badges.
+ */
+function renderPropertyContextPanel() {
+  const panel = document.getElementById('propertyContextPanel');
+  const reopenTab = document.getElementById('pcpReopenTab');
+  if (!panel) return;
+
+  // Only show on steps 2–6 when a session is active
+  const show = state.currentStep >= 2 && state.researchSession && !state._pcpCollapsed;
+  panel.classList.toggle('visible', !!show);
+
+  // Show re-open tab when collapsed
+  if (reopenTab) {
+    reopenTab.classList.toggle('hidden', !!show || state.currentStep < 2 || !state.researchSession);
+  }
+
+  if (!state.researchSession || state.currentStep < 2) return;
+
+  // ── Render subject list ──
+  _pcpRenderSubjectList();
+
+  // ── Render mini-map ──
+  _pcpRenderMiniMap();
+}
+
+/** Toggle collapse of the property context panel */
+function togglePropertyContextPanel() {
+  state._pcpCollapsed = !state._pcpCollapsed;
+  const panel = document.getElementById('propertyContextPanel');
+  const reopenTab = document.getElementById('pcpReopenTab');
+  const isActive = !state._pcpCollapsed && state.currentStep >= 2 && !!state.researchSession;
+  if (panel) panel.classList.toggle('visible', isActive);
+  if (reopenTab) {
+    reopenTab.classList.toggle('hidden', isActive || state.currentStep < 2 || !state.researchSession);
+  }
+}
+
+// ── Subject list renderer ────────────────────────────────────────────────────
+function _pcpRenderSubjectList() {
+  const container = document.getElementById('pcpSubjects');
+  if (!container) return;
+  const subjects = state.researchSession?.subjects || [];
+
+  // Count badge
+  const countEl = document.getElementById('pcpSubjectCount');
+  if (countEl) countEl.textContent = subjects.length;
+
+  // Build subject rows
+  let html = `<div class="pcp-subjects-header">
+    <span class="pcp-subjects-title">Subjects</span>
+    <span class="pcp-subject-count" id="pcpSubjectCount">${subjects.length}</span>
+  </div>`;
+
+  for (const s of subjects) {
+    const isClient = s.type === 'client';
+    const isComplete = s.deed_saved && s.plat_saved;
+    const dotClass = isClient ? 'dot-client' : isComplete ? 'dot-complete' : 'dot-adjoiner';
+    const rowClass = isClient ? 'pcp-client' : isComplete ? 'pcp-complete' : '';
+    const nameClass = isClient ? 'pcp-client-name' : '';
+
+    // Cardinal direction (from discovered adjoiners or ArcGIS spatial data)
+    const dir = _pcpGetDirection(s);
+    const dirTag = dir ? `<span class="pcp-direction-tag">${dir}</span>` : '';
+
+    // Document status badges
+    const deedBadge = s.deed_saved
+      ? '<span class="pcp-doc-badge pcp-saved">📄 ✓</span>'
+      : '<span class="pcp-doc-badge pcp-missing">📄 ✗</span>';
+    const platBadge = s.plat_saved
+      ? '<span class="pcp-doc-badge pcp-saved">📐 ✓</span>'
+      : '<span class="pcp-doc-badge pcp-missing">📐 ✗</span>';
+
+    html += `<div class="pcp-subject-row ${rowClass}">
+      <span class="pcp-color-dot ${dotClass}"></span>
+      <span class="pcp-subject-name ${nameClass}">${isClient ? '★ ' : ''}${escHtml(s.name)}</span>
+      ${dirTag}
+      <span class="pcp-doc-badges">${deedBadge}${platBadge}</span>
+    </div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+// ── Direction helper: compute cardinal direction of adjoiner relative to client ──
+function _pcpGetDirection(subject) {
+  if (subject.type === 'client') return '';
+  const clientParcel = state.researchSession?.client_parcel || _propPicker?.confirmedParcel;
+  if (!clientParcel?.centroid) return '';
+
+  // Try to find adjoiner centroid from discovered adjoiners or KML data
+  const adjData = (state.discoveredAdjoiners || []).find(
+    d => d.name?.toLowerCase() === subject.name?.toLowerCase()
+  );
+
+  // Check if we have cached geometry centroid
+  const adjUpc = subject.upc || adjData?.upc || '';
+  const geom = state._pcpGeomCache?.[adjUpc];
+  if (!geom?.centroid) {
+    // Try to get centroid from KML GeoJSON
+    if (_propPicker.geojsonData?.features) {
+      const feature = _propPicker.geojsonData.features.find(f => {
+        const fo = (f.properties?.owner || '').toLowerCase();
+        return fo === subject.name?.toLowerCase();
+      });
+      if (feature?.properties?._centroid) {
+        const [cLon, cLat] = clientParcel.centroid;
+        const [aLon, aLat] = feature.properties._centroid;
+        return _pcpCardinal(cLat, cLon, aLat, aLon);
+      }
+    }
+    return '';
+  }
+
+  const [cLon, cLat] = clientParcel.centroid;
+  const [aLon, aLat] = geom.centroid;
+  return _pcpCardinal(cLat, cLon, aLat, aLon);
+}
+
+function _pcpCardinal(lat1, lon1, lat2, lon2) {
+  const dLat = lat2 - lat1;
+  const dLon = lon2 - lon1;
+  const angle = Math.atan2(dLon, dLat) * 180 / Math.PI; // 0=N, 90=E
+  if (angle >= -22.5 && angle < 22.5) return 'N';
+  if (angle >= 22.5 && angle < 67.5) return 'NE';
+  if (angle >= 67.5 && angle < 112.5) return 'E';
+  if (angle >= 112.5 && angle < 157.5) return 'SE';
+  if (angle >= 157.5 || angle < -157.5) return 'S';
+  if (angle >= -157.5 && angle < -112.5) return 'SW';
+  if (angle >= -112.5 && angle < -67.5) return 'W';
+  if (angle >= -67.5 && angle < -22.5) return 'NW';
+  return '';
+}
+
+// ── Mini-map renderer (Canvas) ──────────────────────────────────────────────
+
+/**
+ * Draws a schematic mini-map on the canvas showing client parcel (gold)
+ * and adjoiner parcels (purple). Uses cached ArcGIS geometry or KML GeoJSON.
+ */
+function _pcpRenderMiniMap() {
+  const canvas = document.getElementById('pcpMiniCanvas');
+  const wrap = document.getElementById('pcpMinimapWrap');
+  if (!canvas || !wrap) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Collect all polygons to render
+  const polys = []; // {rings, color, fillOpacity, isClient, label}
+
+  const clientParcel = state.researchSession?.client_parcel || _propPicker?.confirmedParcel;
+  const clientUpc = state.researchSession?.client_upc || clientParcel?.upc || '';
+
+  // Try to load from cached geometry
+  if (clientUpc && state._pcpGeomCache[clientUpc]?.rings) {
+    polys.push({
+      rings: state._pcpGeomCache[clientUpc].rings,
+      color: '#e3c55a',
+      fillColor: 'rgba(227,197,90,0.25)',
+      label: '★',
+      isClient: true
+    });
+  }
+
+  // Add adjoiners
+  const subjects = state.researchSession?.subjects || [];
+  for (const s of subjects) {
+    if (s.type === 'client') continue;
+    const upc = s.upc || '';
+    if (upc && state._pcpGeomCache[upc]?.rings) {
+      const complete = s.deed_saved && s.plat_saved;
+      polys.push({
+        rings: state._pcpGeomCache[upc].rings,
+        color: complete ? '#56d3a0' : '#b080e0',
+        fillColor: complete ? 'rgba(86,211,160,0.15)' : 'rgba(176,128,224,0.15)',
+        label: '',
+        isClient: false
+      });
+    }
+  }
+
+  // If no geometry, try to build from KML GeoJSON (fallback)
+  if (polys.length === 0 && _propPicker.geojsonData?.features) {
+    _pcpBuildFromGeoJSON(polys, subjects, clientUpc);
+  }
+
+  // If still no geometry, show fallback
+  if (polys.length === 0) {
+    _pcpDrawNoGeometry(ctx, W, H);
+    // Try to fetch geometry from ArcGIS if we have a UPC
+    if (clientUpc && !state._pcpGeomCache[clientUpc]) {
+      _pcpFetchGeometry(clientUpc).then(() => _pcpRenderMiniMap());
+    }
+    return;
+  }
+
+  // Compute bounding box across ALL polygons
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of polys) {
+    for (const ring of p.rings) {
+      for (const pt of ring) {
+        if (pt[0] < minX) minX = pt[0];
+        if (pt[0] > maxX) maxX = pt[0];
+        if (pt[1] < minY) minY = pt[1];
+        if (pt[1] > maxY) maxY = pt[1];
+      }
+    }
+  }
+
+  const dx = maxX - minX || 0.001;
+  const dy = maxY - minY || 0.001;
+  const pad = 20;
+  const scaleX = (W - pad * 2) / dx;
+  const scaleY = (H - pad * 2) / dy;
+  const scale = Math.min(scaleX, scaleY);
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+
+  // Transform: lon/lat → canvas pixel
+  const toPixel = (lon, lat) => [
+    W / 2 + (lon - cx) * scale,
+    H / 2 - (lat - cy) * scale  // flip Y (lat increases up)
+  ];
+
+  // Draw dark background
+  ctx.fillStyle = 'rgba(13, 17, 23, 0.9)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Draw grid lines
+  ctx.strokeStyle = 'rgba(100, 110, 120, 0.08)';
+  ctx.lineWidth = 0.5;
+  for (let gx = 0; gx <= W; gx += 40) {
+    ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+  }
+  for (let gy = 0; gy <= H; gy += 40) {
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+  }
+
+  // Draw polygons
+  for (const p of polys) {
+    for (const ring of p.rings) {
+      ctx.beginPath();
+      let first = true;
+      for (const pt of ring) {
+        const [px, py] = toPixel(pt[0], pt[1]);
+        if (first) { ctx.moveTo(px, py); first = false; }
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = p.fillColor;
+      ctx.fill();
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth = p.isClient ? 2.5 : 1.5;
+      ctx.stroke();
+    }
+
+    // Draw label at centroid
+    if (p.label && p.rings[0]?.length) {
+      let lx = 0, ly = 0;
+      for (const pt of p.rings[0]) { lx += pt[0]; ly += pt[1]; }
+      lx /= p.rings[0].length;
+      ly /= p.rings[0].length;
+      const [px, py] = toPixel(lx, ly);
+      ctx.font = 'bold 16px Outfit, sans-serif';
+      ctx.fillStyle = p.color;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(p.label, px, py);
+    }
+  }
+
+  // Compass rose in top-right
+  ctx.font = 'bold 10px JetBrains Mono, monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.textAlign = 'center';
+  ctx.fillText('N', W - 16, 14);
+  ctx.fillText('↑', W - 16, 24);
+}
+
+/** Build polygon data from KML GeoJSON (fallback when no ArcGIS cache) */
+function _pcpBuildFromGeoJSON(polys, subjects, clientUpc) {
+  const features = _propPicker.geojsonData?.features || [];
+  const subjectNames = new Set(subjects.map(s => s.name?.toLowerCase()));
+
+  for (const f of features) {
+    const p = f.properties || {};
+    const geom = f.geometry;
+    if (!geom) continue;
+
+    const owner = (p.owner || '').toLowerCase();
+    const isClient = p.highlight || (p.upc && p.upc === clientUpc);
+    const isAdjoiner = !isClient && subjectNames.has(owner);
+
+    if (!isClient && !isAdjoiner) continue;
+
+    let rings = [];
+    if (geom.type === 'Polygon' && geom.coordinates) {
+      rings = geom.coordinates;
+    } else if (geom.type === 'MultiPolygon' && geom.coordinates) {
+      rings = geom.coordinates[0] || [];
+    } else {
+      continue;
+    }
+
+    const subj = subjects.find(s => s.name?.toLowerCase() === owner);
+    const complete = subj?.deed_saved && subj?.plat_saved;
+
+    polys.push({
+      rings: rings,
+      color: isClient ? '#e3c55a' : complete ? '#56d3a0' : '#b080e0',
+      fillColor: isClient ? 'rgba(227,197,90,0.25)'
+        : complete ? 'rgba(86,211,160,0.15)' : 'rgba(176,128,224,0.15)',
+      label: isClient ? '★' : '',
+      isClient: isClient
+    });
+  }
+}
+
+/** Draw a "no geometry" placeholder on the canvas */
+function _pcpDrawNoGeometry(ctx, W, H) {
+  ctx.fillStyle = 'rgba(13, 17, 23, 0.9)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.font = '28px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillText('🗺️', W / 2, H / 2 - 12);
+  ctx.font = '9px Inter, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.fillText('LOADING MAP…', W / 2, H / 2 + 16);
+}
+
+/**
+ * Fetch parcel polygon geometry from ArcGIS by UPC and cache it for the mini-map.
+ * @param {string} upc
+ */
+async function _pcpFetchGeometry(upc) {
+  if (!upc || state._pcpGeomCache[upc]) return;
+  try {
+    const params = new URLSearchParams({
+      where: `UPC='${upc}'`,
+      outFields: 'UPC,OWNER',
+      returnGeometry: 'true',
+      outSR: '4326',
+      f: 'json',
+    });
+    const url = `https://gis.ose.nm.gov/server_s/rest/services/Parcels/County_Parcels_2025/MapServer/29/query?${params}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    const data = await resp.json();
+    if (data.features?.[0]?.geometry?.rings) {
+      const rings = data.features[0].geometry.rings;
+      // Compute centroid
+      let cx = 0, cy = 0, n = 0;
+      for (const pt of rings[0]) { cx += pt[0]; cy += pt[1]; n++; }
+      state._pcpGeomCache[upc] = {
+        rings: rings,
+        centroid: [cx / n, cy / n]
+      };
+    }
+  } catch (e) {
+    console.warn('[pcp] Geometry fetch failed for', upc, e.message);
+  }
+}
+
+/**
+ * Fetch geometry for all subjects that have UPCs but no cached geometry.
+ * Called after session load / adjoiner discovery.
+ */
+async function _pcpFetchAllGeometry() {
+  const subjects = state.researchSession?.subjects || [];
+  const clientUpc = state.researchSession?.client_upc || '';
+  const upcs = new Set();
+  if (clientUpc) upcs.add(clientUpc);
+  for (const s of subjects) {
+    if (s.upc) upcs.add(s.upc);
+  }
+  // Also check discovered adjoiners
+  for (const d of (state.discoveredAdjoiners || [])) {
+    if (d.upc) upcs.add(d.upc);
+  }
+
+  const toFetch = [...upcs].filter(u => !state._pcpGeomCache[u]);
+  if (!toFetch.length) return;
+
+  // Fetch in parallel (max 8 concurrent)
+  const batches = [];
+  for (let i = 0; i < toFetch.length; i += 8) {
+    batches.push(toFetch.slice(i, i + 8));
+  }
+  for (const batch of batches) {
+    await Promise.allSettled(batch.map(u => _pcpFetchGeometry(u)));
+  }
+  // Re-render after all fetches
+  renderPropertyContextPanel();
 }
 
 // 
@@ -563,6 +973,9 @@ async function startSession() {
       updateJobContext();
       showToast(`Session loaded for Job #${num}`, "success");
 
+      // Fire AI prediction in background (don't block navigation)
+      _autoPredict(type, client).catch(() => {});
+
       // Save last session
       apiFetch("/config", "POST", {
         last_session: { job_number: num, client_name: client, job_type: type }
@@ -570,6 +983,9 @@ async function startSession() {
 
       // Move to Step 2
       goToStep(2);
+
+      // Fetch geometry for mini-map (background, non-blocking)
+      _pcpFetchAllGeometry().catch(() => {});
     } else {
       showToast(res.error, "error");
     }
@@ -626,6 +1042,95 @@ function quickLoadJob(num, client, type) {
   startSession();
 }
 
+// ── AI Insights Panel ─────────────────────────────────────────────────────────
+/** Safely set textContent on an element by ID */
+function _setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+/**
+ * Populate the AI Insights card on Step 1.
+ * @param {boolean} [full=false] - true when user clicks Refresh (runs data-conflicts too)
+ * Fires independent requests so one failure doesn't blank the panel.
+ */
+async function refreshAiInsights(full = false) {
+  // Helper: apiFetch with a timeout
+  function apiFetchTimeout(path, timeoutMs = 15000) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+    return apiFetch(path, 'GET', null, { signal: ctrl.signal })
+      .finally(() => clearTimeout(tid));
+  }
+
+  // ── Index Health ──────────────────────────────────────────────────────────
+  apiFetchTimeout("/index-health").then(h => {
+    if (!h.success) return;
+    _setText("aiTotalParcels", h.total_parcels?.toLocaleString() ?? "0");
+    _setText("aiArcgisPct", h.pct_with_arcgis != null ? h.pct_with_arcgis + "%" : "—");
+
+    // Stale-index warning
+    const staleRow = document.getElementById("aiStaleWarning");
+    if (staleRow) {
+      if (h.stale_warning || (h.newer_xml_files && h.newer_xml_files.length)) {
+        staleRow.classList.remove("hidden");
+        let msg = `Index is ${h.index_age_days} days old`;
+        if (h.newer_xml_files && h.newer_xml_files.length) {
+          msg += ` · ${h.newer_xml_files.length} XML file(s) newer than index`;
+        }
+        _setText("aiStaleText", msg);
+      } else {
+        staleRow.classList.add("hidden");
+      }
+    }
+  }).catch(e => {
+    if (e.name !== 'AbortError') console.warn("[AI Insights] index-health failed:", e);
+  });
+
+  // ── Data Conflicts — only on explicit Refresh (slow with 134K parcels) ───
+  if (full) {
+    _setText("aiConflictCount", "…");
+    apiFetchTimeout("/data-conflicts?max_conflicts=0", 30000).then(c => {
+      if (!c.success) { _setText("aiConflictCount", "—"); return; }
+      // Exclude missing_enrichment (info-level) — show only real cross-source conflicts
+      const total = (c.summary?.owner_mismatches || 0) +
+                    (c.summary?.area_mismatches || 0) +
+                    (c.summary?.trs_mismatches || 0);
+      _setText("aiConflictCount", total.toLocaleString());
+    }).catch(e => {
+      _setText("aiConflictCount", "—");
+      if (e.name !== 'AbortError') console.warn("[AI Insights] data-conflicts failed:", e);
+    });
+  }
+
+  // ── Research Analytics ────────────────────────────────────────────────────
+  apiFetchTimeout("/research-analytics").then(a => {
+    if (!a.success) return;
+    // API returns: { stats, predictions, scanned_jobs }
+    _setText("aiJobsScanned", (a.scanned_jobs ?? a.stats?.total_jobs ?? 0).toLocaleString());
+
+    // Complexity prediction (default BDY) — key is `predictions`
+    const pred = a.predictions;
+    if (pred) {
+      const row = document.getElementById("aiPredictionRow");
+      if (row) row.classList.remove("hidden");
+      _setText("aiPredComplexity", pred.predicted_complexity || "moderate");
+      const cpxEl = document.getElementById("aiPredComplexity");
+      if (cpxEl) cpxEl.dataset.level = pred.predicted_complexity || "moderate";
+      _setText("aiPredAdjoiners", pred.predicted_adjoiners ?? "—");
+      const rangeEl = document.getElementById("aiPredRange");
+      if (rangeEl && pred.adjoiner_range) {
+        rangeEl.textContent = `(${pred.adjoiner_range.p25}–${pred.adjoiner_range.p75})`;
+      }
+      _setText("aiPredCabinets", (pred.likely_cabinets || []).join(", ") || "—");
+      _setText("aiPredConfidence", pred.confidence || "—");
+      _setText("aiPredSimilar", pred.similar_jobs_count ?? "0");
+    }
+  }).catch(e => {
+    if (e.name !== 'AbortError') console.warn("[AI Insights] research-analytics failed:", e);
+  });
+}
+
 async function persistSession() {
   if (!state.researchSession) return false;
   const { job_number, client_name, job_type } = state.researchSession;
@@ -640,6 +1145,7 @@ async function persistSession() {
     });
     updateGlobalProgress();
     updateFileBadges();
+    renderPropertyContextPanel();  // refresh context panel on every save
     state._dirty = false;  // session saved successfully
     return true;
   } catch (e) {
@@ -711,7 +1217,7 @@ async function doStep2Search(sortBy) {
   const tbody = document.getElementById("s2ResultsBody");
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner" style="width:12px;height:12px;display:inline-block;vertical-align:middle;margin-right:4px"></span>Searching…`;
-  tbody.innerHTML = `<tr><td colspan="6" class="empty-cell"><div class="loading-state">Searching records for <strong>${escHtml(name)}</strong>…</div></td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="7" class="empty-cell"><div class="loading-state">Searching records for <strong>${escHtml(name)}</strong>…</div></td></tr>`;
   document.getElementById("s2ResultCount").textContent = "0";
 
   // Show TRS context bar if available
@@ -743,12 +1249,12 @@ async function doStep2Search(sortBy) {
     }
 
     if (!res.success) {
-      tbody.innerHTML = `<tr><td colspan="6" class="empty-cell text-danger">Error: ${res.error}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-cell text-danger">Error: ${res.error}</td></tr>`;
       return;
     }
 
     if (!res.results.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="empty-cell text-text3">No records found for "${escHtml(name)}"</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-cell text-text3">No records found for "${escHtml(name)}"</td></tr>`;
       return;
     }
 
@@ -780,6 +1286,7 @@ async function doStep2Search(sortBy) {
       <tr class="row-${getTypeClass(r.instrument_type)} ${rowClass}" onclick="loadS2Detail('${r.doc_no}', ${i}, this)">
         <td class="mono font-bold text-accent2">${r.doc_no || ''}</td>
         <td title="${escHtml(r.grantor || '')}">${escHtml((r.grantor || '').split(",")[0] || r.grantor || '')}</td>
+        <td title="${escHtml(r.grantee || '')}" style="font-size:11px;color:var(--text2)">${escHtml((r.grantee || '').split(",")[0] || r.grantee || '')}</td>
         <td><span class="badge ${getTypeClass(r.instrument_type)}">${r.instrument_type || 'Deed'}</span></td>
         <td class="text-xs text-text3">${escHtml(r.location || '')}</td>
         <td class="text-xs text-text3">${(r.recorded_date || r.instrument_date || '').split("-")[0] || r.date || ''}</td>
@@ -798,7 +1305,7 @@ async function doStep2Search(sortBy) {
 
   } catch (e) {
     if (e.name === 'AbortError') return;  // cancelled by newer search
-    tbody.innerHTML = `<tr><td colspan="6" class="text-danger p-3">Search error: ${e.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="text-danger p-3">Search error: ${e.message}</td></tr>`;
   } finally {
     btn.disabled = false;
     btn.innerHTML = "Search";
@@ -1316,6 +1823,9 @@ async function saveClientDeed(docNo) {
       showToast(res.skipped ? "Client deed already exists (skipped)" : "Client deed saved!", "success");
       clientSubj.deed_saved = true;
       if (res.saved_to) clientSubj.deed_path = res.saved_to;
+      // Store deed detail for reference table
+      if (state.selectedDetail) clientSubj.detail = state.selectedDetail;
+      if (docNo) clientSubj.doc_no = docNo;
       await persistSession();
 
       // Auto-open if configured
@@ -1327,6 +1837,9 @@ async function saveClientDeed(docNo) {
 
       // ── Extract property description from the saved deed PDF ──
       extractPropertyDescription(docNo, res.saved_to);
+
+      // ── Auto QA check in background ──
+      _autoQaCheck();
 
       // Automatically move to Step 3
       setTimeout(() => goToStep(3), 800);
@@ -1399,6 +1912,12 @@ async function extractPropertyDescription(docNo, pdfPath) {
 
     // Render the property description card
     renderPropertyDescriptionCard(desc);
+
+    // ── Silently index this description into the AI embeddings store ──
+    // Builds up the /api/ai/similar database passively as deeds are opened.
+    // Fire-and-forget — totally silent on failure.
+    _indexDescriptionEmbedding(desc, docNo).catch(() => {});
+
 
     // Show a success toast
     const descTypeLabels = {
@@ -1520,9 +2039,23 @@ function renderPropertyDescriptionCard(desc) {
 
     html += `<div class="prop-desc-text-wrap">
       <div class="prop-desc-text" id="propDescText">${displayText}</div>
-      <button class="btn btn-outline btn-sm prop-desc-toggle" onclick="togglePropDescExpand()" id="propDescToggleBtn">
-        Show Full Text ▾
-      </button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+        <button class="btn btn-outline btn-sm prop-desc-toggle" onclick="togglePropDescExpand()" id="propDescToggleBtn">
+          Show Full Text ▾
+        </button>
+        <button class="btn btn-outline btn-sm" onclick="summarizeLegalDesc()"
+          style="border-color:rgba(121,168,224,.3);color:#79a8e0;font-size:11px"
+          title="Summarize this legal description with AI (requires Ollama)">
+          ✨ AI Summarize
+        </button>
+        <button class="btn btn-outline btn-sm" onclick="aiSimilarDescriptions()"
+          style="border-color:rgba(176,128,224,.3);color:#b080e0;font-size:11px"
+          title="Find similar legal descriptions using AI embeddings">
+          🔗 AI Similar
+        </button>
+      </div>
+      <div id="legalDescSummary" class="hidden" style="margin-top:8px;padding:10px 12px;background:rgba(121,168,224,.06);border:1px solid rgba(121,168,224,.2);border-radius:8px;font-size:12px;color:var(--text2);line-height:1.6"></div>
+      <div id="aiSimilarResults" class="hidden" style="margin-top:8px"></div>
     </div>`;
   } else {
     html += `<div class="prop-desc-empty">
@@ -3238,7 +3771,10 @@ async function runArcgisSpatialDiscovery() {
       }
     }
 
-    // Render enhanced cards with metadata
+    // Render enhanced cards with metadata + cross-ref status
+    const boardNames = new Map(
+      (state.researchSession?.subjects || []).map(s => [s.name.toLowerCase(), s])
+    );
     let html = adjoiners.map(j => {
       const safeName = (j.owner || '').replace(/'/g, "\\'");
       const chips = [];
@@ -3247,20 +3783,43 @@ async function runArcgisSpatialDiscovery() {
       if (j.address) chips.push(`<span class="kml-chip chip-book">📍 ${escHtml(j.address)}</span>`);
       if (j.trs) chips.push(`<span class="kml-chip chip-upc">📐 ${escHtml(j.trs)}</span>`);
 
+      // Cross-reference: is this person on the board? deed/plat status?
+      const boardSubj = boardNames.get((j.owner || '').toLowerCase());
+      let xrefBadges = '';
+      if (boardSubj) {
+        const isClient = boardSubj.type === 'client';
+        xrefBadges += isClient
+          ? '<span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:rgba(227,197,90,.15);color:#e3c55a;margin-right:4px">★ CLIENT</span>'
+          : '<span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:rgba(176,128,224,.12);color:#b080e0;margin-right:4px">ON BOARD</span>';
+        xrefBadges += boardSubj.deed_saved
+          ? '<span class="pcp-doc-badge pcp-saved" style="font-size:8px">📄✓</span>'
+          : '<span class="pcp-doc-badge pcp-missing" style="font-size:8px">📄✗</span>';
+        xrefBadges += boardSubj.plat_saved
+          ? '<span class="pcp-doc-badge pcp-saved" style="font-size:8px;margin-left:2px">📐✓</span>'
+          : '<span class="pcp-doc-badge pcp-missing" style="font-size:8px;margin-left:2px">📐✗</span>';
+      }
+
+      const addBtn = boardSubj
+        ? `<span style="font-size:10px;color:var(--text3);font-style:italic">Added</span>`
+        : `<button class="btn btn-outline btn-sm" onclick="addFoundAdjoiner('${safeName}')">+ Add</button>`;
+
       return `
-        <div class="adjoiner-chip arcgis-spatial-chip">
+        <div class="adjoiner-chip arcgis-spatial-chip" style="${boardSubj ? 'border-left:2px solid ' + (boardSubj.type === 'client' ? '#e3c55a' : '#b080e0') : ''}">
           <div class="flex-col gap-1">
-            <span class="adjoiner-chip-name">${escHtml(j.owner)}</span>
+            <span class="adjoiner-chip-name">${escHtml(j.owner)} ${xrefBadges}</span>
             <span class="source-tag text-text3">🛰️ ArcGIS Spatial · UPC ${escHtml(j.upc)}</span>
             ${chips.length ? `<div class="kml-meta-row">${chips.join('')}</div>` : ''}
           </div>
-          <button class="btn btn-outline btn-sm" onclick="addFoundAdjoiner('${safeName}')">+ Add</button>
+          ${addBtn}
         </div>
       `;
     }).join('');
     if (grid) grid.innerHTML = html;
 
     showToast(`🛰️ Found ${count} adjacent parcels via ArcGIS`, "success");
+
+    // Fetch geometry for mini-map context panel (background)
+    _pcpFetchAllGeometry().catch(() => {});
 
   } catch (e) {
     if (grid) grid.innerHTML = `<div class="text-danger col-span-full p-4">ArcGIS error: ${e.message}</div>`;
@@ -3319,6 +3878,8 @@ async function addFoundAdjoiner(name) {
   const ok = await persistSession();
   if (ok) {
     showToast(`Added ${cleanName} to research board`, "success");
+    // Fetch geometry for mini-map (background)
+    if (upc) _pcpFetchGeometry(upc).then(() => renderPropertyContextPanel()).catch(() => {});
   } else {
     // Roll back the in-memory push so state stays consistent
     rs.subjects.pop();
@@ -3358,7 +3919,11 @@ async function addAllAndContinue() {
     }
   }
 
-  if (added > 0) await persistSession();
+  if (added > 0) {
+    await persistSession();
+    // Fetch geometry for mini-map (background)
+    _pcpFetchAllGeometry().catch(() => {});
+  }
 
   const totalAdj = rs.subjects.filter(s => s.type === "adjoiner").length;
   if (totalAdj === 0) {
@@ -3598,10 +4163,10 @@ function buildSubjectCard(s, rs) {
   const accentColor = isClient ? "var(--accent)" : "#7a4f9a";
 
   const deedChip = s.deed_saved
-    ? `<span class="chip chip-done">✓ Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="View deed" onclick="viewSubjectFile('${s.id}','deed')">👁️</button><button class="btn-icon-sm ml-1" title="Download" onclick="downloadLocalFileToBrowser('${s.deed_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">⬇</button>` : ""}`
+    ? `<span class="chip chip-done">✓ Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="View deed" onclick="viewSubjectFile('${s.id}','deed')">👁️</button><button class="btn-icon-sm ml-1" title="Download" onclick="downloadLocalFileToBrowser('${s.deed_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">⬇</button>` : ""}<button class="btn-icon-sm ml-1" title="Discard saved deed" style="color:#ff7b72;font-size:11px" onclick="clearSubjectDeed('${s.id}')">✕</button>`
     : `<span class="chip chip-todo">Deed</span>`;
   const platChip = s.plat_saved
-    ? `<span class="chip chip-done">✓ Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="View plat" onclick="viewSubjectFile('${s.id}','plat')">👁️</button><button class="btn-icon-sm ml-1" title="Download" onclick="downloadLocalFileToBrowser('${s.plat_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">⬇</button>` : ""}`
+    ? `<span class="chip chip-done">✓ Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="View plat" onclick="viewSubjectFile('${s.id}','plat')">👁️</button><button class="btn-icon-sm ml-1" title="Download" onclick="downloadLocalFileToBrowser('${s.plat_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">⬇</button>` : ""}<button class="btn-icon-sm ml-1" title="Discard saved plat" style="color:#ff7b72;font-size:11px" onclick="clearSubjectPlat('${s.id}')">✕</button>`
     : `<span class="chip chip-todo">Plat</span>`;
 
   const statusColors = { done: "#1a3028;color:#56d3a0", na: "#281a1a;color:#888", pending: "var(--bg3);color:var(--text3)" };
@@ -3893,10 +4458,13 @@ async function _pickAdjDeed(subjId, idx) {
     if (res.success) {
       subj.deed_saved = true;
       if (res.saved_to) subj.deed_path = res.saved_to;
+      // Store deed detail for reference table
+      if (r) { subj.detail = r; subj.doc_no = r.doc_no || ''; }
       await persistSession();
       showToast(res.skipped ? `Deed already exists for ${subj.name}` : `Deed saved for ${subj.name}!`, 'success');
       document.getElementById('adjDeedPickOverlay')?.remove();
       renderResearchBoard();
+      _autoQaCheck();
     } else {
       showToast('Save failed: ' + res.error, 'error');
     }
@@ -3923,9 +4491,13 @@ async function _doSaveAdjDeedFromLoaded(subjId, rs, subj) {
     if (res.success) {
       subj.deed_saved = true;
       if (res.saved_to) subj.deed_path = res.saved_to;
+      // Store deed detail for reference table
+      if (state.selectedDetail) subj.detail = state.selectedDetail;
+      if (state.selectedDoc?.doc_no) subj.doc_no = state.selectedDoc.doc_no;
       await persistSession();
       showToast(res.skipped ? `Deed already exists for ${subj.name}` : `Deed saved for ${subj.name}!`, 'success');
       renderResearchBoard();
+      _autoQaCheck();
     } else {
       showToast('Save failed: ' + res.error, 'error');
     }
@@ -4119,6 +4691,35 @@ async function removeSubject(id) {
   state.researchSession.subjects = state.researchSession.subjects.filter(s => s.id !== id);
   await persistSession();
   renderResearchBoard();
+}
+
+/** Clear a saved deed from an adjoiner card (marks it as not saved) */
+async function clearSubjectDeed(id) {
+  const subj = state.researchSession?.subjects?.find(s => s.id === id);
+  if (!subj) return;
+  if (!confirm(`Discard saved deed for ${subj.name}? This removes the saved status but does not delete the file.`)) return;
+  subj.deed_saved = false;
+  subj.deed_path = '';
+  subj.doc_no = '';
+  subj.detail = null;
+  await persistSession();
+  renderResearchBoard();
+  updateGlobalProgress();
+  showToast(`Deed discarded for ${subj.name}`, 'info');
+}
+
+/** Clear a saved plat from an adjoiner card (marks it as not saved) */
+async function clearSubjectPlat(id) {
+  const subj = state.researchSession?.subjects?.find(s => s.id === id);
+  if (!subj) return;
+  if (!confirm(`Discard saved plat for ${subj.name}? This removes the saved status but does not delete the file.`)) return;
+  subj.plat_saved = false;
+  subj.plat_path = '';
+  subj.plat_refs = [];
+  await persistSession();
+  renderResearchBoard();
+  updateGlobalProgress();
+  showToast(`Plat discarded for ${subj.name}`, 'info');
 }
 
 async function removePendingSubjects() {
@@ -4475,12 +5076,13 @@ function openFile(filePath) {
 // STEP 6: BOUNDARY LINES (DXF)
 // 
 function switchS6Tab(tab) {
-  ["calls", "parcels", "options"].forEach(t => {
+  ["calls", "parcels", "references", "options"].forEach(t => {
     document.getElementById(`s6Tab${t.charAt(0).toUpperCase() + t.slice(1)}`)?.classList.toggle("hidden", t !== tab);
     const btn = document.querySelector(`[onclick="switchS6Tab('${t}')"]`);
     if (btn) btn.classList.toggle("active", t === tab);
   });
   if (tab === "parcels") renderS6ParcelList();
+  if (tab === "references") refreshRefTable();
 }
 
 async function reparseClientCallsFromSession(silent = false) {
@@ -4615,6 +5217,246 @@ function recalcS6Closure() {
     const cls = err < 0.5 ? "text-accent2" : err < 2 ? "text-gold" : "text-danger";
     txt.innerHTML = `<span class="${cls}">${err < 0.01 ? " Perfect closure" : ` ${err.toFixed(4)} ft`}</span> &nbsp;&nbsp; ${calls.length} calls`;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAT REFERENCE TABLE  (auto-generated list of all documents referenced)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build and render the plat reference table from the research session.
+ * Collects all deeds, plats, and cabinet files referenced in this survey
+ * and formats them as a numbered table ready for the finished plat.
+ */
+function refreshRefTable() {
+  const tbody = document.getElementById('s6RefTbody');
+  if (!tbody) return;
+  const rs = state.researchSession;
+  if (!rs || !rs.subjects?.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">No research session — start one in Step 1.</td></tr>';
+    return;
+  }
+
+  const refs = []; // {type, owner, doc_no, book_page, cabinet, date, relationship}
+
+  for (const subj of rs.subjects) {
+    const isClient = subj.type === 'client';
+    const relationship = isClient ? '★ Client Property' : 'Adjoiner';
+
+    // ── Deed reference ──
+    if (subj.deed_saved) {
+      const detail = subj.detail || {};
+      const docNo = subj.doc_no || detail['DocumentNumber'] || detail['doc_no'] || '';
+      const location = detail['Location'] || detail['Reference'] || '';
+      const bookPage = _extractBookPage(location);
+      const date = detail['RecordingDate'] || detail['Date'] || '';
+      const cabRefs = _extractCabRefsFromDetail(detail);
+      refs.push({
+        type: 'Deed',
+        owner: subj.name,
+        doc_no: docNo,
+        book_page: bookPage,
+        cabinet: cabRefs,
+        date: date,
+        relationship: relationship,
+      });
+    }
+
+    // ── Plat reference ──
+    if (subj.plat_saved) {
+      const platPath = subj.plat_path || '';
+      const platRef = _extractPlatRef(platPath, subj);
+      refs.push({
+        type: 'Plat',
+        owner: subj.name,
+        doc_no: platRef.doc_no,
+        book_page: platRef.book_page,
+        cabinet: platRef.cabinet,
+        date: '',
+        relationship: relationship,
+      });
+    }
+
+    // ── Plat refs from deed analysis (cross-referenced plats) ──
+    if (subj.plat_refs?.length) {
+      for (const pr of subj.plat_refs) {
+        const prName = typeof pr === 'string' ? pr : (pr.ref || pr.name || '');
+        if (!prName) continue;
+        // Avoid duplicates
+        if (refs.some(r => r.type === 'Plat' && r.cabinet === prName && r.owner === subj.name)) continue;
+        refs.push({
+          type: 'Plat (Ref)',
+          owner: subj.name,
+          doc_no: '',
+          book_page: '',
+          cabinet: prName,
+          date: '',
+          relationship: relationship + ' (from deed)',
+        });
+      }
+    }
+  }
+
+  // ── Also add client deed detail from session (may have more info) ──
+  if (rs.client_detail && !refs.some(r => r.type === 'Deed' && r.relationship.includes('Client'))) {
+    const cd = rs.client_detail;
+    refs.unshift({
+      type: 'Deed',
+      owner: rs.client_name,
+      doc_no: cd['DocumentNumber'] || state.selectedDoc?.doc_no || '',
+      book_page: _extractBookPage(cd['Location'] || cd['Reference'] || ''),
+      cabinet: _extractCabRefsFromDetail(cd),
+      date: cd['RecordingDate'] || cd['Date'] || '',
+      relationship: '★ Client Property',
+    });
+  }
+
+  // ── In-memory detail as last resort for client ──
+  if (state.selectedDetail && !refs.some(r => r.type === 'Deed' && r.relationship.includes('Client'))) {
+    const d = state.selectedDetail;
+    refs.unshift({
+      type: 'Deed',
+      owner: rs.client_name,
+      doc_no: state.selectedDoc?.doc_no || d['DocumentNumber'] || '',
+      book_page: _extractBookPage(d['Location'] || d['Reference'] || ''),
+      cabinet: _extractCabRefsFromDetail(d),
+      date: d['RecordingDate'] || d['Date'] || '',
+      relationship: '★ Client Property',
+    });
+  }
+
+  // ── Render table ──
+  if (!refs.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">No documents saved yet. Save deeds & plats in Steps 2–5, then return here.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = refs.map((r, i) => {
+    const typeClass = r.type === 'Deed'
+      ? 'background:rgba(227,197,90,.08);color:#e3c55a'
+      : 'background:rgba(176,128,224,.08);color:#b080e0';
+    const isClient = r.relationship.includes('Client');
+    return `<tr style="${isClient ? 'background:rgba(227,197,90,.04)' : ''}">
+      <td style="font-weight:700;color:var(--text3)">${i + 1}</td>
+      <td><span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;${typeClass}">${escHtml(r.type)}</span></td>
+      <td style="font-weight:${isClient ? '700' : '600'};color:${isClient ? '#e3c55a' : 'var(--text)'}">${escHtml(r.owner)}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent2)">${escHtml(r.doc_no)}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${escHtml(r.book_page)}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#b080e0">${escHtml(r.cabinet)}</td>
+      <td style="font-size:11px;color:var(--text2)">${escHtml(r.date)}</td>
+      <td style="font-size:10px;color:var(--text3)">${escHtml(r.relationship)}</td>
+    </tr>`;
+  }).join('');
+
+  // Store for copy/print
+  state._refTableData = refs;
+}
+
+/** Extract Book/Page from a Location string like "Book 123 Page 456" */
+function _extractBookPage(loc) {
+  if (!loc) return '';
+  const m = loc.match(/\bB(?:oo)?k\.?\s*(\d+)\s*[\/,]\s*P(?:age|g)?\.?\s*(\d+)/i)
+    || loc.match(/\b(\d+)\s*\/\s*(\d+)/);
+  return m ? `Bk ${m[1]} / Pg ${m[2]}` : loc.substring(0, 30);
+}
+
+/** Extract cabinet references from a deed detail object */
+function _extractCabRefsFromDetail(detail) {
+  if (!detail) return '';
+  // Check _cab_refs field (parsed from deed text)
+  if (detail._cab_refs?.length) return detail._cab_refs.join(', ');
+  // Check Location for cabinet pattern
+  const loc = detail['Location'] || detail['Reference'] || '';
+  const cabs = [];
+  const re = /\bCab(?:inet)?\s*([A-F])\s*[-–]\s*(\d+\w?)/gi;
+  let m;
+  while ((m = re.exec(loc)) !== null) cabs.push(`${m[1]}-${m[2]}`);
+  return cabs.join(', ');
+}
+
+/** Extract plat reference info from plat path and subject data */
+function _extractPlatRef(platPath, subj) {
+  let cabinet = '';
+  let doc_no = '';
+  let book_page = '';
+
+  // Try to extract cabinet ref from path: ".../Cabinet C/123A.pdf"
+  const pathMatch = platPath.match(/Cabinet\s*([A-F])[\/\\]+(.+?)\.pdf/i);
+  if (pathMatch) {
+    cabinet = `${pathMatch[1]}-${pathMatch[2]}`;
+  }
+
+  // Try from plat_refs on subject
+  if (subj.plat_refs?.length) {
+    cabinet = cabinet || (typeof subj.plat_refs[0] === 'string'
+      ? subj.plat_refs[0]
+      : subj.plat_refs[0].ref || '');
+  }
+
+  // From KML data (book/page)
+  if (subj.plat) {
+    book_page = subj.plat;
+  }
+
+  return { doc_no, book_page, cabinet };
+}
+
+/** Copy the reference table to clipboard as tab-separated text for CAD/Excel */
+function copyRefTableToClipboard() {
+  const refs = state._refTableData;
+  if (!refs?.length) { showToast('No references to copy — refresh first', 'warn'); return; }
+
+  const header = '#\tType\tOwner\tDocument #\tBook/Page\tCabinet Ref\tDate\tRelationship';
+  const rows = refs.map((r, i) =>
+    `${i + 1}\t${r.type}\t${r.owner}\t${r.doc_no}\t${r.book_page}\t${r.cabinet}\t${r.date}\t${r.relationship}`
+  );
+  const text = [header, ...rows].join('\n');
+
+  navigator.clipboard.writeText(text).then(() => {
+    showToast(`📋 ${refs.length} references copied to clipboard`, 'success');
+  }).catch(() => {
+    // Fallback: select text in a temp textarea
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast(`📋 ${refs.length} references copied to clipboard`, 'success');
+  });
+}
+
+/** Print the reference table */
+function printRefTable() {
+  const refs = state._refTableData;
+  if (!refs?.length) { showToast('No references to print — refresh first', 'warn'); return; }
+  const rs = state.researchSession;
+
+  let html = `<!DOCTYPE html><html><head><title>Reference Table — Job #${rs?.job_number || ''}</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; color: #000; }
+    h2 { font-size: 14px; border-bottom: 2px solid #000; padding-bottom: 4px; margin-bottom: 8px; }
+    .meta { font-size: 10px; color: #666; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #f0f0f0; font-size: 9px; text-transform: uppercase; letter-spacing: .5px; padding: 4px 6px; border: 1px solid #ccc; text-align: left; }
+    td { padding: 3px 6px; border: 1px solid #ddd; font-size: 10px; }
+    tr:nth-child(even) { background: #f9f9f9; }
+    .client { font-weight: bold; }
+    @media print { body { margin: 10px; } }
+  </style></head><body>`;
+  html += `<h2>DOCUMENTS REFERENCED ON THIS PLAT</h2>`;
+  html += `<div class="meta">Job #${rs?.job_number || ''} — ${rs?.client_name || ''} — ${rs?.job_type || ''} — Generated ${new Date().toLocaleDateString()}</div>`;
+  html += `<table><thead><tr><th>#</th><th>Type</th><th>Owner</th><th>Doc #</th><th>Book/Page</th><th>Cabinet</th><th>Date</th><th>Relationship</th></tr></thead><tbody>`;
+  refs.forEach((r, i) => {
+    const cls = r.relationship.includes('Client') ? ' class="client"' : '';
+    html += `<tr${cls}><td>${i + 1}</td><td>${r.type}</td><td>${r.owner}</td><td>${r.doc_no}</td><td>${r.book_page}</td><td>${r.cabinet}</td><td>${r.date}</td><td>${r.relationship}</td></tr>`;
+  });
+  html += `</tbody></table></body></html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => win.print(), 300);
 }
 
 //  Parcels (Adjoiner boundaries) 
@@ -4848,6 +5690,15 @@ function showSettingsModal() {
 }
 function closeSettingsModal() {
   document.getElementById("settingsOverlay").classList.add("hidden");
+}
+
+function toggleArcgisSection() {
+  const sec = document.getElementById("arcgisSection");
+  const chev = document.getElementById("arcgisSectionChevron");
+  if (!sec) return;
+  const open = sec.style.display !== "none";
+  sec.style.display = open ? "none" : "block";
+  if (chev) chev.style.transform = open ? "" : "rotate(180deg)";
 }
 
 async function loadDriveStatus() {
@@ -5240,6 +6091,9 @@ function onClientNameTyped() {
     _propPicker.confirmedParcel = null;
     document.getElementById('selectedParcelCard').classList.add('hidden');
   }
+  // KG autocomplete
+  clearTimeout(onClientNameTyped._debounce);
+  onClientNameTyped._debounce = setTimeout(() => _kgClientSuggest(typed), 350);
 }
 
 /** Clear the KML-confirmed parcel selection */
@@ -5862,6 +6716,8 @@ function _onPropParcelClick(feature, layer) {
   details += `<div id="propPickerAddress" style="margin-top:4px"><span style="color:var(--text3);font-size:11px">📍 Looking up address…</span></div>`;
   // PLSS section placeholder (populated async by BLM spatial query)
   details += `<div id="propPickerPLSS" style="margin-top:4px"><span style="color:var(--text3);font-size:11px">📐 Looking up PLSS section…</span></div>`;
+  // Document cross-reference placeholders (populated async)
+  details += `<div id="propPickerDocXref" style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(100,110,120,.15)"><span style="color:var(--text3);font-size:10px">🔍 Checking deeds & plats…</span></div>`;
   if (!details) details = '<span style="color:var(--text3);font-style:italic">No extended data.</span>';
 
   document.getElementById('propPickerDetails').innerHTML = details;
@@ -5925,6 +6781,93 @@ function _onPropParcelClick(feature, layer) {
       plssEl.innerHTML = `<span style="font-size:10px;color:var(--text3);opacity:.5">📐 PLSS section unavailable</span>`;
     }
   });
+
+  // ── Async document cross-reference (deeds & plats for this owner) ──────
+  _pickerDocXref(p.owner || '', p.upc || '', p.book || '', p.page || '', p.cab_refs_str || '');
+}
+
+/**
+ * Cross-reference deeds & plats for a selected parcel owner in the map picker.
+ * Checks: (1) local cabinet plat index, (2) existing session subjects.
+ * Shows results in #propPickerDocXref. 
+ */
+async function _pickerDocXref(ownerName, upc, book, page, cabRefs) {
+  const el = document.getElementById('propPickerDocXref');
+  if (!el || !ownerName) return;
+
+  let html = '';
+  const badges = [];
+
+  // ── 1. Check if owner is already on the research board ──
+  const rs = state.researchSession;
+  let boardSubject = null;
+  if (rs) {
+    boardSubject = rs.subjects.find(
+      s => s.name.toLowerCase() === ownerName.toLowerCase()
+    );
+  }
+
+  if (boardSubject) {
+    const typeLabel = boardSubject.type === 'client' ? '★ Client' : 'Adjoiner';
+    badges.push(`<span class="pcp-doc-badge pcp-saved" style="font-size:10px">📋 On Board (${typeLabel})</span>`);
+    if (boardSubject.deed_saved)
+      badges.push(`<span class="pcp-doc-badge pcp-saved" style="font-size:10px">📄 Deed ✓</span>`);
+    else
+      badges.push(`<span class="pcp-doc-badge pcp-missing" style="font-size:10px">📄 Deed needed</span>`);
+    if (boardSubject.plat_saved)
+      badges.push(`<span class="pcp-doc-badge pcp-saved" style="font-size:10px">📐 Plat ✓</span>`);
+    else
+      badges.push(`<span class="pcp-doc-badge pcp-missing" style="font-size:10px">📐 Plat needed</span>`);
+  }
+
+  // ── 2. Check local cabinet index for plat files ──
+  try {
+    const cabRes = await apiFetch('/find-plat-local', 'POST', {
+      client_name: ownerName,
+      grantor: ownerName,
+      grantee: ownerName,
+      detail: {},
+    });
+    if (cabRes?.success && cabRes.results?.length > 0) {
+      const count = cabRes.results.length;
+      const cabLetters = [...new Set(
+        cabRes.results.map(r => r.cabinet || r.file?.match(/Cabinet\s*([A-F])/i)?.[1] || '').filter(Boolean)
+      )].join(', ');
+      const label = cabLetters ? `Cabinet ${cabLetters}` : 'Local';
+      badges.push(
+        `<span class="pcp-doc-badge pcp-saved" style="font-size:10px;cursor:pointer" title="${cabRes.results.map(r => r.file || r.name).join('\\n')}" onclick="event.stopPropagation()">` +
+        `🗄️ ${count} plat${count > 1 ? 's' : ''} (${label})</span>`
+      );
+    } else {
+      badges.push(`<span class="pcp-doc-badge pcp-missing" style="font-size:10px">🗄️ No cabinet plats</span>`);
+    }
+  } catch (_) {
+    badges.push(`<span class="pcp-doc-badge pcp-missing" style="font-size:10px">🗄️ Cabinet check failed</span>`);
+  }
+
+  // ── 3. Check KML parcel records for recorded plat info ──
+  if (book && page) {
+    badges.push(`<span class="pcp-doc-badge pcp-saved" style="font-size:10px">📚 Recorded Bk ${escHtml(book)}/${escHtml(page)}</span>`);
+  }
+
+  // ── 4. Check if there are cabinet references from KML data ──
+  if (cabRefs) {
+    const refs = cabRefs.split(',').map(s => s.trim()).filter(Boolean);
+    if (refs.length) {
+      badges.push(`<span class="pcp-doc-badge pcp-saved" style="font-size:10px" ` +
+        `title="KML-parsed cabinet references: ${escHtml(cabRefs)}">📁 ${refs.length} cab ref${refs.length > 1 ? 's' : ''}</span>`);
+    }
+  }
+
+  // ── Render ──
+  if (badges.length) {
+    html = `<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">📑 Document Cross-Ref</div>` +
+      `<div style="display:flex;flex-wrap:wrap;gap:4px">${badges.join('')}</div>`;
+  } else {
+    html = `<span style="font-size:10px;color:var(--text3);opacity:.5">📑 No documents found</span>`;
+  }
+
+  el.innerHTML = html;
 }
 
 // ── Owner name search ─────────────────────────────────────────────────────────
@@ -5985,12 +6928,36 @@ async function _doPropPickerSearch(q) {
     if (!res.results.length) {
       listEl.innerHTML = `<div style="padding:16px;font-size:12px;color:var(--text3)">No parcels found for "<strong>${escHtml(q)}</strong>".<br><span style="font-size:10px;opacity:.6">Check that the KML index is built.</span></div>`;
     } else {
-      listEl.innerHTML = res.results.map((p, pi) => `
-        <div class="prop-picker-result-item" data-upc="${escHtml(p.upc || '')}" data-idx="${pi}" onclick="selectPropPickerResult(${pi})">
-          <div class="prop-picker-result-name">${escHtml(p.owner)}</div>
+      const boardNames = new Set(
+        (state.researchSession?.subjects || []).map(s => s.name.toLowerCase())
+      );
+      listEl.innerHTML = res.results.map((p, pi) => {
+        const onBoard = boardNames.has((p.owner || '').toLowerCase());
+        const boardSubj = onBoard ? state.researchSession.subjects.find(
+          s => s.name.toLowerCase() === (p.owner || '').toLowerCase()
+        ) : null;
+        const isClient = boardSubj?.type === 'client';
+        let statusBadge = '';
+        if (isClient) {
+          statusBadge = '<span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:rgba(227,197,90,.15);color:#e3c55a;margin-left:6px">★ CLIENT</span>';
+        } else if (onBoard) {
+          statusBadge = '<span style="font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;background:rgba(176,128,224,.12);color:#b080e0;margin-left:6px">ON BOARD</span>';
+        }
+        let docBadges = '';
+        if (boardSubj) {
+          docBadges += boardSubj.deed_saved
+            ? '<span style="font-size:8px;color:#56d3a0;margin-left:4px">📄✓</span>'
+            : '<span style="font-size:8px;color:var(--text3);margin-left:4px">📄✗</span>';
+          docBadges += boardSubj.plat_saved
+            ? '<span style="font-size:8px;color:#56d3a0;margin-left:2px">📐✓</span>'
+            : '<span style="font-size:8px;color:var(--text3);margin-left:2px">📐✗</span>';
+        }
+        return `
+        <div class="prop-picker-result-item" data-upc="${escHtml(p.upc || '')}" data-idx="${pi}" onclick="selectPropPickerResult(${pi})" style="${onBoard ? 'border-left:2px solid ' + (isClient ? '#e3c55a' : '#b080e0') : ''}">
+          <div class="prop-picker-result-name">${escHtml(p.owner)}${statusBadge}${docBadges}</div>
           <div class="prop-picker-result-meta">${p.upc ? 'UPC: ' + escHtml(p.upc) : ''}${p.book ? ' · Bk ' + escHtml(p.book) : ''}${p.page ? '/' + escHtml(p.page) : ''}</div>
-        </div>
-      `).join('');
+        </div>`;
+      }).join('');
 
       // Store search results for click handler
       _propPicker._searchResults = res.results;
@@ -8433,10 +9400,14 @@ function _fillSearch(query) {
   if (hist) hist.style.display = 'none';
 }
 
+let _historyLoadAttempted = false;
 function _showSearchHistory() {
   if (!_searchHistory.length) {
-    // Try loading if not yet populated
-    if (typeof _loadSearchHistory === 'function') _loadSearchHistory().then(() => _showSearchHistory());
+    // Try loading once if not yet populated — guard against infinite loop
+    if (!_historyLoadAttempted && typeof _loadSearchHistory === 'function') {
+      _historyLoadAttempted = true;
+      _loadSearchHistory().then(() => _showSearchHistory());
+    }
     return;
   }
   const containerEl = document.getElementById('searchHistoryDropdown');
@@ -8677,3 +9648,1281 @@ function _applyTeamVisibility(userTier, userRole) {
     }, 900);
   });
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI CHAT PANEL (Nova)
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _aiAvailable = false;
+let _aiChatOpen   = false;
+let _aiHistory    = [];  // { role: 'user'|'ai', text }
+
+/** Check AI backend status on startup */
+async function _initAiChat() {
+  try {
+    const res = await fetch(API + '/ai/status', { credentials: 'include' });
+    const data = await res.json();
+    _aiAvailable = data.available === true;
+
+    const bubble = document.getElementById('aiChatBubble');
+    if (!bubble) return;
+    if (!_aiAvailable) {
+      bubble.style.display = 'none';
+      return;
+    }
+    bubble.style.display = 'flex';
+
+    // Update subtitle with model info
+    const sub = document.getElementById('aiChatSubtitle');
+    if (sub && data.ollama?.model) {
+      sub.textContent = data.ollama.available
+        ? `${data.ollama.model} · Online`
+        : 'ML & Graph · Ollama offline';
+    }
+  } catch (e) {
+    // AI not available — hide bubble quietly
+    const bubble = document.getElementById('aiChatBubble');
+    if (bubble) bubble.style.display = 'none';
+  }
+}
+
+/** Toggle the chat panel open/closed */
+function toggleAiChat() {
+  const panel  = document.getElementById('aiChatPanel');
+  const bubble = document.getElementById('aiChatBubble');
+  if (!panel) return;
+
+  _aiChatOpen = !_aiChatOpen;
+  panel.classList.toggle('hidden', !_aiChatOpen);
+  if (bubble) bubble.style.display = _aiChatOpen ? 'none' : 'flex';
+
+  if (_aiChatOpen) {
+    setTimeout(() => document.getElementById('aiChatInput')?.focus(), 100);
+    // Hide notification badge
+    const badge = document.getElementById('aiBubbleBadge');
+    if (badge) badge.classList.add('hidden');
+  }
+}
+
+/** Clear chat history */
+function clearAiChat() {
+  _aiHistory = [];
+  const msgs = document.getElementById('aiChatMessages');
+  if (msgs) msgs.innerHTML = `
+    <div class="ai-message ai-message-ai">
+      <div class="ai-msg-content">
+        👋 Chat cleared. Ask me anything about your surveys!
+      </div>
+    </div>`;
+}
+
+/** Add a message to the chat UI */
+function _addAiMessage(role, text) {
+  const msgs = document.getElementById('aiChatMessages');
+  if (!msgs) return;
+
+  const div = document.createElement('div');
+  div.className = 'ai-message ' + (role === 'user' ? 'ai-message-user' : 'ai-message-ai');
+
+  // Simple markdown-like formatting for AI responses
+  let formatted = text;
+  if (role === 'ai') {
+    formatted = formatted
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code style="background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:12px;font-family:monospace">$1</code>')
+      .replace(/\n/g, '<br>');
+  } else {
+    formatted = escHtml(text);
+  }
+
+  div.innerHTML = `<div class="ai-msg-content">${formatted}</div>`;
+  msgs.appendChild(div);
+
+  // Auto-scroll to bottom
+  msgs.scrollTop = msgs.scrollHeight;
+
+  _aiHistory.push({ role, text });
+}
+
+/** Show/hide typing indicator */
+function _setAiTyping(show) {
+  const el = document.getElementById('aiTyping');
+  if (el) el.classList.toggle('hidden', !show);
+}
+
+/** Send user message to AI */
+async function sendAiMessage() {
+  const input = document.getElementById('aiChatInput');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+
+  input.value = '';
+  _addAiMessage('user', text);
+  _setAiTyping(true);
+
+  try {
+    // Try LLM first, fall back to simpler endpoints
+    const res = await fetch(API + '/ai/ask', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question: text,
+        context: _buildAiContext()
+      })
+    });
+    const data = await res.json();
+    _setAiTyping(false);
+
+    if (data.available === false) {
+      _addAiMessage('ai', '⚠️ Ollama is offline — LLM chat requires `ollama serve` running on this machine. Try the quick action buttons above for ML features that work without Ollama.');
+    } else if (data.answer) {
+      _addAiMessage('ai', data.answer);
+    } else if (data.error) {
+      _addAiMessage('ai', '❌ ' + data.error);
+    } else {
+      _addAiMessage('ai', '🤔 I didn\'t get a response. Try rephrasing your question.');
+    }
+  } catch (e) {
+    _setAiTyping(false);
+    _addAiMessage('ai', '❌ Connection error: ' + e.message);
+  }
+}
+
+/** Build context string from current session state */
+function _buildAiContext() {
+  const parts = [];
+  if (typeof state !== 'undefined' && state.researchSession) {
+    const s = state.researchSession;
+    if (s.clientName) parts.push('Client: ' + s.clientName);
+    if (s.jobType)    parts.push('Job type: ' + s.jobType);
+    if (s.jobNumber)  parts.push('Job #' + s.jobNumber);
+  }
+  return parts.join(', ') || 'General surveying question';
+}
+
+/** Quick action buttons */
+async function aiQuickAction(action) {
+  switch (action) {
+    case 'predict': await _aiPredictJob(); break;
+    case 'graph':   await _aiGraphStats(); break;
+    case 'anomaly': await _aiAnomalyCheck(); break;
+  }
+}
+
+async function _aiPredictJob() {
+  const s = typeof state !== 'undefined' ? state.researchSession : null;
+  const jobType    = s?.jobType    || 'BDY';
+  const clientName = s?.clientName || '';
+
+  _addAiMessage('user', '📊 Predict complexity for ' + (clientName || 'current job'));
+  _setAiTyping(true);
+
+  try {
+    const res = await fetch(API + '/ai/predict', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_type: jobType, client_name: clientName })
+    });
+    const data = await res.json();
+    _setAiTyping(false);
+
+    if (!data.available) {
+      _addAiMessage('ai', '⚠️ ML prediction not available. Models may need training.');
+      return;
+    }
+
+    let msg = '📊 **Job Complexity Prediction**\n\n';
+    if (data.prediction) {
+      const p = data.prediction;
+      if (p.adjoiners)  msg += `🏘️ Predicted adjoiners: **${p.adjoiners.predicted}** (±${p.adjoiners.std_dev || '?'})\n`;
+      if (p.cabinet)    msg += `📁 Predicted cabinet: **${p.cabinet.predicted}** (${Math.round((p.cabinet.confidence||0)*100)}% conf)\n`;
+      if (p.complexity) msg += `⚡ Complexity: **${p.complexity}**\n`;
+    }
+    _addAiMessage('ai', msg);
+  } catch (e) {
+    _setAiTyping(false);
+    _addAiMessage('ai', '❌ Prediction error: ' + e.message);
+  }
+}
+
+async function _aiGraphStats() {
+  _addAiMessage('user', '🕸️ Show knowledge graph stats');
+  _setAiTyping(true);
+
+  try {
+    const res = await fetch(API + '/ai/graph/stats', { credentials: 'include' });
+    const data = await res.json();
+    _setAiTyping(false);
+
+    if (!data.available) {
+      _addAiMessage('ai', '⚠️ Knowledge graph is not loaded.');
+      return;
+    }
+
+    let msg = '🕸️ **Knowledge Graph**\n\n';
+    msg += `📍 Nodes: **${data.stats?.nodes?.toLocaleString() || '?'}**\n`;
+    msg += `🔗 Edges: **${data.stats?.edges?.toLocaleString() || '?'}**\n`;
+    if (data.stats?.by_type) {
+      const bt = data.stats.by_type;
+      if (bt.owner)    msg += `👤 Owners: **${bt.owner}**\n`;
+      if (bt.property) msg += `🏠 Properties: **${bt.property}**\n`;
+      if (bt.survey)   msg += `📐 Surveys: **${bt.survey}**\n`;
+    }
+    _addAiMessage('ai', msg);
+  } catch (e) {
+    _setAiTyping(false);
+    _addAiMessage('ai', '❌ Graph error: ' + e.message);
+  }
+}
+
+async function _aiAnomalyCheck() {
+  const s = typeof state !== 'undefined' ? state.researchSession : null;
+  const clientName = s?.clientName || '';
+  const jobType    = s?.jobType || 'BDY';
+  const adjoiners  = s?.subjects?.filter(x => x.type === 'adjoiner')?.length || 0;
+
+  _addAiMessage('user', '⚠️ Run QA anomaly check');
+  _setAiTyping(true);
+
+  try {
+    const res = await fetch(API + '/ai/analyze', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job_type: jobType,
+        client_name: clientName,
+        adjoiner_count: adjoiners,
+        has_deed: s?.subjects?.[0]?.deed_saved || false,
+        has_plat: s?.subjects?.[0]?.plat_saved || false,
+      })
+    });
+    const data = await res.json();
+    _setAiTyping(false);
+
+    if (!data.available) {
+      _addAiMessage('ai', '⚠️ Anomaly detection not available.');
+      return;
+    }
+
+    let msg = '⚠️ **QA Anomaly Check**\n\n';
+    if (data.anomalies && data.anomalies.length > 0) {
+      data.anomalies.forEach(a => {
+        const icon = a.severity === 'high' ? '🔴' : a.severity === 'medium' ? '🟡' : '🟢';
+        msg += `${icon} ${a.message}\n`;
+      });
+    } else {
+      msg += '✅ No anomalies detected — looking good!';
+    }
+    if (data.score != null) {
+      msg += `\n\n📈 Completeness score: **${Math.round(data.score * 100)}%**`;
+    }
+    _addAiMessage('ai', msg);
+  } catch (e) {
+    _setAiTyping(false);
+    _addAiMessage('ai', '❌ Anomaly check error: ' + e.message);
+  }
+}
+
+// Init on page load
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(_initAiChat, 1500);  // Delayed init to not block startup
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO-PREDICT ON SESSION START
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Fire ML prediction right after a session is created.
+ * Called from startSession() after state.researchSession is set.
+ * Gracefully does nothing if AI is unavailable.
+ */
+async function _autoPredict(jobType, clientName) {
+  try {
+    const res = await fetch(API + '/ai/predict', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_type: jobType, client_name: clientName }),
+    });
+    const data = await res.json();
+    if (data.available === false || !data.prediction) return;
+
+    // _showPrediction is defined earlier in the AI Insights section
+    if (typeof _showPrediction === 'function') {
+      _showPrediction(data.prediction);
+    }
+  } catch (_) { /* AI offline — silent */ }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KG ADJOINER SUGGESTIONS (Step 4)
+// ─────────────────────────────────────────────────────────────────────────────
+let _kgSuggestionsCache = null;  // cache per session
+
+/**
+ * Load KG adjoiners for the current client from the knowledge graph.
+ * Called when the user enters Step 4.
+ */
+async function loadKgAdjoiners() {
+  const rs = state.researchSession;
+  const panel = document.getElementById('s4KgSuggestions');
+  const grid  = document.getElementById('s4KgGrid');
+  if (!rs || !panel || !grid) return;
+
+  // Don't re-fetch if already cached for this session
+  if (_kgSuggestionsCache !== null) {
+    _renderKgSuggestions(_kgSuggestionsCache);
+    return;
+  }
+
+  const clientName = encodeURIComponent(rs.client_name);
+  try {
+    const res = await fetch(`${API}/ai/graph/adjoiners/${clientName}`, {
+      credentials: 'include',
+    });
+    const data = await res.json();
+
+    if (!data.available && data.available !== undefined) return; // KG offline
+    const adjoiners = data.adjoiners || [];
+    _kgSuggestionsCache = adjoiners;
+    _renderKgSuggestions(adjoiners);
+  } catch (_) { /* KG unavailable — silent */ }
+}
+
+function _renderKgSuggestions(adjoiners) {
+  const panel = document.getElementById('s4KgSuggestions');
+  const grid  = document.getElementById('s4KgGrid');
+  if (!panel || !grid) return;
+
+  // Filter out names already on the board
+  const rs = state.researchSession;
+  const onBoard = new Set((rs?.subjects || []).map(s => s.name.toLowerCase()));
+  const fresh = adjoiners.filter(a => !onBoard.has(a.name?.toLowerCase()));
+
+  if (!fresh.length) return;  // nothing new to suggest
+
+  panel.classList.remove('hidden');
+  grid.innerHTML = fresh.map(a => `
+    <button class="ai-quick-btn" onclick="addFoundAdjoiner(${JSON.stringify(a.name)}).then(() => { this.disabled=true; this.style.opacity='0.4'; })"
+      title="Job #${a.job_discovered || '?'}">
+      + ${escHtml(a.name || '')}
+    </button>
+  `).join('');
+}
+
+async function kgAddAllSuggestions() {
+  const rs = state.researchSession;
+  const panel = document.getElementById('s4KgSuggestions');
+  if (!_kgSuggestionsCache || !rs) return;
+
+  const onBoard = new Set(rs.subjects.map(s => s.name.toLowerCase()));
+  const toAdd = _kgSuggestionsCache.filter(a => !onBoard.has(a.name?.toLowerCase()));
+  if (!toAdd.length) { showToast('All suggestions already on board', 'info'); return; }
+
+  let added = 0;
+  for (const a of toAdd) {
+    const ok = await addFoundAdjoiner(a.name);
+    if (ok) added++;
+  }
+  if (panel) panel.classList.add('hidden');
+  showToast(`✓ Added ${added} AI suggestion${added !== 1 ? 's' : ''} to board`, 'success');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEGAL DESCRIPTION SUMMARIZER
+// ─────────────────────────────────────────────────────────────────────────────
+async function summarizeLegalDesc() {
+  const descEl = document.getElementById('propDescText');
+  if (!descEl) { showToast('No legal description loaded', 'warn'); return; }
+
+  const text = descEl.textContent.trim();
+  if (text.length < 20) { showToast('Legal description too short to summarize', 'warn'); return; }
+
+  const summaryEl = document.getElementById('legalDescSummary');
+  if (!summaryEl) return;
+
+  summaryEl.classList.remove('hidden');
+  summaryEl.textContent = '✨ Summarizing with Nova AI…';
+
+  try {
+    const res = await fetch(API + '/ai/summarize', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+
+    if (data.available === false) {
+      summaryEl.textContent = '⚠️ Ollama is offline — start "ollama serve" to enable AI summarization.';
+      return;
+    }
+    if (data.summary) {
+      summaryEl.textContent = data.summary;
+    } else if (data.error) {
+      summaryEl.textContent = '❌ ' + data.error;
+    }
+  } catch (e) {
+    summaryEl.textContent = '❌ Connection error: ' + e.message;
+  }
+}
+
+// ── Hook goToStep to fire KG lookup when entering Step 4 ──────────────────
+// Patch the existing goToStep function to add a side-effect for step 4.
+const _origGoToStep = window.goToStep;
+if (typeof _origGoToStep === 'function') {
+  window.goToStep = function(n) {
+    _origGoToStep(n);
+    if (n === 4) {
+      _kgSuggestionsCache = null;  // reset so we re-fetch for each job
+      loadKgAdjoiners();
+    }
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI SIMILAR DESCRIPTIONS  (embeddings-based, inline results)
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Find similar legal descriptions using the AI embeddings index (/api/ai/similar).
+ * Falls back gracefully if sentence-transformers / chromadb aren't installed.
+ * Results appear inline below the property description.
+ */
+async function aiSimilarDescriptions() {
+  const descEl  = document.getElementById('propDescText');
+  const resultEl = document.getElementById('aiSimilarResults');
+  if (!descEl || !resultEl) return;
+
+  const text = descEl.textContent.trim();
+  if (text.length < 20) {
+    showToast('Extract the property description first', 'warn');
+    return;
+  }
+
+  resultEl.classList.remove('hidden');
+  resultEl.innerHTML = `<div style="padding:10px;font-size:12px;color:var(--text3);display:flex;align-items:center;gap:8px">
+    <span class="spinner" style="width:14px;height:14px"></span> Searching AI embeddings…
+  </div>`;
+
+  try {
+    const res = await fetch(API + '/ai/similar', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: text, top_k: 8 }),
+    });
+    const data = await res.json();
+
+    if (data.available === false) {
+      resultEl.innerHTML = `
+        <div style="padding:10px 12px;background:rgba(176,128,224,.06);border:1px solid rgba(176,128,224,.2);border-radius:8px;font-size:12px;color:var(--text3)">
+          🔗 <strong style="color:#b080e0">AI Similar</strong> requires
+          <code style="background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px">sentence-transformers</code>
+          and <code style="background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px">chromadb</code>.
+          Install them in the .venv to enable semantic search.
+          <br><br>
+          <button class="btn btn-outline btn-sm" onclick="findSimilarDescriptions()"
+            style="font-size:11px">📋 Use TF-IDF Similar instead</button>
+        </div>`;
+      return;
+    }
+
+    if (!data.results || data.results.length === 0) {
+      resultEl.innerHTML = `
+        <div style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--text3)">
+          🔍 No similar descriptions found in the embeddings index.
+          The index may be empty — descriptions get indexed when deeds are opened.
+        </div>`;
+      return;
+    }
+
+    // Build results
+    let html = `
+      <div style="border:1px solid rgba(176,128,224,.2);border-radius:8px;overflow:hidden">
+        <div style="padding:10px 14px;background:rgba(176,128,224,.06);border-bottom:1px solid rgba(176,128,224,.15);display:flex;align-items:center;gap:8px">
+          <span style="font-size:13px">🔗</span>
+          <div>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#b080e0">AI Similar Descriptions</div>
+            <div style="font-size:10px;color:var(--text3)">${data.count} semantically similar parcels · embeddings index</div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('aiSimilarResults').classList.add('hidden')"
+            style="margin-left:auto;font-size:11px;padding:2px 8px">✕</button>
+        </div>
+        <div style="padding:8px;display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto">`;
+
+    for (const r of data.results) {
+      const dist  = r.distance ?? 1;
+      // Convert cosine distance to similarity % (lower distance = more similar)
+      const sim   = Math.max(0, Math.min(100, Math.round((1 - dist) * 100)));
+      const simColor = sim >= 70 ? '#56d3a0' : sim >= 40 ? '#e3c55a' : '#b080e0';
+      const onBoard  = state.researchSession?.subjects?.some(
+        s => s.name?.toLowerCase() === (r.metadata?.owner || '').toLowerCase()
+      );
+
+      html += `
+        <div style="padding:8px 10px;border-radius:6px;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.04);display:flex;align-items:center;gap:10px">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:800;color:${simColor};min-width:36px;text-align:center">${sim}%</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              ${escHtml(r.metadata?.owner || r.id || 'Unknown')}
+            </div>
+            <div style="font-size:10px;color:var(--text3)">
+              ${r.metadata?.upc ? `UPC ${escHtml(r.metadata.upc)}` : ''}
+              ${r.metadata?.plat ? ` · ${escHtml(r.metadata.plat)}` : ''}
+            </div>
+          </div>
+          ${!onBoard && r.metadata?.owner ? `
+          <button class="btn btn-outline btn-sm" style="font-size:10px;padding:2px 8px;white-space:nowrap"
+            onclick="addFoundAdjoiner(${JSON.stringify(r.metadata.owner)})">+ Add</button>` : ''}
+        </div>`;
+    }
+
+    html += `</div></div>`;
+    resultEl.innerHTML = html;
+
+  } catch (e) {
+    resultEl.innerHTML = `<div style="padding:8px;font-size:12px;color:var(--danger)">❌ ${escHtml(e.message)}</div>`;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO QA ON DEED SAVE
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Run anomaly detection silently after a deed is saved.
+ * Shows a non-blocking toast banner — flags only, no modal.
+ * Skips if no session or AI unavailable.
+ */
+async function _autoQaCheck() {
+  const rs = state.researchSession;
+  if (!rs) return;
+
+  try {
+    const adjoiners = rs.subjects.filter(s => s.type === 'adjoiner');
+    const clientSubj = rs.subjects.find(s => s.type === 'client');
+
+    const res = await fetch(API + '/ai/analyze', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job_type: rs.job_type || 'BDY',
+        client_name: rs.client_name || '',
+        adjoiners_found: adjoiners.length,
+        deed_found: !!clientSubj?.deed_saved,
+        plat_found: !!clientSubj?.plat_saved,
+        subjects: rs.subjects.map(s => ({
+          type: s.type,
+          name: s.name,
+          deed_saved: !!s.deed_saved,
+          plat_saved: !!s.plat_saved,
+        })),
+      }),
+    });
+    const data = await res.json();
+
+    if (data.available === false) return;  // AI offline — silent
+
+    const flags = data.flags || [];
+    // Only surface warnings/errors (skip info-level)
+    const important = flags.filter(f => f.level === 'warning' || f.level === 'error');
+    if (!important.length) return;  // clean — no toast needed
+
+    _renderQaFlags(important);
+  } catch (_) { /* silent */ }
+}
+
+/**
+ * Render QA flags as a compact stackable toast-like banner.
+ * High-severity flags show in red, warnings in yellow.
+ */
+function _renderQaFlags(flags) {
+  // Find or create a QA banner container
+  let banner = document.getElementById('qaFlagBanner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'qaFlagBanner';
+    banner.style.cssText = `
+      position:fixed; bottom:90px; right:24px; z-index:7500;
+      display:flex; flex-direction:column; gap:6px; max-width:320px;
+    `;
+    document.body.appendChild(banner);
+  }
+
+  for (const f of flags) {
+    const isError = f.level === 'error';
+    const color   = isError ? '#ff7b72' : '#e3c55a';
+    const bg      = isError ? 'rgba(255,123,114,.1)' : 'rgba(227,197,90,.08)';
+    const border  = isError ? 'rgba(255,123,114,.3)' : 'rgba(227,197,90,.3)';
+    const icon    = isError ? '🔴' : '⚠️';
+
+    const item = document.createElement('div');
+    item.style.cssText = `
+      padding:10px 12px; border-radius:8px; background:${bg};
+      border:1px solid ${border}; font-size:12px; color:${color};
+      display:flex; align-items:flex-start; gap:8px; line-height:1.5;
+      animation:aiMsgIn .25s ease; box-shadow:0 4px 16px rgba(0,0,0,.3);
+    `;
+    item.innerHTML = `
+      <span>${icon}</span>
+      <span style="flex:1"><strong>QA:</strong> ${escHtml(f.message)}</span>
+      <button onclick="this.parentElement.remove()" style="background:none;border:none;color:${color};cursor:pointer;font-size:14px;padding:0;line-height:1">✕</button>
+    `;
+    banner.appendChild(item);
+
+    // Auto-dismiss after 12 seconds
+    setTimeout(() => item.remove(), 12000);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AI INTEGRATION — Wires frontend AI panels to /api/ai/* endpoints
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _aiStatus = null;       // Cached AI subsystem status
+let _aiPredCache = {};      // Prediction cache: "BDY|ClientName" -> result
+let _kgSuggestions = [];    // Current KG adjoiner suggestions
+
+/**
+ * Refresh the AI Insights panel on Step 1.
+ * Fetches: index health, research analytics, AI status, and predictions.
+ * @param {boolean} force - If true, force a full refresh (not cached).
+ */
+async function refreshAiInsights(force = false) {
+  try {
+    // 1. Fetch AI subsystem status
+    const statusRes = await fetch(API + '/api/ai/status', { credentials: 'include' });
+    if (statusRes.ok) {
+      _aiStatus = await statusRes.json();
+    }
+
+    // 2. Populate index health metrics from existing endpoints
+    const [healthRes, analyticsRes] = await Promise.all([
+      fetch(API + '/api/index-health', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(API + '/api/research-analytics', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+
+    // Index health
+    if (healthRes) {
+      _setText('aiTotalParcels', _fmtNum(healthRes.total_parcels || 0));
+      _setText('aiArcgisPct', (healthRes.arcgis_pct || 0) + '%');
+    }
+
+    // Research analytics → conflicts & jobs
+    if (analyticsRes) {
+      _setText('aiConflictCount', analyticsRes.total_conflicts || '0');
+      _setText('aiJobsScanned', analyticsRes.jobs_scanned || '0');
+    }
+
+    // 3. Show KG stats in a tooltip-like way
+    if (_aiStatus?.knowledge_graph?.available) {
+      const kgNodes = _aiStatus.knowledge_graph.nodes || 0;
+      const kgEdges = _aiStatus.knowledge_graph.edges || 0;
+      if (kgNodes > 0) {
+        _setText('aiJobsScanned', _fmtNum(kgNodes));
+      }
+    }
+
+    // 4. Fetch predictions based on current job type
+    const jobType = document.getElementById('setupJobType')?.value || 'BDY';
+    const clientName = document.getElementById('setupClient')?.value || '';
+    await fetchAiPredictions(jobType, clientName);
+
+    // 5. Show/hide stale warning
+    if (healthRes?.is_stale) {
+      const warn = document.getElementById('aiStaleWarning');
+      const text = document.getElementById('aiStaleText');
+      if (warn) warn.classList.remove('hidden');
+      if (text) text.textContent = `Index last updated ${healthRes.last_updated || 'unknown'}`;
+    }
+
+  } catch (e) {
+    console.debug('[ai] refreshAiInsights failed:', e);
+  }
+}
+
+/**
+ * Fetch ML complexity predictions for the current job setup.
+ */
+async function fetchAiPredictions(jobType = 'BDY', clientName = '') {
+  const cacheKey = `${jobType}|${clientName}`;
+  if (_aiPredCache[cacheKey]) {
+    _renderPredictions(_aiPredCache[cacheKey]);
+    return;
+  }
+
+  try {
+    const res = await fetch(API + '/api/ai/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ job_type: jobType, client_name: clientName }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.available === false) return;
+
+    _aiPredCache[cacheKey] = data;
+    _renderPredictions(data);
+  } catch (e) {
+    console.debug('[ai] prediction failed:', e);
+  }
+}
+
+function _renderPredictions(data) {
+  const row = document.getElementById('aiPredictionRow');
+  if (!row) return;
+  row.classList.remove('hidden');
+
+  // Complexity badge
+  const complexity = data.complexity || 'moderate';
+  const badge = document.getElementById('aiPredBadge');
+  const compEl = document.getElementById('aiPredComplexity');
+  if (compEl) compEl.textContent = complexity;
+  if (badge) {
+    badge.className = 'ai-prediction-badge';
+    if (complexity === 'high') badge.style.borderColor = 'rgba(255,123,114,.4)';
+    else if (complexity === 'low') badge.style.borderColor = 'rgba(86,211,160,.4)';
+    else badge.style.borderColor = 'rgba(227,197,90,.4)';
+  }
+
+  // Adjoiners
+  _setText('aiPredAdjoiners', (data.predicted_adjoiners ?? '—'));
+  const rangeEl = document.getElementById('aiPredRange');
+  if (rangeEl && data.predicted_adjoiners) {
+    const adj = data.predicted_adjoiners;
+    rangeEl.textContent = `(±${Math.max(1, Math.round(adj * 0.3))})`;
+  }
+
+  // Cabinets
+  _setText('aiPredCabinets', data.predicted_cabinet || '—');
+
+  // Confidence
+  const conf = data.confidence || 'fallback';
+  _setText('aiPredConfidence', conf === 'fallback' ? 'statistical' : conf);
+}
+
+/**
+ * Fetch KG-based adjoiner suggestions for Step 4.
+ * Called when entering Step 4 after a session is active.
+ */
+async function fetchKgSuggestions() {
+  const clientName = state.researchSession?.client_name || '';
+  if (!clientName) return;
+
+  try {
+    const res = await fetch(API + '/api/ai/graph/adjoiners/' + encodeURIComponent(clientName), {
+      credentials: 'include',
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+
+    _kgSuggestions = data.adjoiners || [];
+    _renderKgSuggestions();
+  } catch (e) {
+    console.debug('[ai] KG suggestions failed:', e);
+  }
+}
+
+function _renderKgSuggestions() {
+  const panel = document.getElementById('s4KgSuggestions');
+  const grid = document.getElementById('s4KgGrid');
+  if (!panel || !grid) return;
+
+  if (!_kgSuggestions.length) {
+    panel.classList.add('hidden');
+    return;
+  }
+
+  // Filter out names already on the research board
+  const existing = new Set(
+    (state.researchSession?.subjects || []).map(s => s.name?.toLowerCase())
+  );
+  const novel = _kgSuggestions.filter(a => !existing.has(a.name?.toLowerCase()));
+
+  if (!novel.length) {
+    panel.classList.add('hidden');
+    return;
+  }
+
+  panel.classList.remove('hidden');
+  grid.innerHTML = novel.map((a, i) => `
+    <button class="kg-suggestion-chip" id="kgChip${i}"
+      onclick="kgAddSuggestion(${i})"
+      title="From job #${a.job_discovered || '?'}"
+      style="background:rgba(121,168,224,.1);border:1px solid rgba(121,168,224,.25);
+             color:#a8c8ec;border-radius:20px;padding:5px 14px;font-size:12px;
+             cursor:pointer;font-weight:500;transition:all .15s;
+             display:inline-flex;align-items:center;gap:6px">
+      <span style="font-size:10px;opacity:.6">+</span>
+      ${_escHtml(a.name)}
+      <span style="font-size:9px;opacity:.5">#${a.job_discovered || '?'}</span>
+    </button>
+  `).join('');
+}
+
+function kgAddSuggestion(idx) {
+  const adj = _kgSuggestions[idx];
+  if (!adj) return;
+
+  // Add to research session
+  if (!state.researchSession) return;
+  if (!state.researchSession.subjects) state.researchSession.subjects = [];
+
+  // Avoid duplicates
+  const exists = state.researchSession.subjects.some(
+    s => s.name?.toLowerCase() === adj.name?.toLowerCase()
+  );
+  if (exists) {
+    showToast(`${adj.name} already on board`, 'warn');
+    return;
+  }
+
+  state.researchSession.subjects.push({
+    name: adj.name,
+    type: 'adjoiner',
+    source: 'knowledge_graph',
+    deed_saved: false,
+    plat_saved: false,
+  });
+
+  // Visual feedback
+  const chip = document.getElementById('kgChip' + idx);
+  if (chip) {
+    chip.style.background = 'rgba(86,211,160,.15)';
+    chip.style.borderColor = 'rgba(86,211,160,.4)';
+    chip.style.color = '#56d3a0';
+    chip.innerHTML = `✓ ${_escHtml(adj.name)}`;
+    chip.disabled = true;
+    chip.style.cursor = 'default';
+  }
+
+  showToast(`Added ${adj.name} from knowledge graph`, 'success');
+}
+
+function kgAddAllSuggestions() {
+  for (let i = 0; i < _kgSuggestions.length; i++) {
+    kgAddSuggestion(i);
+  }
+}
+
+// ── Nova AI Chat Panel ───────────────────────────────────────────────────────
+
+let _novaChatOpen = false;
+let _novaChatHistory = [];
+
+function toggleNovaChat() {
+  _novaChatOpen = !_novaChatOpen;
+  const panel = document.getElementById('novaChatPanel');
+  if (panel) {
+    panel.classList.toggle('hidden', !_novaChatOpen);
+    if (_novaChatOpen) {
+      document.getElementById('novaChatInput')?.focus();
+    }
+  }
+}
+
+async function sendNovaMessage() {
+  const input = document.getElementById('novaChatInput');
+  const question = input?.value?.trim();
+  if (!question) return;
+
+  input.value = '';
+
+  // Add user message to chat
+  _addNovaMessage('user', question);
+
+  // Build context from current session
+  let context = '';
+  if (state.researchSession) {
+    const s = state.researchSession;
+    context = `Job #${s.job_number} - ${s.client_name} (${s.job_type})`;
+    const subjects = s.subjects || [];
+    if (subjects.length) {
+      context += `. Subjects: ${subjects.map(sub => sub.name).join(', ')}`;
+    }
+  }
+
+  // Show typing indicator
+  const typingId = _addNovaMessage('assistant', '⋯ thinking...');
+
+  try {
+    const res = await fetch(API + '/api/ai/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ question, context }),
+    });
+    const data = await res.json();
+
+    // Remove typing indicator and show response
+    document.getElementById(typingId)?.remove();
+
+    if (data.answer) {
+      _addNovaMessage('assistant', data.answer);
+    } else if (data.available === false) {
+      _addNovaMessage('assistant', '🔌 Ollama is not running. Start it with `ollama serve` to enable AI chat.');
+    } else {
+      _addNovaMessage('assistant', '❌ ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    document.getElementById(typingId)?.remove();
+    _addNovaMessage('assistant', '❌ Network error: ' + e.message);
+  }
+}
+
+function _addNovaMessage(role, text) {
+  const container = document.getElementById('novaChatMessages');
+  if (!container) return '';
+
+  const id = 'nova_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5);
+  const isUser = role === 'user';
+
+  const msg = document.createElement('div');
+  msg.id = id;
+  msg.style.cssText = `
+    padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.6;
+    max-width: 85%; word-wrap: break-word; animation: aiMsgIn .2s ease;
+    ${isUser
+      ? 'background: rgba(79,172,254,.15); border: 1px solid rgba(79,172,254,.25); color: #a8d4ff; margin-left: auto;'
+      : 'background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); color: var(--text2);'
+    }
+  `;
+  msg.innerHTML = `
+    <div style="font-size:10px;font-weight:600;color:${isUser ? 'var(--accent)' : '#b080e0'};margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">
+      ${isUser ? '🧑 You' : '🤖 Nova'}
+    </div>
+    <div>${_escHtml(text)}</div>
+  `;
+
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+
+  _novaChatHistory.push({ role, text });
+  return id;
+}
+
+// ── AI Helpers ───────────────────────────────────────────────────────────────
+
+function _setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function _fmtNum(n) {
+  return typeof n === 'number' ? n.toLocaleString() : String(n);
+}
+
+function _escHtml(s) {
+  if (typeof escHtml === 'function') return escHtml(s);
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── Hook into existing app lifecycle ─────────────────────────────────────────
+
+// Refresh AI insights when Step 1 loads or job type changes
+const _origGoToStep = window.goToStep;
+if (typeof _origGoToStep === 'function') {
+  window.goToStep = function(stepNum) {
+    _origGoToStep.apply(this, arguments);
+    if (stepNum === 1) {
+      setTimeout(() => refreshAiInsights(), 500);
+    }
+    if (stepNum === 4) {
+      setTimeout(() => fetchKgSuggestions(), 300);
+    }
+  };
+}
+
+// Watch job type dropdown for prediction updates
+document.addEventListener('DOMContentLoaded', () => {
+  const jobTypeSelect = document.getElementById('setupJobType');
+  if (jobTypeSelect) {
+    jobTypeSelect.addEventListener('change', () => {
+      const jt = jobTypeSelect.value;
+      const cn = document.getElementById('setupClient')?.value || '';
+      fetchAiPredictions(jt, cn);
+    });
+  }
+
+  // Auto-refresh AI insights after a short delay (let main app init first)
+  setTimeout(() => refreshAiInsights(), 2000);
+});
+
+// ── CSS keyframe for message animation (inject once) ─────────────────────────
+(function() {
+  if (document.getElementById('aiAnimStyles')) return;
+  const style = document.createElement('style');
+  style.id = 'aiAnimStyles';
+  style.textContent = `
+    @keyframes aiMsgIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+  `;
+  document.head.appendChild(style);
+})();
+
+// ── Functions referenced by HTML onclick handlers ────────────────────────────
+
+/** Toggle the AI chat panel (called by the floating bubble button). */
+function toggleAiChat() {
+  const panel = document.getElementById('aiChatPanel');
+  if (!panel) return;
+  const isHidden = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !isHidden);
+  if (isHidden) {
+    document.getElementById('aiChatInput')?.focus();
+  }
+}
+
+/** Send a message in the AI chat panel. */
+async function sendAiMessage() {
+  const input = document.getElementById('aiChatInput');
+  const question = input?.value?.trim();
+  if (!question) return;
+  input.value = '';
+
+  // Add user message
+  _appendChatMsg('user', question);
+
+  // Show typing
+  const typing = document.getElementById('aiTyping');
+  if (typing) typing.classList.remove('hidden');
+
+  // Build context from current session
+  let context = '';
+  if (state.researchSession) {
+    const s = state.researchSession;
+    context = `Job #${s.job_number} - ${s.client_name} (${s.job_type})`;
+    const subjects = s.subjects || [];
+    if (subjects.length) {
+      context += `. Subjects: ${subjects.map(sub => sub.name).join(', ')}`;
+    }
+  }
+
+  try {
+    const res = await fetch(API + '/api/ai/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ question, context }),
+    });
+    const data = await res.json();
+    if (typing) typing.classList.add('hidden');
+
+    if (data.answer) {
+      _appendChatMsg('ai', data.answer);
+    } else if (data.available === false) {
+      _appendChatMsg('ai', '🔌 Ollama is not running. Start it with `ollama serve` to enable AI chat.');
+    } else {
+      _appendChatMsg('ai', '❌ ' + (data.error || 'No response'));
+    }
+  } catch (e) {
+    if (typing) typing.classList.add('hidden');
+    _appendChatMsg('ai', '❌ Network error: ' + e.message);
+  }
+}
+
+/** Clear all messages in the AI chat. */
+function clearAiChat() {
+  const container = document.getElementById('aiChatMessages');
+  if (container) {
+    container.innerHTML = `
+      <div class="ai-message ai-message-ai">
+        <div class="ai-msg-content">
+          👋 I'm Nova, your AI surveying assistant. Ask me about legal descriptions, adjoiners, predictions, or anything survey-related.
+        </div>
+      </div>`;
+  }
+}
+
+/** Quick action buttons in the chat panel. */
+async function aiQuickAction(action) {
+  const typing = document.getElementById('aiTyping');
+
+  if (action === 'predict') {
+    const jt = document.getElementById('setupJobType')?.value || 'BDY';
+    const cn = state.researchSession?.client_name || '';
+    _appendChatMsg('user', `📊 Predict complexity for ${jt} job${cn ? ' — ' + cn : ''}`);
+    if (typing) typing.classList.remove('hidden');
+    try {
+      const res = await fetch(API + '/api/ai/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ job_type: jt, client_name: cn }),
+      });
+      const data = await res.json();
+      if (typing) typing.classList.add('hidden');
+      if (data.available === false) {
+        _appendChatMsg('ai', '❌ ML predictor not available');
+      } else {
+        _appendChatMsg('ai',
+          `Complexity: ${data.complexity || '?'}\n` +
+          `Expected adjoiners: ${data.predicted_adjoiners ?? '?'}\n` +
+          `Likely cabinet: ${data.predicted_cabinet || '?'}\n` +
+          `Model: ${data.confidence || 'fallback'}`
+        );
+      }
+    } catch (e) {
+      if (typing) typing.classList.add('hidden');
+      _appendChatMsg('ai', '❌ ' + e.message);
+    }
+
+  } else if (action === 'graph') {
+    _appendChatMsg('user', '🕸️ Show knowledge graph stats');
+    if (typing) typing.classList.remove('hidden');
+    try {
+      const res = await fetch(API + '/api/ai/graph/stats', { credentials: 'include' });
+      const data = await res.json();
+      if (typing) typing.classList.add('hidden');
+      if (data.available === false) {
+        _appendChatMsg('ai', '❌ Knowledge graph not available');
+      } else {
+        const mc = (data.most_connected || []).slice(0, 5)
+          .map(m => `  • ${m.name} (${m.adjoiners} adjoiners)`).join('\n');
+        _appendChatMsg('ai',
+          `Nodes: ${_fmtNum(data.total_nodes || 0)}\n` +
+          `Edges: ${_fmtNum(data.total_edges || 0)}\n` +
+          `Persons: ${data.node_types?.person || 0}\n` +
+          `Jobs: ${data.node_types?.job || 0}\n` +
+          (mc ? `\nMost connected:\n${mc}` : '')
+        );
+      }
+    } catch (e) {
+      if (typing) typing.classList.add('hidden');
+      _appendChatMsg('ai', '❌ ' + e.message);
+    }
+
+  } else if (action === 'anomaly') {
+    const cn = state.researchSession?.client_name || '';
+    const jt = state.researchSession?.job_type || 'BDY';
+    _appendChatMsg('user', '⚠️ Run QA check' + (cn ? ' for ' + cn : ''));
+    if (typing) typing.classList.remove('hidden');
+    try {
+      const subjects = state.researchSession?.subjects || [];
+      const adjCount = subjects.filter(s => s.type === 'adjoiner').length;
+      const res = await fetch(API + '/api/ai/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          job_type: jt,
+          client_name: cn,
+          adjoiners_found: adjCount,
+          deed_found: subjects.some(s => s.deed_saved),
+          plat_found: subjects.some(s => s.plat_saved),
+          subjects: subjects,
+        }),
+      });
+      const data = await res.json();
+      if (typing) typing.classList.add('hidden');
+      if (data.available === false) {
+        _appendChatMsg('ai', '❌ Anomaly detector not available');
+      } else if (!data.flags?.length) {
+        _appendChatMsg('ai', '✅ No anomalies detected — research looks good!');
+      } else {
+        const flags = data.flags.map(f => `${f.level === 'error' ? '🔴' : '⚠️'} ${f.message}`).join('\n');
+        _appendChatMsg('ai', `Found ${data.count} issue(s):\n${flags}`);
+      }
+    } catch (e) {
+      if (typing) typing.classList.add('hidden');
+      _appendChatMsg('ai', '❌ ' + e.message);
+    }
+  }
+}
+
+/** Append a message to the AI chat panel. */
+function _appendChatMsg(role, text) {
+  const container = document.getElementById('aiChatMessages');
+  if (!container) return;
+  const isAi = role === 'ai';
+  const div = document.createElement('div');
+  div.className = `ai-message ai-message-${role}`;
+  div.style.animation = 'aiMsgIn .2s ease';
+  div.innerHTML = `<div class="ai-msg-content">${isAi ? '🤖 ' : ''}${_escHtml(text).replace(/\n/g, '<br>')}</div>`;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KG CLIENT NAME AUTOCOMPLETE
+// ─────────────────────────────────────────────────────────────────────────────
+async function _kgClientSuggest(query) {
+  const dropdown = document.getElementById('kgClientDropdown');
+  if (!dropdown) return;
+  if (!query || query.length < 2) { dropdown.classList.add('hidden'); dropdown.innerHTML = ''; return; }
+  try {
+    const res = await fetch(`${API}/ai/graph/search`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, limit: 8 }),
+    });
+    const data = await res.json();
+    if (!data.results || data.results.length === 0 || data.available === false) { dropdown.classList.add('hidden'); return; }
+    const clients = data.results.filter(r => r.jobs > 0);
+    if (!clients.length) { dropdown.classList.add('hidden'); return; }
+    dropdown.innerHTML = clients.map(r => `
+      <div onclick="document.getElementById('setupClient').value=${JSON.stringify(r.name)};document.getElementById('kgClientDropdown').classList.add('hidden')"
+        style="padding:8px 12px;cursor:pointer;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;transition:background .1s"
+        onmouseenter="this.style.background='rgba(121,168,224,.08)'" onmouseleave="this.style.background='none'">
+        <span>${escHtml(r.name)}</span>
+        <span style="font-size:10px;color:var(--text3)">${r.jobs} job${r.jobs !== 1 ? 's' : ''}${r.adjoiners ? ` · ${r.adjoiners} adj` : ''}</span>
+      </div>`).join('');
+    dropdown.classList.remove('hidden');
+  } catch (_) { dropdown.classList.add('hidden'); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KG POPULATE FROM ARCHIVE
+// ─────────────────────────────────────────────────────────────────────────────
+async function kgPopulateFromArchive() {
+  const btn = document.getElementById('btnKgPopulate');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Building…'; }
+  try {
+    const res = await fetch(`${API}/ai/graph/populate`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (data.available === false) { showToast('Knowledge graph is offline', 'warn'); return; }
+    if (!data.success) { showToast('KG populate failed: ' + (data.error || 'Unknown'), 'error'); return; }
+    const { total_nodes, total_edges, persons_added, jobs_added, adjacencies_added } = data;
+    showToast(`KG Updated — ${(total_nodes||0).toLocaleString()} nodes, ${(total_edges||0).toLocaleString()} edges · +${persons_added||0} people, +${jobs_added||0} jobs, +${adjacencies_added||0} adjacencies`, 'success');
+    refreshAiInsights();
+  } catch (e) {
+    showToast('KG populate error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🕸️ Update KG'; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO-INDEX DEED DESCRIPTIONS INTO EMBEDDINGS
+// ─────────────────────────────────────────────────────────────────────────────
+async function _indexDescriptionEmbedding(desc, docNo) {
+  const text = desc?.legal_description || desc?.full_text || '';
+  if (!text || text.length < 30) return;
+  const rs = state.researchSession;
+  const metadata = {
+    doc_no: docNo || '',
+    owner: rs?.client_name || '',
+    upc: rs?.client_upc || '',
+    trs: (desc.trs_refs || []).join(', '),
+    job_number: rs?.job_number || '',
+    desc_type: desc.desc_type || '',
+  };
+  await fetch(`${API}/ai/embed`, {
+    method: 'POST', credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: `deed_${docNo || Date.now()}`, text, metadata }),
+  });
+}
