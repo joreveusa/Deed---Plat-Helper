@@ -11,6 +11,7 @@ import math
 import shutil
 import tempfile
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 import fitz          # PyMuPDF  — PDF → image
 import pytesseract
@@ -54,7 +55,7 @@ from helpers.teams import (
 
 # ── Helper modules (extracted from this file for maintainability) ─────────────
 from helpers.metes_bounds import (
-    parse_metes_bounds, calls_to_coords, _bearing_to_azimuth,
+    parse_metes_bounds, calls_to_coords, calls_to_full_coords, _bearing_to_azimuth,
     extract_trs, detect_monuments, classify_description_type,
     shoelace_area, has_pob,
     _BEARING_PAT, _BEARING_VERBOSE, _CURVE_PAT,
@@ -3831,7 +3832,10 @@ def api_extract_calls_from_pdf():
 
 
         calls = parse_metes_bounds(text)
-        pts   = calls_to_coords(calls) if calls else []
+        full  = calls_to_full_coords(calls) if calls else {}
+        pts   = full.get("boundary_coords", []) if full else []
+        tie_pts = full.get("tie_coords", []) if full else []
+        has_tie = full.get("has_tie", False) if full else False
         closure_err = 0.0
         if len(pts) >= 2:
             closure_err = round(math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]), 4)
@@ -3842,6 +3846,8 @@ def api_extract_calls_from_pdf():
             "count":       len(calls),
             "closure_err": closure_err,
             "coords":      pts,
+            "tie_coords":  tie_pts,
+            "has_tie":     has_tie,
             "filename":    filename,
             "source":      source,
         })
@@ -5043,8 +5049,12 @@ def api_extract_deed_description():
         desc_type = classify_description_type(combined, calls, trs_refs)
 
         # Area / perimeter if metes-and-bounds
-        pts = calls_to_coords(calls) if calls else []
-        perimeter = sum(c.get("distance", 0) for c in calls)
+        full      = calls_to_full_coords(calls) if calls else {}
+        pts       = full.get("boundary_coords", []) if full else []
+        tie_pts   = full.get("tie_coords", []) if full else []
+        has_tie   = full.get("has_tie", False) if full else False
+        bdy_calls = [c for c in calls if not c.get("tie_call")]
+        perimeter = sum(c.get("distance", 0) for c in bdy_calls)
         area_sqft = shoelace_area(pts)
 
         # Monuments
@@ -5098,7 +5108,8 @@ def api_extract_deed_description():
                 closure_ratio = f"1:{int(ratio)}"
 
         # Coordinates for the frontend boundary plotter (list of [x, y])
-        coords = [[round(p[0], 4), round(p[1], 4)] for p in pts]
+        coords     = [[round(p[0], 4), round(p[1], 4)] for p in pts]
+        tie_coords = [[round(p[0], 4), round(p[1], 4)] for p in tie_pts]
 
         return jsonify({
             "success": True,
@@ -5107,9 +5118,12 @@ def api_extract_deed_description():
                 "legal_description": legal_desc.strip()[:5000],
                 "source":            source,
                 "trs_refs":          [t["trs"] for t in trs_refs],
-                "calls_count":       len(calls),
+                "calls_count":       len(bdy_calls),
+                "tie_calls_count":   len(calls) - len(bdy_calls),
+                "has_tie":           has_tie,
                 "calls":             calls_formatted[:100],
                 "coords":            coords,
+                "tie_coords":        tie_coords,
                 "closure_err":       closure_err,
                 "closure_ratio":     closure_ratio,
                 "desc_type":         desc_type,
@@ -5521,11 +5535,181 @@ def api_auto_research():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc: str):
-    """Background worker: runs the full 6-step autonomous research pipeline.
+# ── JOB TYPE WORKFLOW CONFIGURATIONS ──────────────────────────────────────────
+# Each job type defines how the auto-research engine behaves.
+# Team: edit these to match your actual processes.
 
-    This is the core autonomous engine. It reuses all existing search/save logic
-    but chains each step together without human intervention.
+_JOB_WORKFLOWS = {
+    # ── Boundary Surveys ──────────────────────────────────────────────────
+    "BDY": {
+        "name": "Boundary Survey",
+        "research_depth": "full",         # full | medium | minimal
+        "needs_adjoiners": "all",         # all | perimeter | affected | none
+        "needs_chain": False,             # deep chain-of-title search
+        "auto_select_confidence": 25,     # relevance score threshold
+        "search_as_grantee_too": True,    # also search grantee index
+        "deliverables": ["boundary_plat", "legal_description", "reference_table", "dxf"],
+        "notes": "Full research — client deed, plat, ALL adjoiners",
+    },
+    "BDY-E": {
+        "name": "Boundary — Existing Corners",
+        "research_depth": "full",
+        "needs_adjoiners": "all",
+        "needs_chain": False,
+        "auto_select_confidence": 25,
+        "search_as_grantee_too": True,
+        "deliverables": ["boundary_plat", "legal_description", "reference_table", "dxf"],
+        "notes": "Retracement — locate existing monuments. Check plats for monument descriptions.",
+    },
+    "BDY-N": {
+        "name": "Boundary — New Corners",
+        "research_depth": "full",
+        "needs_adjoiners": "all",
+        "needs_chain": True,              # deep chain to understand boundary history
+        "auto_select_confidence": 20,     # more aggressive — want all deeds
+        "search_as_grantee_too": True,
+        "deliverables": ["boundary_plat", "legal_description", "reference_table", "dxf"],
+        "notes": "Original survey — set new monuments. Need full chain and BLM/GLO check.",
+    },
+
+    # ── Subdivision ───────────────────────────────────────────────────────
+    "SUB": {
+        "name": "Subdivision",
+        "research_depth": "full",
+        "needs_adjoiners": "perimeter",   # only surrounding parcels
+        "needs_chain": False,
+        "auto_select_confidence": 25,
+        "search_as_grantee_too": True,
+        "deliverables": ["subdivision_plat", "legal_descriptions", "reference_table"],
+        "notes": "Parent parcel being divided. Research perimeter adjoiners only.",
+    },
+
+    # ── Lot Line Adjustment ──────────────────────────────────────────────
+    "LLA": {
+        "name": "Lot Line Adjustment",
+        "research_depth": "medium",
+        "needs_adjoiners": "affected",    # only parcels touching the adjusted line
+        "needs_chain": False,
+        "auto_select_confidence": 25,
+        "search_as_grantee_too": True,
+        "deliverables": ["lla_plat", "legal_descriptions", "reference_table"],
+        "notes": "Two parcels involved. Research both parcels + affected adjoiners.",
+    },
+
+    # ── Land Consolidation ───────────────────────────────────────────────
+    "LC": {
+        "name": "Land Consolidation",
+        "research_depth": "medium",
+        "needs_adjoiners": "perimeter",
+        "needs_chain": False,
+        "auto_select_confidence": 25,
+        "search_as_grantee_too": True,
+        "deliverables": ["consolidation_plat", "legal_description", "reference_table"],
+        "notes": "Merging parcels. Perimeter adjoiners only.",
+    },
+
+    # ── FEMA Topo ────────────────────────────────────────────────────────
+    "FT": {
+        "name": "FEMA Topographic Survey",
+        "research_depth": "minimal",
+        "needs_adjoiners": "none",        # NO adjoiners for topo
+        "needs_chain": False,
+        "auto_select_confidence": 30,
+        "search_as_grantee_too": False,
+        "deliverables": ["elevation_certificate", "topo_dwg"],
+        "notes": "Deed for legal description only. No adjoiners. No plat required.",
+    },
+
+    # ── Easement ─────────────────────────────────────────────────────────
+    "EAS": {
+        "name": "Easement Survey",
+        "research_depth": "medium",
+        "needs_adjoiners": "affected",    # parcels involved in easement
+        "needs_chain": False,
+        "auto_select_confidence": 25,
+        "search_as_grantee_too": True,
+        "deliverables": ["easement_exhibit", "legal_description"],
+        "notes": "Search both servient and dominant parcels. Find easement document.",
+    },
+
+    # ── Permit Survey ────────────────────────────────────────────────────
+    "P": {
+        "name": "Permit Survey",
+        "research_depth": "minimal",
+        "needs_adjoiners": "none",        # NO adjoiners for permit
+        "needs_chain": False,
+        "auto_select_confidence": 30,
+        "search_as_grantee_too": False,
+        "deliverables": ["site_plan"],
+        "notes": "Deed for legal desc only. No adjoiners. No plat needed.",
+    },
+
+    # ── Survey Exam (Desktop Review) ─────────────────────────────────────
+    "SE": {
+        "name": "Survey Exam",
+        "research_depth": "maximum",      # MAXIMUM — this IS the job
+        "needs_adjoiners": "all",
+        "needs_chain": True,              # deep chain of title
+        "auto_select_confidence": 15,     # very aggressive — grab everything
+        "search_as_grantee_too": True,
+        "deliverables": ["written_report", "reference_table"],
+        "notes": "Desktop research is the entire job. Pull everything — deep chain, all adjoiners, similarity search.",
+    },
+
+    # ── Improvement Location Report ──────────────────────────────────────
+    "ILR": {
+        "name": "Improvement Location Report",
+        "research_depth": "minimal",
+        "needs_adjoiners": "none",
+        "needs_chain": False,
+        "auto_select_confidence": 30,
+        "search_as_grantee_too": False,
+        "deliverables": ["ilr_certificate"],
+        "notes": "Deed for legal desc only. Measure structure setbacks.",
+    },
+
+    # ── Lot Survey ───────────────────────────────────────────────────────
+    "LS": {
+        "name": "Lot Survey",
+        "research_depth": "medium",
+        "needs_adjoiners": "affected",
+        "needs_chain": False,
+        "auto_select_confidence": 25,
+        "search_as_grantee_too": True,
+        "deliverables": ["lot_plat", "reference_table"],
+        "notes": "Single lot in subdivision. Check subdivision plat + immediate adjoiners.",
+    },
+
+    # ── Water Rights ─────────────────────────────────────────────────────
+    "WR": {
+        "name": "Water Rights Survey",
+        "research_depth": "minimal",
+        "needs_adjoiners": "none",
+        "needs_chain": False,
+        "auto_select_confidence": 30,
+        "search_as_grantee_too": False,
+        "deliverables": ["ditch_exhibit", "legal_description"],
+        "notes": "Map acequia/ditch. Deed for property description only.",
+    },
+}
+
+def _get_workflow(job_type: str) -> dict:
+    """Get workflow config for a job type. Falls back to BDY for unknown types."""
+    # Try exact match, then base code (e.g., "BDY-E" → "BDY")
+    wf = _JOB_WORKFLOWS.get(job_type.upper())
+    if not wf:
+        base = job_type.upper().split("-")[0]
+        wf = _JOB_WORKFLOWS.get(base, _JOB_WORKFLOWS["BDY"])
+    return wf
+
+
+def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc: str):
+    """Background worker: runs the autonomous research pipeline.
+
+    Adapts behavior based on job type workflow configuration:
+    - BDY/SUB/SE: full adjoiners + deep research
+    - FT/P/ILR:   deed only, skip adjoiners
+    - LLA/EAS:    medium depth, affected adjoiners only
     """
     def _log(msg):
         print(f"[auto-research:{inquiry_id}] {msg}", flush=True)
@@ -5537,13 +5721,16 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
 
     try:
         with app.app_context():
-            _log("Starting autonomous research pipeline...")
+            wf = _get_workflow(job_type)
+            _log(f"Starting autonomous research pipeline...")
+            _log(f"  Workflow: {wf['name']} ({job_type})")
+            _log(f"  Research depth: {wf['research_depth']}, Adjoiners: {wf['needs_adjoiners']}")
 
             # ── STEP 1: Setup — create project and session ──────────────────
             _update_inquiry(inquiry_id, {"status": "researching", "step": 1})
             _log("Step 1: Creating project and session...")
 
-            next_num, _ = _next_job_number()
+            next_num, _ = next_job_info()
             job_number = str(next_num)
             create_project_folders(job_number, client_name, job_type)
             _log(f"  Project #{job_number} created")
@@ -5554,6 +5741,15 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
             session_data["client_name"] = client_name
             session_data["job_type"] = job_type
             session_data["client_upc"] = upc
+            session_data["workflow"] = {
+                "code": job_type,
+                "name": wf["name"],
+                "research_depth": wf["research_depth"],
+                "needs_adjoiners": wf["needs_adjoiners"],
+                "needs_chain": wf.get("needs_chain", False),
+                "deliverables": wf.get("deliverables", []),
+                "notes": wf.get("notes", ""),
+            }
             save_research(job_number, client_name, job_type, session_data)
 
             _update_inquiry(inquiry_id, {
@@ -5573,7 +5769,7 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
                 best = deed_result["best"]
                 score = best.get("relevance_score", 0)
 
-                if score >= 25 or deed_result["count"] == 1:
+                if score >= wf['auto_select_confidence'] or deed_result["count"] == 1:
                     save_result = _auto_save_deed(
                         best["doc_no"], best, job_number, client_name,
                         job_type, "client", is_adjoiner=False,
@@ -5601,38 +5797,45 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
             _update_inquiry(inquiry_id, {"step": 3})
             _log("Step 3: Searching for client plat...")
 
-            plat_result = _auto_search_plat(client_name, job_number, job_type)
-            if plat_result:
-                _log(f"  Found plat: {plat_result.get('source', 'unknown')}")
-                # Update session
-                session_data = load_research(job_number, client_name, job_type)
-                for s in session_data["subjects"]:
-                    if s["id"] == "client":
-                        s["plat_saved"] = True
-                        s["plat_path"] = plat_result.get("saved_to", "")
-                        break
-                save_research(job_number, client_name, job_type, session_data)
-                _log("  ✓ Client plat saved")
+            if wf['research_depth'] != 'minimal':
+                plat_result = _auto_search_plat(client_name, job_number, job_type)
+                if plat_result:
+                    _log(f"  Found plat: {plat_result.get('source', 'unknown')}")
+                    session_data = load_research(job_number, client_name, job_type)
+                    for s in session_data["subjects"]:
+                        if s["id"] == "client":
+                            s["plat_saved"] = True
+                            s["plat_path"] = plat_result.get("saved_to", "")
+                            break
+                    save_research(job_number, client_name, job_type, session_data)
+                    _log("  ✓ Client plat saved")
+                else:
+                    _log("  No plat found (may need manual search)")
             else:
-                _log("  No plat found (may need manual search)")
+                _log("  Skipped — not required for this job type")
 
             # ── STEP 4: Adjoiner Discovery ──────────────────────────────────
             _update_inquiry(inquiry_id, {"step": 4})
-            _log("Step 4: Discovering adjoiners...")
 
-            adjoiners = []
-            if upc:
-                adjoiners = _auto_discover_adjoiners(upc, client_name)
-                _log(f"  Found {len(adjoiners)} adjoiners via ArcGIS")
+            adj_mode = wf['needs_adjoiners']
+            if adj_mode == 'none':
+                _log(f"Step 4: Adjoiners — SKIPPED ({wf['name']} does not require adjoiners)")
+                adjoiners = []
             else:
-                _log("  No UPC — skipping spatial discovery (add adjoiners manually)")
+                _log(f"Step 4: Discovering adjoiners (mode: {adj_mode})...")
+                adjoiners = []
+                if upc:
+                    adjoiners = _auto_discover_adjoiners(upc, client_name)
+                    _log(f"  Found {len(adjoiners)} adjoiners via ArcGIS")
+                else:
+                    _log("  No UPC — skipping spatial discovery (add adjoiners manually)")
 
             # Add adjoiners to session
             session_data = load_research(job_number, client_name, job_type)
             for adj in adjoiners:
                 adj_name = adj.get("owner", "Unknown")
                 if adj_name.upper() == client_name.upper():
-                    continue  # skip self
+                    continue
                 adj_id = f"adj_{adj.get('upc', '')[:10]}_{len(session_data['subjects'])}"
                 session_data["subjects"].append({
                     "id": adj_id, "type": "adjoiner", "name": adj_name,
@@ -5649,7 +5852,11 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
 
             # ── STEP 5: Bulk Adjoiner Research ──────────────────────────────
             _update_inquiry(inquiry_id, {"step": 5})
-            _log(f"Step 5: Researching {len(adjoiners)} adjoiners...")
+
+            if adj_mode == 'none':
+                _log(f"Step 5: Adjoiner research — SKIPPED")
+            else:
+                _log(f"Step 5: Researching {len(adjoiners)} adjoiners...")
 
             session_data = load_research(job_number, client_name, job_type)
             adj_subjects = [s for s in session_data["subjects"] if s["type"] == "adjoiner"]
@@ -5716,12 +5923,14 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
 
             session_data["reference_table"] = ref_table
             session_data["auto_research_complete"] = True
+            session_data["deliverables"] = wf.get("deliverables", [])
             save_research(job_number, client_name, job_type, session_data)
 
             # ── Done ────────────────────────────────────────────────────────
             total_deeds = sum(1 for s in session_data["subjects"] if s.get("deed_saved"))
             total_plats = sum(1 for s in session_data["subjects"] if s.get("plat_saved"))
             total_subj  = len(session_data["subjects"])
+            deliverables_str = ", ".join(wf.get("deliverables", []))
 
             _update_inquiry(inquiry_id, {
                 "status": "complete",
@@ -5730,6 +5939,9 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
                 "updated_at": datetime.now().isoformat(),
             })
             _log(f"✅ COMPLETE — Job #{job_number}: {total_subj} subjects, {total_deeds} deeds, {total_plats} plats")
+            _log(f"  Deliverables: {deliverables_str}")
+            if wf.get('notes'):
+                _log(f"  Workflow notes: {wf['notes']}")
 
     except Exception as e:
         traceback.print_exc()
@@ -5749,6 +5961,24 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
 
 
 # ── AUTO-RESEARCH HELPER FUNCTIONS ────────────────────────────────────────────
+
+
+@app.route("/api/workflows", methods=["GET"])
+def api_workflows():
+    """Return all available job type workflows with their configs.
+    Used by the website inquiry form to show job type descriptions."""
+    result = []
+    for code, wf in _JOB_WORKFLOWS.items():
+        result.append({
+            "code": code,
+            "name": wf["name"],
+            "research_depth": wf["research_depth"],
+            "needs_adjoiners": wf["needs_adjoiners"],
+            "needs_chain": wf.get("needs_chain", False),
+            "deliverables": wf.get("deliverables", []),
+            "notes": wf.get("notes", ""),
+        })
+    return jsonify({"success": True, "workflows": result})
 
 def _auto_search_deed(name: str, job_type: str = "BDY") -> dict | None:
     """Search 1stNMTitle for deeds matching `name`, return scored results.
@@ -5874,38 +6104,37 @@ def _auto_save_deed(doc_no: str, detail: dict, job_number: str, client_name: str
 
 def _auto_search_plat(name: str, job_number: str, job_type: str,
                       is_adjoiner: bool = False) -> dict | None:
-    """Search for a plat in the local cabinet index."""
+    """Search for a plat in the local cabinet index via search_local_cabinet."""
     try:
-        if not cabinet_index:
-            return None
-
-        last_name = name.split(",")[0].strip().upper()
+        last_name = name.split(",")[0].strip()
         if len(last_name) < 2:
             return None
 
-        # Search cabinet index
-        matches = []
-        for filename, info in cabinet_index.items():
-            fname_up = filename.upper()
-            if last_name in fname_up:
-                matches.append({
-                    "filename": filename,
-                    "path": info.get("path", info.get("full_path", "")),
-                    "cabinet": info.get("cabinet", ""),
-                })
-
-        if not matches:
+        cabinet_path = get_survey_data_path()
+        if not cabinet_path:
             return None
 
-        # Pick the first/best match
-        best = matches[0]
-        src_path = best["path"]
+        # Search all known cabinets for a name match
+        src_path = ""
+        cab_letter = ""
+        for letter in CABINET_FOLDERS:
+            results = _search_local_cabinet_impl(
+                cabinet=letter,
+                doc_num="",
+                cabinet_path=cabinet_path,
+                grantor=last_name,
+            )
+            if results:
+                best_hit = results[0]
+                src_path = best_hit.get("path", "")
+                cab_letter = letter
+                break
 
         if not src_path or not os.path.isfile(src_path):
             return None
 
         # Copy to project
-        base = _job_base_path(job_number, name.split(",")[0].strip(), job_type)
+        base = _job_base_path(job_number, last_name, job_type)
         if is_adjoiner:
             dest = base / "E Research" / "B Plats" / "Adjoiners" / os.path.basename(src_path)
         else:
@@ -5914,10 +6143,9 @@ def _auto_search_plat(name: str, job_number: str, job_type: str,
         dest.parent.mkdir(parents=True, exist_ok=True)
 
         if not dest.exists():
-            import shutil
             shutil.copy2(src_path, dest)
 
-        return {"success": True, "saved_to": str(dest), "source": "cabinet", "cabinet": best.get("cabinet", "")}
+        return {"success": True, "saved_to": str(dest), "source": "cabinet", "cabinet": cab_letter}
 
     except Exception as e:
         print(f"[auto-plat] Error searching plat for {name}: {e}", flush=True)
