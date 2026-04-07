@@ -10935,3 +10935,157 @@ async function showDataQualityPanel(){const o=document.getElementById('dqOverlay
 function closeDataQualityPanel(){document.getElementById('dqOverlay')?.classList.add('hidden')}
 function _dqM(v,l,c){return'<div style="background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 10px;text-align:center"><div style="font-size:22px;font-weight:800;font-family:\'JetBrains Mono\',monospace;color:'+c+'">'+(typeof v==="number"?v.toLocaleString():v)+'</div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-top:4px">'+l+'</div></div>'}
 function _renderDqBody(el,h,a,c){if(!el)return;h=h||{};a=a||{};c=c||{};const cb=h.cabinet_breakdown||{},kg=a.knowledge_graph||{},ml=a.ml||{};const cabR=Object.entries(cb).map(([l,n])=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0"><span style="font-family:\'JetBrains Mono\',monospace;font-weight:800;font-size:14px;color:#b080e0;width:22px">'+l+'</span><div style="flex:1;height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+Math.min(100,n/80)+'%;background:linear-gradient(90deg,#79a8e0,#b080e0);border-radius:3px"></div></div><span style="font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--text2);min-width:50px;text-align:right">'+n.toLocaleString()+'</span></div>').join('');const cfl=(c.conflicts||[]).slice(0,20).map(f=>{const ic=f.level==='error'?'🔴':f.level==='warning'?'⚠️':'ℹ️';const cl=f.level==='error'?'#ff7b72':f.level==='warning'?'#e3c55a':'var(--text3)';return'<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px"><span>'+ic+'</span><span style="font-family:\'JetBrains Mono\',monospace;font-weight:700;color:var(--accent2);min-width:38px">#'+(f.job||'?')+'</span><span style="color:var(--text2);flex:1">'+(f.client||'')+'</span><span style="color:'+cl+'">'+(f.message||'')+'</span></div>'}).join('');el.innerHTML='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">'+_dqM(h.total_cabinet_files||0,'Cabinet Files','#79a8e0')+_dqM(h.total_parcels||0,'KML Parcels','#b080e0')+_dqM(kg.nodes||0,'KG Nodes','#56d3a0')+_dqM(a.jobs_scanned||0,'ML Jobs','#e3c55a')+'</div><div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px;margin-bottom:12px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:10px">🗄️ Cabinet Breakdown</div>'+cabR+'<div style="display:flex;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);font-size:11px;color:var(--text3)"><span>Updated: <strong style="color:var(--text2)">'+(h.last_updated||'?')+'</strong></span><span>ArcGIS: <strong style="color:var(--accent2)">'+(h.arcgis_pct||0)+'%</strong></span>'+(h.is_stale?'<span style="color:#ff7b72;font-weight:600">⏰ Stale</span>':'<span style="color:#56d3a0">✓ Fresh</span>')+'</div></div><div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px;margin-bottom:12px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:8px">🧠 AI Subsystem</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;font-size:12px"><div><div style="color:var(--text3);font-size:10px;font-weight:600;margin-bottom:2px">Knowledge Graph</div><div style="color:var(--text2)">'+(kg.nodes||0).toLocaleString()+' nodes · '+(kg.edges||0).toLocaleString()+' edges</div></div><div><div style="color:var(--text3);font-size:10px;font-weight:600;margin-bottom:2px">ML Model</div><div style="color:var(--text2)">Trained: '+(ml.trained_at?ml.trained_at.slice(0,10):'never')+'</div></div><div><div style="color:var(--text3);font-size:10px;font-weight:600;margin-bottom:2px">Anomaly Baselines</div><div style="color:var(--text2)">'+(a.anomaly_detector?.baselines||0)+' types</div></div></div></div><div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3)">⚠️ Data Conflicts</div><span style="font-size:11px;color:var(--text3)">'+(c.total||0)+' issues · '+(c.jobs_scanned||0)+' sessions</span></div>'+(cfl||'<div style="font-size:12px;color:#56d3a0;padding:8px 0">✅ No conflicts</div>')+'</div>'}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI ENTITY EXTRACTION ON DEED LOAD  (Feature F)
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Call /api/ai/extract with the deed detail text to pull structured entities.
+ * Results injected as a collapsible "🤖 AI Entities" row in the deed summary.
+ * Requires Ollama — totally silent if offline.
+ */
+async function _aiExtractEntities(detail, docNo) {
+  // Build text for extraction from deed fields
+  const text = [
+    detail['Grantor'] || '',
+    detail['Grantee'] || '',
+    detail['Location'] || detail['Legal Description'] || '',
+    detail['Comments'] || '',
+    detail['Remarks'] || '',
+  ].filter(Boolean).join('\n');
+
+  if (text.length < 10) return;
+
+  try {
+    const res = await fetch(API + '/ai/extract', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+
+    if (data.available === false) return;  // Ollama offline — silent
+    const ents = data.entities;
+    if (!ents) return;
+
+    // Inject into deed hint area
+    const hintArea = document.getElementById('deedPlatHintArea');
+    if (!hintArea) return;
+
+    // Build AI entities card (appended after plat hints)
+    const names = (ents.parties || []).filter(n => n && n.length > 2);
+    const trsRefs = (ents.trs_refs || []);
+    const dates = (ents.dates || []);
+    const amounts = (ents.amounts || []);
+
+    if (!names.length && !trsRefs.length) return;  // nothing useful
+
+    const rows = [];
+
+    if (names.length) {
+      const onBoard = new Set((state.researchSession?.subjects || []).map(s => s.name.toLowerCase()));
+      rows.push(`<div class="plat-hint-row">
+        <span class="plat-hint-label">🤖 AI Parties</span>
+        <span class="plat-hint-values">${names.map(n => {
+          const alreadyOn = onBoard.has(n.toLowerCase());
+          return `<span class="badge" style="background:rgba(121,168,224,.12);color:#79a8e0;cursor:${alreadyOn ? 'default' : 'pointer'}"
+            ${alreadyOn ? 'title="Already on board"' : `onclick="addFoundAdjoiner(${JSON.stringify(n)})" title="Add ${n} as adjoiner"`}>
+            ${escHtml(n)}${alreadyOn ? ' ✓' : ' <span style="opacity:.5;font-size:9px">+ Add</span>'}
+          </span>`;
+        }).join(' ')}</span>
+      </div>`);
+    }
+
+    if (trsRefs.length) {
+      rows.push(`<div class="plat-hint-row">
+        <span class="plat-hint-label">📍 AI TRS</span>
+        <span class="plat-hint-values">${trsRefs.map(t =>
+          `<span class="badge" style="background:rgba(86,211,160,.1);color:#56d3a0">${escHtml(t)}</span>`
+        ).join(' ')}</span>
+      </div>`);
+    }
+
+    if (dates.length || amounts.length) {
+      const extra = [...dates, ...amounts].map(v =>
+        `<span class="badge" style="background:rgba(227,197,90,.1);color:#e3c55a">${escHtml(v)}</span>`
+      ).join(' ');
+      rows.push(`<div class="plat-hint-row">
+        <span class="plat-hint-label">📅 AI Details</span>
+        <span class="plat-hint-values">${extra}</span>
+      </div>`);
+    }
+
+    if (!rows.length) return;
+
+    // Append after existing hint card or create new one
+    const existing = hintArea.querySelector('.plat-hint-card');
+    const aiCard = document.createElement('div');
+    aiCard.className = 'plat-hint-card';
+    aiCard.style.cssText = 'margin-top:6px;border-color:rgba(121,168,224,.2)';
+    aiCard.innerHTML = rows.join('');
+    if (existing) {
+      existing.insertAdjacentElement('afterend', aiCard);
+    } else {
+      hintArea.appendChild(aiCard);
+    }
+
+  } catch (_) { /* Ollama offline or extract failed — silent */ }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESEARCH ANALYTICS QUICK VIEW  (Feature E — Nova quick action)
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Show a compact analytics snapshot in the Nova chat panel.
+ * Called from the Nova quick-action buttons.
+ */
+async function showAnalyticsInNova() {
+  const chatMsgs = document.getElementById('aiChatMessages');
+  if (!chatMsgs) return;
+
+  // Open the Nova panel
+  const panel = document.getElementById('aiChatPanel');
+  if (panel) panel.classList.add('open');
+
+  _appendChatMsg('ai', '📊 Fetching research analytics…');
+
+  try {
+    const [analytics, kgStats] = await Promise.allSettled([
+      apiFetch('/research-analytics'),
+      fetch(API + '/ai/graph/stats', { credentials: 'include' }).then(r => r.json()),
+    ]);
+
+    const a = analytics.status === 'fulfilled' ? analytics.value : {};
+    const kg = kgStats.status === 'fulfilled' ? kgStats.value : {};
+
+    const pred = a.predictions || {};
+    const stats = a.stats || {};
+
+    let msg = '## 📊 Research Analytics\n\n';
+
+    // Session stats
+    msg += `**Jobs scanned:** ${(a.scanned_jobs ?? stats.total_jobs ?? 0).toLocaleString()}\n`;
+    if (pred.predicted_complexity) {
+      msg += `**Typical complexity:** ${pred.predicted_complexity} `;
+      if (pred.confidence) msg += `(${pred.confidence} confidence)\n`;
+      if (pred.predicted_adjoiners) msg += `**Avg adjoiners:** ${pred.predicted_adjoiners}\n`;
+      if (pred.likely_cabinets?.length) msg += `**Common cabinets:** ${pred.likely_cabinets.join(', ')}\n`;
+    }
+
+    // KG stats
+    if (kg.total_nodes > 0) {
+      msg += `\n**Knowledge Graph:**\n`;
+      msg += `• ${kg.total_nodes?.toLocaleString()} nodes, ${kg.total_edges?.toLocaleString()} edges\n`;
+      if (kg.most_connected?.length) {
+        msg += `• Most connected: ${kg.most_connected.slice(0, 3).map(c => `${c.name} (${c.adjoiners})`).join(', ')}\n`;
+      }
+      msg += `• Graph file: ${kg.file_size_mb ?? 0} MB\n`;
+    }
+
+    _appendChatMsg('ai', msg);
+
+  } catch (e) {
+    _appendChatMsg('ai', `❌ Analytics error: ${e.message}`);
+  }
+}
