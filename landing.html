@@ -437,6 +437,7 @@
       <a href="#features">Features</a>
       <a href="#how-it-works">How It Works</a>
       <a href="#pricing">Pricing</a>
+      <a href="#request-survey" style="color:var(--accent2)">Request a Survey</a>
     </div>
     <div class="nav-cta">
       <a href="/app" class="btn btn-ghost btn-sm">Sign In</a>
@@ -667,13 +668,106 @@
   </div>
 </section>
 
+<!-- ── REQUEST A SURVEY ────────────────────────────────────────────────────── -->
+<section class="section" id="request-survey">
+  <div class="container">
+    <div class="text-center" style="margin-bottom:48px">
+      <div class="section-pre">Autonomous Research</div>
+      <h2 class="section-title">Request a Survey — <span style="background:linear-gradient(135deg,var(--accent2),var(--accent1));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">AI Does the Research</span></h2>
+      <p class="section-sub" style="margin:0 auto">Submit your details and our AI engine runs a full deed &amp; plat research pipeline autonomously — adjoiners, chain of title, plat references, and DXF boundaries.</p>
+    </div>
+
+    <!-- Inquiry Form -->
+    <div id="inquiryFormWrapper" style="max-width:640px;margin:0 auto">
+      <div class="cta-banner" style="text-align:left;padding:40px 36px">
+        <form id="inquiryForm" onsubmit="return submitInquiry(event)">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px;display:block">Client Name *</label>
+              <input type="text" id="inqName" required placeholder="Last, First" style="width:100%;padding:10px 14px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;outline:none;transition:border-color .2s" onfocus="this.style.borderColor='rgba(45,138,110,.5)'" onblur="this.style.borderColor='rgba(255,255,255,.1)'">
+            </div>
+            <div>
+              <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px;display:block">Job Type</label>
+              <select id="inqJobType" style="width:100%;padding:10px 14px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;outline:none;cursor:pointer">
+                <option value="BDY">BDY — Boundary Survey</option>
+                <option value="SUB">SUB — Subdivision</option>
+                <option value="LLA">LLA — Lot Line Adjustment</option>
+                <option value="LC">LC — Land Consolidation</option>
+                <option value="FT">FT — FEMA Topo</option>
+                <option value="EAS">EAS — Easement</option>
+                <option value="P">P — Permit</option>
+                <option value="SE">SE — Survey Exam</option>
+              </select>
+            </div>
+          </div>
+          <div style="margin-top:16px">
+            <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px;display:block">Property Address</label>
+            <input type="text" id="inqAddress" placeholder="123 Kit Carson Rd, Taos NM" style="width:100%;padding:10px 14px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;outline:none;transition:border-color .2s" onfocus="this.style.borderColor='rgba(45,138,110,.5)'" onblur="this.style.borderColor='rgba(255,255,255,.1)'">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+            <div>
+              <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px;display:block">Email</label>
+              <input type="email" id="inqEmail" placeholder="you@email.com" style="width:100%;padding:10px 14px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;outline:none;transition:border-color .2s" onfocus="this.style.borderColor='rgba(45,138,110,.5)'" onblur="this.style.borderColor='rgba(255,255,255,.1)'">
+            </div>
+            <div>
+              <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px;display:block">Phone</label>
+              <input type="tel" id="inqPhone" placeholder="555-123-4567" style="width:100%;padding:10px 14px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;outline:none;transition:border-color .2s" onfocus="this.style.borderColor='rgba(45,138,110,.5)'" onblur="this.style.borderColor='rgba(255,255,255,.1)'">
+            </div>
+          </div>
+          <div style="margin-top:16px">
+            <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px;display:block">Parcel UPC <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional — enables auto adjoiner discovery)</span></label>
+            <input type="text" id="inqUpc" placeholder="e.g. 103080725" style="width:100%;padding:10px 14px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;outline:none;transition:border-color .2s" onfocus="this.style.borderColor='rgba(45,138,110,.5)'" onblur="this.style.borderColor='rgba(255,255,255,.1)'">
+          </div>
+          <div style="margin-top:16px">
+            <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px;display:block">Notes</label>
+            <textarea id="inqNotes" rows="3" placeholder="Fence dispute, need full boundary with adjoiners..." style="width:100%;padding:10px 14px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;outline:none;resize:vertical;transition:border-color .2s" onfocus="this.style.borderColor='rgba(45,138,110,.5)'" onblur="this.style.borderColor='rgba(255,255,255,.1)'"></textarea>
+          </div>
+          <div style="margin-top:20px;display:flex;gap:12px;align-items:center">
+            <button type="submit" id="inqSubmitBtn" class="btn btn-primary btn-lg" style="flex:1">🤖 Submit &amp; Start AI Research</button>
+          </div>
+          <p style="font-size:11px;color:var(--text3);margin-top:12px;text-align:center">Research begins immediately. You'll get a tracking link to follow progress in real time.</p>
+        </form>
+      </div>
+    </div>
+
+    <!-- Status Tracker (shown after submission) -->
+    <div id="inquiryTracker" class="hidden" style="max-width:640px;margin:32px auto 0">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+        <!-- Header -->
+        <div style="padding:20px 24px;border-bottom:1px solid var(--border);background:linear-gradient(135deg,rgba(45,138,110,.08),rgba(79,172,254,.05))">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--accent2);margin-bottom:4px">📡 Live Research Tracker</div>
+              <div style="font-size:16px;font-weight:700;color:var(--text)" id="trackerClientName"></div>
+            </div>
+            <div id="trackerBadge" style="padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.3px"></div>
+          </div>
+        </div>
+        <!-- Progress Steps -->
+        <div style="padding:20px 24px">
+          <div id="trackerSteps" style="display:flex;gap:4px;margin-bottom:20px">
+            <!-- Filled by JS -->
+          </div>
+          <!-- Stats Row -->
+          <div id="trackerStats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
+          </div>
+          <!-- Log -->
+          <div style="background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.04);border-radius:10px;padding:12px 14px;max-height:200px;overflow-y:auto" id="trackerLog">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:8px">Activity Log</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ── CTA BANNER ─────────────────────────────────────────────────────────── -->
 <section class="section">
   <div class="container">
     <div class="cta-banner">
-      <h2 class="cta-title">Ready to save hours every week?</h2>
-      <p class="cta-sub">Join surveyors across the Southwest who've replaced their manual deed research process with Deed &amp; Plat Helper.</p>
-      <a href="/app" class="btn btn-primary btn-lg">Create Your Free Account →</a>
+      <h2 class="cta-title">Or use the full research app yourself</h2>
+      <p class="cta-sub">Sign in to the Deed &amp; Plat Helper to run manual searches, view parcel maps, and build your own research packages.</p>
+      <a href="/app" class="btn btn-primary btn-lg">Open Deed &amp; Plat Helper →</a>
       <p class="cta-note">Free forever. Upgrade only when you need the Pro tools.</p>
     </div>
   </div>
@@ -713,6 +807,156 @@
     .then(r => r.json())
     .then(d => { if (d.success) window.location.replace('/app'); })
     .catch(() => {});
+
+  // ── INQUIRY FORM SUBMISSION ──────────────────────────────────
+  let _pollTimer = null;
+  let _currentInquiryId = null;
+
+  async function submitInquiry(e) {
+    e.preventDefault();
+    const btn = document.getElementById('inqSubmitBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Submitting…';
+
+    const body = {
+      client_name: document.getElementById('inqName').value.trim(),
+      job_type:    document.getElementById('inqJobType').value,
+      address:     document.getElementById('inqAddress').value.trim(),
+      email:       document.getElementById('inqEmail').value.trim(),
+      phone:       document.getElementById('inqPhone').value.trim(),
+      upc:         document.getElementById('inqUpc').value.trim(),
+      notes:       document.getElementById('inqNotes').value.trim(),
+    };
+
+    try {
+      // Step 1: Create inquiry
+      const res = await fetch('/api/inquiry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!data.success) { alert('Error: ' + (data.error || 'Unknown')); return; }
+
+      _currentInquiryId = data.inquiry_id;
+
+      // Show complexity estimate if available
+      if (data.estimated_complexity && data.estimated_complexity.predicted_complexity) {
+        const c = data.estimated_complexity;
+        console.log('AI Complexity:', c);
+      }
+
+      // Step 2: Trigger auto-research
+      const resAuto = await fetch('/api/auto-research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inquiry_id: _currentInquiryId }),
+      });
+      const autoData = await resAuto.json();
+
+      // Show tracker
+      document.getElementById('inquiryFormWrapper').style.display = 'none';
+      document.getElementById('inquiryTracker').classList.remove('hidden');
+      document.getElementById('trackerClientName').textContent = body.client_name + ' — ' + body.job_type;
+
+      // Start polling
+      _pollStatus();
+      _pollTimer = setInterval(_pollStatus, 3000);
+
+    } catch (err) {
+      alert('Network error: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '🤖 Submit &amp; Start AI Research';
+    }
+  }
+
+  const _STEP_LABELS = ['Setup', 'Deed', 'Plat', 'Adjoiners', 'Research', 'Package'];
+  const _STATUS_COLORS = {
+    pending:      { bg: 'rgba(255,255,255,.06)', fg: 'var(--text3)', label: '⏳ Pending' },
+    starting:     { bg: 'rgba(79,172,254,.12)', fg: '#4facfe', label: '🚀 Starting' },
+    researching:  { bg: 'rgba(45,138,110,.12)', fg: 'var(--accent2)', label: '🤖 Researching' },
+    complete:     { bg: 'rgba(86,211,160,.12)', fg: '#56d3a0', label: '✅ Complete' },
+    error:        { bg: 'rgba(218,54,51,.12)', fg: '#da3633', label: '❌ Error' },
+  };
+
+  async function _pollStatus() {
+    if (!_currentInquiryId) return;
+    try {
+      const res = await fetch('/api/inquiry/status/' + _currentInquiryId);
+      const d = await res.json();
+      if (!d.success) return;
+
+      // Badge
+      const sc = _STATUS_COLORS[d.status] || _STATUS_COLORS.pending;
+      const badge = document.getElementById('trackerBadge');
+      badge.style.background = sc.bg;
+      badge.style.color = sc.fg;
+      badge.textContent = sc.label;
+
+      // Steps
+      const stepsEl = document.getElementById('trackerSteps');
+      stepsEl.innerHTML = _STEP_LABELS.map((label, i) => {
+        const stepNum = i + 1;
+        const active = d.step === stepNum;
+        const done = d.step > stepNum;
+        const bg = done ? 'var(--accent)' : active ? 'rgba(79,172,254,.6)' : 'rgba(255,255,255,.06)';
+        return `<div style="flex:1;text-align:center">
+          <div style="height:4px;border-radius:2px;background:${bg};margin-bottom:6px;transition:background .3s"></div>
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:${done ? 'var(--accent2)' : active ? '#4facfe' : 'var(--text3)'}">
+            ${done ? '✓ ' : ''}${label}
+          </div>
+        </div>`;
+      }).join('');
+
+      // Stats
+      const statsEl = document.getElementById('trackerStats');
+      const _m = (v, l, c) => `<div style="background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:20px;font-weight:800;font-family:'JetBrains Mono',monospace;color:${c}">${v}</div>
+        <div style="font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:var(--text3);margin-top:2px">${l}</div>
+      </div>`;
+      statsEl.innerHTML = _m(d.step || 0, 'Step', '#4facfe')
+        + _m(d.subjects_count || 0, 'Subjects', 'var(--accent2)')
+        + _m(d.deeds_saved || 0, 'Deeds', '#b080e0')
+        + _m(d.plats_saved || 0, 'Plats', '#e3c55a');
+
+      // Log
+      const logEl = document.getElementById('trackerLog');
+      const logEntries = (d.log || []).slice(-15);
+      logEl.innerHTML = `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:8px">Activity Log</div>`
+        + logEntries.map(l => {
+          const isError = l.includes('ERROR') || l.includes('✗');
+          const isSuccess = l.includes('✓') || l.includes('COMPLETE');
+          const color = isError ? '#ff7b72' : isSuccess ? '#56d3a0' : 'var(--text2)';
+          return `<div style="font-size:11px;color:${color};padding:2px 0;font-family:'JetBrains Mono',monospace">${l.replace(/</g,'&lt;')}</div>`;
+        }).join('');
+      logEl.scrollTop = logEl.scrollHeight;
+
+      // Stop polling when done
+      if (d.status === 'complete' || d.status === 'error') {
+        clearInterval(_pollTimer);
+        if (d.status === 'complete' && d.job_number) {
+          logEl.innerHTML += `<div style="margin-top:8px;padding:8px 12px;background:rgba(45,138,110,.12);border:1px solid rgba(45,138,110,.3);border-radius:8px;font-size:12px;color:var(--accent2);font-weight:600">🎉 Research complete! Job #${d.job_number} — <a href="/app" style="color:#4facfe;text-decoration:underline">Open in Deed &amp; Plat Helper →</a></div>`;
+        }
+      }
+
+    } catch (_) {}
+  }
+
+  // Check URL for status tracking: /survey/status/INQ-3001
+  (function checkStatusUrl() {
+    const m = location.hash.match(/status\/(INQ-\d+)/);
+    if (m) {
+      _currentInquiryId = m[1];
+      document.getElementById('inquiryFormWrapper').style.display = 'none';
+      document.getElementById('inquiryTracker').classList.remove('hidden');
+      _pollStatus();
+      _pollTimer = setInterval(_pollStatus, 3000);
+      setTimeout(() => {
+        document.getElementById('request-survey').scrollIntoView({ behavior: 'smooth' });
+      }, 300);
+    }
+  })();
 </script>
 </body>
 </html>
