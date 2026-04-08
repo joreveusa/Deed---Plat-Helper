@@ -114,9 +114,11 @@ _MONUMENT_PATTERNS = {
     "nail":       re.compile(r'\bnail\b', re.I),
 }
 
-_LOT_BLOCK_RE = re.compile(r'\b(?:lot|block|unit)\s+\d', re.I)
-_TRACT_RE     = re.compile(r'\b(?:tract)\s+[A-Z0-9]', re.I)
-_POB_RE       = re.compile(r'\bpoint\s+of\s+(?:beginning|commencement)|POB|P\.?O\.?B\.?|POINT\s+OF\s+BEGINNING', re.I)
+_LOT_BLOCK_RE    = re.compile(r'\b(?:lot|block|unit)\s+\d', re.I)
+_TRACT_RE        = re.compile(r'\b(?:tract)\s+[A-Z0-9]', re.I)
+_POB_RE          = re.compile(r'\bpoint\s+of\s+(?:beginning|commencement)|POB|P\.?O\.?B\.?|POINT\s+OF\s+BEGINNING', re.I)
+# COMMENCING = deed starts at a distant monument, then ties into the POB
+_COMMENCING_RE   = re.compile(r'\bCOMMENCING\b', re.I)
 
 
 def detect_monuments(text: str) -> list[str]:
@@ -348,39 +350,118 @@ def parse_metes_bounds(text: str) -> list[dict]:
     # Sort by position in text for correct traversal order
     calls.sort(key=lambda c: c.get("pos", 0))
 
-    # Strip 'pos' key — not needed downstream
+    # ── Identify tie calls (COMMENCING → POB) ────────────────────────────────
+    # If the deed starts with COMMENCING, all calls before the first POB marker
+    # are "tie calls" — they lead from a distant monument to the Point of Beginning
+    # and should NOT be included in the boundary traverse / closure computation.
+    pob_pos = None
+    commencing_pos = None
+
+    # Find COMMENCING position
+    m_comm = _COMMENCING_RE.search(text)
+    if m_comm:
+        commencing_pos = m_comm.start()
+
+    # Find first POB occurrence
+    m_pob = _POB_RE.search(text)
+    if m_pob:
+        pob_pos = m_pob.start()
+
+    # Only mark tie calls if COMMENCING precedes POB in the text
+    if commencing_pos is not None and pob_pos is not None and commencing_pos < pob_pos:
+        for c in calls:
+            c_pos = c.get("_raw_pos", c.get("pos", 0))
+            c["tie_call"] = c_pos < pob_pos
+
+    # Strip internal position keys — not needed downstream
     for c in calls:
         c.pop("pos", None)
+        c.pop("_raw_pos", None)
 
     return calls
 
 
 def calls_to_coords(calls: list[dict], start_x: float = 0.0, start_y: float = 0.0) -> list[tuple]:
-    """Convert a list of metes-and-bounds calls to (x, y) coordinate pairs."""
-    pts = [(start_x, start_y)]
-    x, y = start_x, start_y
-    for c in calls:
-        if c.get("type") == "straight":
-            az = math.radians(c.get("azimuth_deg", c.get("azimuth", 0)))
-            dx = c["distance"] * math.sin(az)
-            dy = c["distance"] * math.cos(az)
-            x += dx
-            y += dy
-            pts.append((round(x, 6), round(y, 6)))
-        elif c.get("type") == "curve":
-            # Approximate curve as chord for simple plotting
-            dist = c.get("chord_length", 0) or c.get("arc_length", 0)
-            if dist and c.get("chord_bearing"):
-                # Try to parse the chord bearing for direction
-                cb_match = _BEARING_PAT.match(c["chord_bearing"])
-                if cb_match:
-                    ns  = cb_match.group(1).upper()
-                    deg = float(cb_match.group(2))
-                    mn  = float(cb_match.group(3)) if cb_match.group(3) else 0.0
-                    sec = float(cb_match.group(4)) if cb_match.group(4) else 0.0
-                    ew  = cb_match.group(5).upper()
-                    az  = math.radians(_bearing_to_azimuth(ns, deg, mn, sec, ew))
-                    x += dist * math.sin(az)
-                    y += dist * math.cos(az)
-                    pts.append((round(x, 6), round(y, 6)))
+    """Convert a list of metes-and-bounds calls to (x, y) coordinate pairs.
+
+    Handles the COMMENCING → POB paradigm correctly:
+      - Tie calls (tie_call=True) build up to the POB from the origin.
+      - Boundary calls (tie_call=False/absent) are the actual property traverse.
+
+    Returns coordinate list starting from the POB (not the commencing point).
+    The tie coords are available separately via calls_to_full_coords().
+    """
+    tie_calls      = [c for c in calls if c.get("tie_call")]
+    boundary_calls = [c for c in calls if not c.get("tie_call")]
+
+    # Compute POB by traversing tie calls from the origin
+    pob_x, pob_y = start_x, start_y
+    for c in tie_calls:
+        pob_x, pob_y = _advance(pob_x, pob_y, c)
+
+    # Now traverse boundary calls from POB
+    pts = [(round(pob_x, 6), round(pob_y, 6))]
+    x, y = pob_x, pob_y
+    for c in boundary_calls:
+        x, y = _advance(x, y, c)
+        pts.append((round(x, 6), round(y, 6)))
     return pts
+
+
+def calls_to_full_coords(calls: list[dict], start_x: float = 0.0, start_y: float = 0.0) -> dict:
+    """Like calls_to_coords but returns both tie path and boundary path separately.
+
+    Returns:
+        {
+          "tie_coords":      [(x,y), ...],   # origin → POB (may be empty)
+          "boundary_coords": [(x,y), ...],   # POB → ... (the actual boundary)
+          "pob":             (x, y),          # Point of Beginning
+          "has_tie":         bool,
+        }
+    """
+    tie_calls      = [c for c in calls if c.get("tie_call")]
+    boundary_calls = [c for c in calls if not c.get("tie_call")]
+
+    # Traverse tie calls to find POB
+    tie_pts = [(round(start_x, 6), round(start_y, 6))]
+    x, y = start_x, start_y
+    for c in tie_calls:
+        x, y = _advance(x, y, c)
+        tie_pts.append((round(x, 6), round(y, 6)))
+
+    pob = (round(x, 6), round(y, 6))
+
+    # Traverse boundary from POB
+    bdy_pts = [pob]
+    for c in boundary_calls:
+        x, y = _advance(x, y, c)
+        bdy_pts.append((round(x, 6), round(y, 6)))
+
+    return {
+        "tie_coords":      tie_pts,
+        "boundary_coords": bdy_pts,
+        "pob":             pob,
+        "has_tie":         len(tie_calls) > 0,
+    }
+
+
+def _advance(x: float, y: float, c: dict) -> tuple:
+    """Advance (x, y) by one call. Returns new (x, y)."""
+    if c.get("type") == "straight":
+        az = math.radians(c.get("azimuth_deg", c.get("azimuth", 0)))
+        dx = c["distance"] * math.sin(az)
+        dy = c["distance"] * math.cos(az)
+        return x + dx, y + dy
+    elif c.get("type") == "curve":
+        dist = c.get("chord_length", 0) or c.get("arc_length", 0)
+        if dist and c.get("chord_bearing"):
+            cb_match = _BEARING_PAT.match(c["chord_bearing"])
+            if cb_match:
+                ns  = cb_match.group(1).upper()
+                deg = float(cb_match.group(2))
+                mn  = float(cb_match.group(3)) if cb_match.group(3) else 0.0
+                sec = float(cb_match.group(4)) if cb_match.group(4) else 0.0
+                ew  = cb_match.group(5).upper()
+                az  = math.radians(_bearing_to_azimuth(ns, deg, mn, sec, ew))
+                return x + dist * math.sin(az), y + dist * math.cos(az)
+    return x, y

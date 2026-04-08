@@ -15,6 +15,10 @@ from typing import Optional
 
 _PROFILES_DIR = Path(__file__).resolve().parent.parent / "profiles"
 
+# In-memory cache: profile_id -> profile dict.
+# Invalidated on save/delete. list_profiles() always reads disk (rare call).
+_PROFILE_CACHE: dict[str, dict] = {}
+
 
 def _ensure_dir():
     _PROFILES_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,17 +59,22 @@ def list_profiles() -> list[dict]:
 
 
 def get_profile(profile_id: str) -> Optional[dict]:
+    """Return the profile dict, from cache if available."""
+    if profile_id in _PROFILE_CACHE:
+        return _PROFILE_CACHE[profile_id]
     p = _profile_path(profile_id)
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
+            _PROFILE_CACHE[profile_id] = data
+            return data
         except Exception:
             pass
     return None
 
 
 def save_profile(profile: dict) -> dict:
-    """Create or update a profile.  Returns the saved profile dict."""
+    """Create or update a profile. Updates cache, returns the saved profile dict."""
     _ensure_dir()
     pid = profile.get("id")
     if not pid:
@@ -73,6 +82,7 @@ def save_profile(profile: dict) -> dict:
         profile["id"] = pid
     fp = _profile_path(pid)
     fp.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
+    _PROFILE_CACHE[pid] = profile   # write-through
     return profile
 
 
@@ -83,6 +93,7 @@ def create_profile(display_name: str) -> dict:
 
 
 def delete_profile(profile_id: str) -> bool:
+    _PROFILE_CACHE.pop(profile_id, None)   # evict from cache
     p = _profile_path(profile_id)
     if p.exists():
         p.unlink()

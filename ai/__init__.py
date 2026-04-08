@@ -108,7 +108,9 @@ def get_embeddings():
         return _embeddings
     try:
         from ai.embeddings import LegalEmbeddingIndex
-        _embeddings = LegalEmbeddingIndex()
+        cfg = load_ai_config()
+        ollama_url = cfg.get("ollama_url", "http://localhost:11434")
+        _embeddings = LegalEmbeddingIndex(ollama_url=ollama_url)
         return _embeddings
     except Exception as e:
         logger.debug(f"Embeddings not available: {e}")

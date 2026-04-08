@@ -27,19 +27,34 @@ _TOKEN_MAX_AGE = 60 * 60 * 24 * 30                 # 30 days in seconds
 
 _serializer = URLSafeTimedSerializer(_SECRET_KEY)
 
+# ── In-memory write-through cache ─────────────────────────────────────────────
+# Populated once at import time; kept in sync by _save_users().
+# Eliminates disk reads on every auth check / search / history update.
+_USERS_CACHE: dict | None = None
+
+
+def _load_users() -> dict:
+    """Return the users dict from the in-memory cache, loading from disk first time."""
+    global _USERS_CACHE
+    if _USERS_CACHE is not None:
+        return _USERS_CACHE
+    if _USERS_FILE.exists():
+        try:
+            _USERS_CACHE = json.loads(_USERS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            _USERS_CACHE = {}
+    else:
+        _USERS_CACHE = {}
+    return _USERS_CACHE
+
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 
-def _load_users() -> dict:
-    if _USERS_FILE.exists():
-        try:
-            return json.loads(_USERS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-    return {}
-
 
 def _save_users(users: dict) -> None:
+    """Write-through: update the in-memory cache and persist to disk."""
+    global _USERS_CACHE
+    _USERS_CACHE = users   # keep cache in sync before disk write
     # Create a rotating backup before overwriting
     try:
         from helpers.backup import backup_users_file

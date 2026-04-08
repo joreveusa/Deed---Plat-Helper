@@ -582,6 +582,50 @@ class SurveyKnowledgeGraph:
         candidates.sort(key=lambda c: c["similarity"], reverse=True)
         return candidates
 
+    def merge_duplicates(self, keep_id: str, merge_id: str) -> bool:
+        """Merge two duplicate person nodes — transfers all edges to keep_id.
+
+        Re-hangs every edge from `merge_id` onto `keep_id` (avoiding
+        self-loops and duplicate edges), then removes `merge_id`.
+        Updates the keep node's name if the merge node had a longer/richer
+        name (prefer the more complete version).
+
+        Returns True on success, False if either node doesn't exist.
+        """
+        if not self.G.has_node(keep_id) or not self.G.has_node(merge_id):
+            return False
+        if keep_id == merge_id:
+            return False
+
+        keep_data = self.G.nodes[keep_id]
+        merge_data = self.G.nodes[merge_id]
+
+        # Prefer the longer (more complete) display name
+        keep_name = keep_data.get("name", keep_id)
+        merge_name = merge_data.get("name", merge_id)
+        if len(merge_name.replace(",", "").strip()) > len(keep_name.replace(",", "").strip()):
+            keep_data["name"] = merge_name
+            logger.debug(f"  Name updated: {keep_name!r} → {merge_name!r}")
+
+        # Re-hang every edge from merge_id → keep_id
+        for neighbor in list(self.G.neighbors(merge_id)):
+            if neighbor == keep_id:
+                continue  # skip self-loop
+            edge_data = dict(self.G.edges[merge_id, neighbor])
+            if not self.G.has_edge(keep_id, neighbor):
+                self.G.add_edge(keep_id, neighbor, **edge_data)
+            else:
+                # Edge already exists — keep the one with more data
+                existing = self.G.edges[keep_id, neighbor]
+                for k, v in edge_data.items():
+                    if k not in existing:
+                        existing[k] = v
+
+        self.G.remove_node(merge_id)
+        logger.info(f"🔗 Merged {merge_id!r} → {keep_id!r} "
+                    f"(graph now {self.G.number_of_nodes()} nodes)")
+        return True
+
     @staticmethod
     def _name_for_comparison(name: str) -> str:
         """Normalize a name for entity resolution comparison."""

@@ -17,7 +17,7 @@ import math
 from datetime import datetime
 
 from helpers.metes_bounds import (
-    parse_metes_bounds, calls_to_coords, extract_trs,
+    parse_metes_bounds, calls_to_coords, calls_to_full_coords, extract_trs,
     detect_monuments, shoelace_area, has_pob,
     _LOT_BLOCK_RE, _TRACT_RE,
 )
@@ -137,7 +137,13 @@ def analyze_deed(detail: dict, pdf_path: str = "",
 
     # ── 1. CLOSURE ANALYSIS ────────────────────────────────────────────────
     calls = parse_metes_bounds(combined_text)
-    pts   = calls_to_coords(calls) if calls else []
+    # Use full-coordinate breakdown: tie calls (COMMENCING→POB) vs boundary calls
+    full_coords = calls_to_full_coords(calls) if calls else {}
+    pts          = full_coords.get("boundary_coords", []) if full_coords else []
+    tie_coords   = full_coords.get("tie_coords", []) if full_coords else []
+    has_tie      = full_coords.get("has_tie", False) if full_coords else False
+    boundary_calls = [c for c in calls if not c.get("tie_call")]
+    tie_calls_list = [c for c in calls if c.get("tie_call")]
     closure_err = 0.0
     perimeter   = 0.0
     area_sqft   = 0.0
@@ -146,8 +152,8 @@ def analyze_deed(detail: dict, pdf_path: str = "",
 
     if calls:
         desc_type = "metes_and_bounds"
-        # Perimeter
-        for c in calls:
+        # Perimeter: only boundary calls (not tie calls)
+        for c in boundary_calls:
             perimeter += c.get("distance", 0)
         perimeter = round(perimeter, 2)
 
@@ -191,7 +197,7 @@ def analyze_deed(detail: dict, pdf_path: str = "",
 
         issues.append({
             "category": "closure", "severity": "info",
-            "title": f"{len(calls)} bearing/distance calls found",
+            "title": f"{len(boundary_calls)} boundary call(s)" + (f" + {len(tie_calls_list)} tie call(s) to POB" if has_tie else ""),
             "detail": f"Perimeter: {perimeter:,.2f} ft  |  Area: {area_sqft:,.1f} sq ft ({area_sqft/43560:.3f} acres)" if area_sqft else f"Perimeter: {perimeter:,.2f} ft",
         })
 
@@ -254,7 +260,9 @@ def analyze_deed(detail: dict, pdf_path: str = "",
     categories["closure"] = {
         "title":         "Boundary & Closure",
         "icon":          "📐",
-        "calls_count":   len(calls),
+        "calls_count":   len(boundary_calls),
+        "tie_calls":     len(tie_calls_list),
+        "has_tie":       has_tie,
         "closure_err":   closure_err,
         "closure_ratio": closure_ratio,
         "perimeter":     perimeter,

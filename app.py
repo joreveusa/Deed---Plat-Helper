@@ -1,7 +1,11 @@
-import sys, io
-# Force UTF-8 output so emoji in print() never crash on Windows cp1252 consoles
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+import sys, io, os
+# Force UTF-8 output so emoji in print() never crash on Windows cp1252 terminals
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 from flask import Flask, request, jsonify, send_from_directory, send_file, Response, make_response, g
 import requests as req_lib
@@ -3907,9 +3911,19 @@ def api_parse_calls():
                 combined += "\n" + val
 
         calls = parse_metes_bounds(combined)
-        pts   = calls_to_coords(calls) if calls else []
 
-        # Closure stats
+        # Normalize: add `bearing` alias for frontend compatibility
+        for c in calls:
+            if 'bearing' not in c:
+                c['bearing'] = c.get('bearing_label', '')
+            if 'azimuth' not in c:
+                c['azimuth'] = c.get('azimuth_deg', 0)
+
+        full    = calls_to_full_coords(calls) if calls else {}
+        pts     = full.get("boundary_coords", []) if full else calls_to_coords(calls)
+        tie_pts = full.get("tie_coords", []) if full else []
+        has_tie = full.get("has_tie", False) if full else False
+
         closure_err = 0.0
         if len(pts) >= 2:
             closure_err = round(math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]), 4)
@@ -3920,6 +3934,8 @@ def api_parse_calls():
             "count":       len(calls),
             "closure_err": closure_err,
             "coords":      pts,
+            "tie_coords":  tie_pts,
+            "has_tie":     has_tie,
         })
     except Exception as e:
         traceback.print_exc()
@@ -3953,8 +3969,16 @@ def api_extract_calls_from_pdf():
 
 
         calls = parse_metes_bounds(text)
-        full  = calls_to_full_coords(calls) if calls else {}
-        pts   = full.get("boundary_coords", []) if full else []
+
+        # ── Normalize: add `bearing` alias for frontend compatibility ──────
+        for c in calls:
+            if 'bearing' not in c:
+                c['bearing'] = c.get('bearing_label', '')
+            if 'azimuth' not in c:
+                c['azimuth'] = c.get('azimuth_deg', 0)
+
+        full    = calls_to_full_coords(calls) if calls else {}
+        pts     = full.get("boundary_coords", []) if full else []
         tie_pts = full.get("tie_coords", []) if full else []
         has_tie = full.get("has_tie", False) if full else False
         closure_err = 0.0
@@ -3962,15 +3986,16 @@ def api_extract_calls_from_pdf():
             closure_err = round(math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]), 4)
 
         return jsonify({
-            "success":     True,
-            "calls":       calls,
-            "count":       len(calls),
-            "closure_err": closure_err,
-            "coords":      pts,
-            "tie_coords":  tie_pts,
-            "has_tie":     has_tie,
-            "filename":    filename,
-            "source":      source,
+            "success":          True,
+            "calls":            calls,
+            "count":            len(calls),
+            "closure_err":      closure_err,
+            "coords":           pts,
+            "tie_coords":       tie_pts,
+            "has_tie":          has_tie,
+            "filename":         filename,
+            "source":           source,
+            "description_text": text,   # raw OCR/extracted text for display
         })
     except Exception as e:
         traceback.print_exc()

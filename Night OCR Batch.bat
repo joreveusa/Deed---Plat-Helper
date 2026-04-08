@@ -69,7 +69,7 @@ echo  [2/2] Starting OCR warmup (all PDFs, 4 workers)...
 echo  This will take several hours. Progress logged to: %LOGFILE%
 echo [%TIME%] Phase 2: OCR warmup (9999 per cabinet, 4 workers)>> "%LOGFILE%"
 
-%PY% scripts\batch_ocr_warmup.py "%CABINET_PATH%" 9999 4 >> "%LOGFILE%" 2>&1
+%PY% scripts\batch_ocr_warmup.py "%CABINET_PATH%" 9999 16 >> "%LOGFILE%" 2>&1
 if errorlevel 1 (
     echo [XX] OCR warmup encountered errors>> "%LOGFILE%"
     echo   [XX] OCR warmup encountered errors

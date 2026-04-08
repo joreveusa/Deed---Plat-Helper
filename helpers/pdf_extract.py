@@ -9,9 +9,23 @@ import os
 import re
 import io
 import json
+import hashlib
 from pathlib import Path
 
 from helpers.ocr_correct import clean_survey_text, correction_stats
+
+# Shared OCR warm-up cache — written by batch_ocr_warmup.py, read here at runtime
+_OCR_CACHE_DIR = Path("data") / "ocr_cache"
+
+
+def _warmup_cache_path(pdf_path: str) -> Path:
+    """Return the path to the warm-up cache .txt file for a given PDF.
+
+    Uses an MD5 hash of the normalised absolute path so the key is the same
+    whether called from the batch warmup script or from the live Flask app.
+    """
+    key = hashlib.md5(os.path.normpath(pdf_path).lower().encode()).hexdigest()
+    return _OCR_CACHE_DIR / f"{key}.txt"
 
 
 def _find_tesseract() -> str:
@@ -36,15 +50,30 @@ def setup_tesseract():
 
 
 def extract_pdf_text(pdf_path: str) -> tuple[str, str]:
-    """Extract text from a PDF, trying the native text layer first and
-    falling back to Tesseract OCR if the layer is sparse (<30 chars).
+    """Extract text from a PDF.
 
-    Returns (text, source) where source is 'text' or 'ocr'.
+    Priority order:
+      1. Warm-up cache (data/ocr_cache/<md5>.txt) — instant, no I/O on the PDF
+      2. Native PDF text layer — fast, works for digital PDFs
+      3. Tesseract OCR — slow, for scanned image-only PDFs
+
+    Returns (text, source) where source is 'cache', 'text', or 'ocr'.
+    Result is written to the warm-up cache after OCR so future calls are free.
     """
     import fitz
-    import pytesseract
     from PIL import Image
 
+    # ── 1. Check warm-up cache ───────────────────────────────────────────
+    cache_file = _warmup_cache_path(pdf_path)
+    if cache_file.exists():
+        try:
+            cached_text = cache_file.read_text(encoding="utf-8").strip()
+            if cached_text:
+                return cached_text, "cache"
+        except Exception:
+            pass  # corrupt cache — fall through to live extraction
+
+    # ── 2. Native PDF text layer ─────────────────────────────────────────
     text   = ""
     source = "text"
     try:
@@ -57,14 +86,15 @@ def extract_pdf_text(pdf_path: str) -> tuple[str, str]:
     except Exception as e:
         print(f"[pdf] Text extraction error for {pdf_path}: {e}", flush=True)
 
-    native_text = text  # preserve whatever we got from the text layer
+    native_text = text
 
-    # Only attempt OCR if native text is truly minimal (< 30 chars total)
+    # ── 3. Tesseract OCR fallback (image-only PDFs) ──────────────────────
     if len(text.strip()) < 30:
         source = "ocr"
         text   = ""
         try:
             from PIL import ImageEnhance
+            import pytesseract
             doc = fitz.open(pdf_path)
             for page in doc:
                 pix = page.get_pixmap(dpi=200)
@@ -76,19 +106,26 @@ def extract_pdf_text(pdf_path: str) -> tuple[str, str]:
             doc.close()
         except Exception as e:
             print(f"[pdf] OCR failed for {pdf_path}: {e}", flush=True)
-            # OCR failed — fall back to whatever native text we got
             if native_text.strip():
                 print(f"[pdf] Falling back to native text ({len(native_text.strip())} chars)", flush=True)
                 text = native_text
                 source = "text"
 
-    # Apply survey-domain OCR correction on OCR output
-    if source == "ocr" and text.strip():
-        original = text
-        text = clean_survey_text(text)
-        stats = correction_stats(original, text)
-        if stats["changed"]:
-            print(f"[pdf] OCR correction applied: {stats['corrections']} character changes", flush=True)
+        # Apply survey-domain OCR correction
+        if text.strip():
+            original = text
+            text = clean_survey_text(text)
+            stats = correction_stats(original, text)
+            if stats["changed"]:
+                print(f"[pdf] OCR correction applied: {stats['corrections']} character changes", flush=True)
+
+        # Write to warm-up cache so next call is instant
+        if text.strip():
+            try:
+                _OCR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(text[:5000], encoding="utf-8")
+            except Exception:
+                pass
 
     return text, source
 

@@ -33,10 +33,14 @@ def _ocr_one_pdf(args: tuple) -> tuple:
     fpath, cache_file_str, letter, fname = args
 
     # Late imports inside worker so each child process loads its own copies
-    from helpers.pdf_extract import setup_tesseract, extract_pdf_text
+    from helpers.pdf_extract import setup_tesseract, extract_pdf_text, _warmup_cache_path
 
     try:
         setup_tesseract()
+        # Check cache first (avoids re-OCRing if warmup was interrupted and restarted)
+        cache_file = Path(_warmup_cache_path(fpath))
+        if cache_file.exists() and cache_file.stat().st_size > 0:
+            return ("skip_cached", letter, fname, "")
         text, method = extract_pdf_text(fpath)
         if text and len(text.strip()) > 20:
             Path(cache_file_str).write_text(text[:5000], encoding="utf-8")
@@ -101,9 +105,9 @@ def main():
                 total_skipped_missing += 1
                 continue
 
-            # Build cache key and check if already cached
-            cache_key = f"{letter}_{doc_num}_{fname}".replace(" ", "_").replace(".", "_")
-            cache_file = ocr_cache_dir / f"{cache_key}.txt"
+            # Use shared cache path function — same key as extract_pdf_text()
+            from helpers.pdf_extract import _warmup_cache_path
+            cache_file = _warmup_cache_path(fpath)
             if cache_file.exists():
                 total_cached += 1
                 continue

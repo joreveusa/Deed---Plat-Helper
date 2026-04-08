@@ -545,15 +545,38 @@ function _pcpRenderSubjectList() {
       ? '<span class="pcp-doc-badge pcp-saved">📐 ✓</span>'
       : '<span class="pcp-doc-badge pcp-missing">📐 ✗</span>';
 
-    html += `<div class="pcp-subject-row ${rowClass}">
+    html += `<div class="pcp-subject-row ${rowClass}" style="position:relative">
       <span class="pcp-color-dot ${dotClass}"></span>
-      <span class="pcp-subject-name ${nameClass}">${isClient ? '★ ' : ''}${escHtml(s.name)}</span>
+      <span class="pcp-subject-name ${nameClass}" title="${escHtml(s.name)}">${isClient ? '★ ' : ''}${escHtml(s.name)}</span>
       ${dirTag}
       <span class="pcp-doc-badges">${deedBadge}${platBadge}</span>
+      ${!isClient ? `<button
+        class="pcp-discard-btn"
+        title="Remove ${escHtml(s.name)} from session"
+        onclick="event.stopPropagation(); pcpDiscardSubject('${s.id}')"
+        >✕</button>` : ''}
     </div>`;
   }
 
   container.innerHTML = html;
+}
+
+/** Remove an adjoiner via the PCP sidebar ✕ button */
+async function pcpDiscardSubject(id) {
+  const rs = state.researchSession;
+  if (!rs) return;
+  const subj = rs.subjects.find(s => s.id === id);
+  if (!subj || subj.type === 'client') return;
+  const hasData = subj.deed_saved || subj.plat_saved;
+  if (!confirm(hasData
+    ? `Remove ${subj.name}? (Saved files are kept in the project folder)`
+    : `Remove ${subj.name} from session?`)) return;
+  rs.subjects = rs.subjects.filter(s => s.id !== id);
+  await persistSession();
+  updatePropertyContext();
+  renderResearchBoard();
+  updateGlobalProgress();
+  showToast(`Removed ${subj.name}`, 'info');
 }
 
 // ── Direction helper: compute cardinal direction of adjoiner relative to client ──
@@ -663,25 +686,91 @@ function _pcpRenderMiniMap() {
   // If still no geometry, show fallback
   if (polys.length === 0) {
     _pcpDrawNoGeometry(ctx, W, H);
-    // Try to fetch geometry from ArcGIS if we have a UPC
     if (clientUpc && !state._pcpGeomCache[clientUpc]) {
       _pcpFetchGeometry(clientUpc).then(() => _pcpRenderMiniMap());
     }
     return;
   }
 
-  // Compute bounding box across ALL polygons
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of polys) {
-    for (const ring of p.rings) {
-      for (const pt of ring) {
-        if (pt[0] < minX) minX = pt[0];
-        if (pt[0] > maxX) maxX = pt[0];
-        if (pt[1] < minY) minY = pt[1];
-        if (pt[1] > maxY) maxY = pt[1];
+  // ── Compute centroid of each polygon ─────────────────────────────────────
+  function polyCentroid(rings) {
+    let lx = 0, ly = 0, n = 0;
+    for (const pt of (rings[0] || [])) { lx += pt[0]; ly += pt[1]; n++; }
+    return n ? [lx / n, ly / n] : null;
+  }
+
+  // ── Client-anchored bounding box with outlier rejection ───────────────────
+  // Find the client polygon centroid as anchor point.
+  // Any adjoiner whose centroid is > OUTLIER_FACTOR × BASE_PAD degrees away
+  // from the client is excluded from the viewport (still shown in subject list).
+  const CLIENT_PAD  = 0.004;   // ~0.004° ≈ 400m — base padding around client
+  const OUTLIER_FAC = 3.0;     // exclude parcels > 3× that distance away
+
+  const clientPoly = polys.find(p => p.isClient);
+  let anchorLon, anchorLat;
+
+  if (clientPoly) {
+    const c = polyCentroid(clientPoly.rings);
+    if (c) { anchorLon = c[0]; anchorLat = c[1]; }
+  }
+
+  // Fallback: median centroid of all polygons
+  if (anchorLon === undefined) {
+    const cents = polys.map(p => polyCentroid(p.rings)).filter(Boolean);
+    if (cents.length) {
+      const lons = cents.map(c => c[0]).sort((a,b) => a-b);
+      const lats = cents.map(c => c[1]).sort((a,b) => a-b);
+      anchorLon = lons[Math.floor(lons.length / 2)];
+      anchorLat = lats[Math.floor(lats.length / 2)];
+    }
+  }
+
+  // Filter to parcels within the viewport radius
+  const maxDist = CLIENT_PAD * OUTLIER_FAC;
+  const visiblePolys = anchorLon !== undefined
+    ? polys.filter(p => {
+        if (p.isClient) return true;          // always include client
+        const c = polyCentroid(p.rings);
+        if (!c) return false;
+        const dist = Math.hypot(c[0] - anchorLon, c[1] - anchorLat);
+        return dist <= maxDist;
+      })
+    : polys;
+
+  // Use a fixed anchor-based bbox so the map doesn't jump when adjoiners load
+  let minX, maxX, minY, maxY;
+  if (anchorLon !== undefined) {
+    // Compute bbox from visible polygons, but enforce minimum CLIENT_PAD radius
+    minX = anchorLon - CLIENT_PAD; maxX = anchorLon + CLIENT_PAD;
+    minY = anchorLat - CLIENT_PAD; maxY = anchorLat + CLIENT_PAD;
+    for (const p of visiblePolys) {
+      for (const ring of p.rings) {
+        for (const pt of ring) {
+          if (pt[0] < minX) minX = pt[0];
+          if (pt[0] > maxX) maxX = pt[0];
+          if (pt[1] < minY) minY = pt[1];
+          if (pt[1] > maxY) maxY = pt[1];
+        }
+      }
+    }
+    // Add small margin
+    const mx = (maxX - minX) * 0.12, my = (maxY - minY) * 0.12;
+    minX -= mx; maxX += mx; minY -= my; maxY += my;
+  } else {
+    minX = Infinity; maxX = -Infinity; minY = Infinity; maxY = -Infinity;
+    for (const p of visiblePolys) {
+      for (const ring of p.rings) {
+        for (const pt of ring) {
+          if (pt[0] < minX) minX = pt[0];
+          if (pt[0] > maxX) maxX = pt[0];
+          if (pt[1] < minY) minY = pt[1];
+          if (pt[1] > maxY) maxY = pt[1];
+        }
       }
     }
   }
+
+  const excluded = polys.length - visiblePolys.length;
 
   const dx = maxX - minX || 0.001;
   const dy = maxY - minY || 0.001;
@@ -712,8 +801,8 @@ function _pcpRenderMiniMap() {
     ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
   }
 
-  // Draw polygons
-  for (const p of polys) {
+  // Draw polygons (visible only — outliers excluded)
+  for (const p of visiblePolys) {
     for (const ring of p.rings) {
       ctx.beginPath();
       let first = true;
@@ -732,16 +821,15 @@ function _pcpRenderMiniMap() {
 
     // Draw label at centroid
     if (p.label && p.rings[0]?.length) {
-      let lx = 0, ly = 0;
-      for (const pt of p.rings[0]) { lx += pt[0]; ly += pt[1]; }
-      lx /= p.rings[0].length;
-      ly /= p.rings[0].length;
-      const [px, py] = toPixel(lx, ly);
-      ctx.font = 'bold 16px Outfit, sans-serif';
-      ctx.fillStyle = p.color;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(p.label, px, py);
+      const c = polyCentroid(p.rings);
+      if (c) {
+        const [px, py] = toPixel(c[0], c[1]);
+        ctx.font = 'bold 16px Outfit, sans-serif';
+        ctx.fillStyle = p.color;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p.label, px, py);
+      }
     }
   }
 
@@ -751,6 +839,14 @@ function _pcpRenderMiniMap() {
   ctx.textAlign = 'center';
   ctx.fillText('N', W - 16, 14);
   ctx.fillText('↑', W - 16, 24);
+
+  // "N parcels off-map" badge if any were excluded
+  if (excluded > 0) {
+    ctx.font = '9px JetBrains Mono, monospace';
+    ctx.fillStyle = 'rgba(255,200,100,0.7)';
+    ctx.textAlign = 'left';
+    ctx.fillText(`+${excluded} off-map`, 6, H - 6);
+  }
 }
 
 /** Build polygon data from KML GeoJSON (fallback when no ArcGIS cache) */
@@ -10097,15 +10193,18 @@ async function summarizeLegalDesc() {
   }
 }
 
-// ── Hook goToStep to fire KG lookup when entering Step 4 ──────────────────
-// Patch the existing goToStep function to add a side-effect for step 4.
+// ── Hook goToStep to fire KG lookup when entering Step 4, and AI refresh on Step 1 ──
 const _origGoToStep = window.goToStep;
 if (typeof _origGoToStep === 'function') {
   window.goToStep = function(n) {
     _origGoToStep(n);
+    if (n === 1) {
+      setTimeout(() => refreshAiInsights(), 500);
+    }
     if (n === 4) {
       _kgSuggestionsCache = null;  // reset so we re-fetch for each job
       loadKgAdjoiners();
+      setTimeout(() => fetchKgSuggestions(), 300);
     }
   };
 }
@@ -10650,23 +10749,7 @@ function _escHtml(s) {
   return d.innerHTML;
 }
 
-// ── Hook into existing app lifecycle ─────────────────────────────────────────
-
-// Refresh AI insights when Step 1 loads or job type changes
-const _origGoToStep = window.goToStep;
-if (typeof _origGoToStep === 'function') {
-  window.goToStep = function(stepNum) {
-    _origGoToStep.apply(this, arguments);
-    if (stepNum === 1) {
-      setTimeout(() => refreshAiInsights(), 500);
-    }
-    if (stepNum === 4) {
-      setTimeout(() => fetchKgSuggestions(), 300);
-    }
-  };
-}
-
-// Watch job type dropdown for prediction updates
+// ── Watch job type dropdown for AI prediction updates ───────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   const jobTypeSelect = document.getElementById('setupJobType');
   if (jobTypeSelect) {
@@ -10676,7 +10759,6 @@ document.addEventListener('DOMContentLoaded', () => {
       fetchAiPredictions(jt, cn);
     });
   }
-
   // Auto-refresh AI insights after a short delay (let main app init first)
   setTimeout(() => refreshAiInsights(), 2000);
 });
@@ -10932,6 +11014,219 @@ async function kgPopulateFromArchive() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// KG POPULATE FROM LIVE RESEARCH SESSIONS (J: drive)
+// ─────────────────────────────────────────────────────────────────────────────
+async function kgPopulateFromSessions() {
+  const btn = document.getElementById('btnKgSessions');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning…'; }
+  try {
+    const res = await fetch(`${API}/ai/graph/populate/sessions`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (data.available === false) { showToast('Knowledge graph offline', 'warn'); return; }
+    if (!data.success) { showToast('Session scan failed: ' + (data.error || 'Unknown'), 'error'); return; }
+    showToast(
+      `📂 Sessions → KG: ${(data.total_nodes||0).toLocaleString()} nodes · ` +
+      `+${data.persons_added||0} people, +${data.jobs_added||0} jobs, ` +
+      `+${data.adjacencies_added||0} adjacencies`,
+      'success'
+    );
+    refreshAiInsights();
+  } catch (e) {
+    showToast('Session scan error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '📂 From Sessions'; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTITY RESOLUTION — find & merge duplicate KG person nodes
+// ─────────────────────────────────────────────────────────────────────────────
+async function kgFindDuplicates() {
+  const btn = document.getElementById('btnKgDuplicates');
+  const resultEl = document.getElementById('kgDuplicatesResult');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning…'; }
+  if (resultEl) resultEl.innerHTML = '';
+  try {
+    const res = await fetch(`${API}/ai/graph/duplicates?threshold=0.88&limit=50`, {
+      credentials: 'include',
+    });
+    const data = await res.json();
+    if (data.available === false) { showToast('KG offline', 'warn'); return; }
+    const dupes = data.duplicates || [];
+    if (!dupes.length) {
+      showToast('✅ No duplicate person nodes found', 'success');
+      if (resultEl) resultEl.innerHTML = '<div style="color:#56d3a0;font-size:12px;padding:6px 0">✅ No duplicates found — graph is clean.</div>';
+      return;
+    }
+    showToast(`Found ${dupes.length} potential duplicate pairs`, 'info');
+    if (resultEl) {
+      resultEl.innerHTML = `
+        <div style="font-size:11px;color:var(--text3);margin-bottom:6px">${dupes.length} potential duplicate pairs — review and merge:</div>
+        ${dupes.map((d, i) => `
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px">
+            <span style="color:#e3c55a;font-weight:700;min-width:40px">${(d.similarity*100).toFixed(0)}%</span>
+            <span style="flex:1;color:var(--text2)">${escHtml(d.name_a)}</span>
+            <span style="color:var(--text3)">↔</span>
+            <span style="flex:1;color:var(--text2)">${escHtml(d.name_b)}</span>
+            <button class="btn btn-sm" onclick="kgMergePair('${d.keep}','${d.merge}')"
+              style="font-size:9px;padding:3px 8px;background:rgba(79,172,254,.15);color:#4facfe;border:1px solid rgba(79,172,254,.3)">
+              Merge
+            </button>
+          </div>`).join('')}
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button class="btn btn-outline btn-sm" onclick="kgAutoMerge(0.92)" style="font-size:11px">
+            ⚡ Auto-merge ≥92%
+          </button>
+        </div>`;
+    }
+  } catch (e) {
+    showToast('Entity resolution error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔍 Find Duplicates'; }
+  }
+}
+
+async function kgMergePair(keepId, mergeId) {
+  try {
+    const res = await fetch(`${API}/ai/graph/merge`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairs: [{ keep: keepId, merge: mergeId }] }),
+    });
+    const data = await res.json();
+    showToast(`✅ Merged — graph now ${(data.graph_nodes||0).toLocaleString()} nodes`, 'success');
+    kgFindDuplicates();  // refresh the list
+  } catch (e) {
+    showToast('Merge error: ' + e.message, 'error');
+  }
+}
+
+async function kgAutoMerge(threshold = 0.92) {
+  const btn = document.getElementById('btnKgAutoMerge');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Merging…'; }
+  try {
+    const res = await fetch(`${API}/ai/graph/merge`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto: true, threshold }),
+    });
+    const data = await res.json();
+    showToast(
+      `✅ Auto-merged ${data.merged} pairs (${data.skipped} skipped) — ` +
+      `graph now ${(data.graph_nodes||0).toLocaleString()} nodes`,
+      'success'
+    );
+    refreshAiInsights();
+  } catch (e) {
+    showToast('Auto-merge error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '⚡ Auto-merge'; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ML MODEL RETRAINING (from DQ panel)
+// ─────────────────────────────────────────────────────────────────────────────
+async function runMlTrain() {
+  const btn = document.getElementById('btnMlTrain');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Training…'; }
+  try {
+    const res = await fetch(`${API}/ai/train`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (data.available === false) { showToast('ML predictor not available', 'warn'); return; }
+    if (!data.success) { showToast('Training failed: ' + (data.error || 'Unknown'), 'error'); return; }
+    const adj = data.metrics?.adjoiner || {};
+    showToast(
+      `🎓 Models trained on ${data.jobs_trained} jobs in ${data.elapsed_seconds}s · ` +
+      `adj MAE=${adj.mae ?? '?'}`,
+      'success'
+    );
+    refreshAiInsights();
+  } catch (e) {
+    showToast('Training error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🎯 Retrain Models'; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BULK EMBEDDINGS — index deed descriptions from all research sessions
+// ─────────────────────────────────────────────────────────────────────────────
+let _embedPollTimer = null;
+
+async function runEmbedSessions() {
+  const btn = document.getElementById('btnEmbedSessions');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Starting…'; }
+  try {
+    const res = await fetch(`${API}/ai/embed/sessions`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 0 }),
+    });
+    const data = await res.json();
+
+    if (data.available === false) {
+      showToast('Embeddings not available — sentence-transformers needed', 'warn');
+      return;
+    }
+    if (res.status === 409) {
+      showToast('Embedding job already running — check status', 'info');
+      _startEmbedPoll();
+      return;
+    }
+    if (!data.started) {
+      showToast('Embed start failed: ' + (data.error || 'Unknown'), 'error');
+      return;
+    }
+
+    showToast('🔎 Bulk embedding started — scanning research sessions…', 'info');
+    _startEmbedPoll();
+  } catch (e) {
+    showToast('Embed error: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔎 Index Deeds'; }
+  }
+}
+
+function _startEmbedPoll() {
+  if (_embedPollTimer) clearInterval(_embedPollTimer);
+  _embedPollTimer = setInterval(_checkEmbedStatus, 3000);
+}
+
+async function _checkEmbedStatus() {
+  try {
+    const res = await fetch(`${API}/ai/embed/sessions/status`, { credentials: 'include' });
+    const d = await res.json();
+    const btn = document.getElementById('btnEmbedSessions');
+
+    if (d.running) {
+      if (btn) btn.textContent = `⏳ Indexing… (${d.indexed||0} done)`;
+      return;
+    }
+
+    clearInterval(_embedPollTimer);
+    _embedPollTimer = null;
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔎 Index Deeds'; }
+
+    if (d.error) {
+      showToast('Embedding failed: ' + d.error, 'error');
+    } else {
+      showToast(
+        `✅ Embedding complete — ${d.indexed} deeds indexed in ${d.elapsed}s ` +
+        `(${d.skipped} skipped, ${d.total} total in collection)`,
+        'success'
+      );
+      refreshAiInsights();
+    }
+  } catch (_) {}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AUTO-INDEX DEED DESCRIPTIONS INTO EMBEDDINGS
 // ─────────────────────────────────────────────────────────────────────────────
 async function _indexDescriptionEmbedding(desc, docNo) {
@@ -10954,10 +11249,197 @@ async function _indexDescriptionEmbedding(desc, docNo) {
 }
 
 // DATA QUALITY DASHBOARD
-async function showDataQualityPanel(){const o=document.getElementById('dqOverlay');if(!o)return;o.classList.remove('hidden');const b=document.getElementById('dqBody');if(b)b.innerHTML='<div class="loading-state">Loading...</div>';try{const[h,a,c]=await Promise.all([fetch(API+'/api/index-health',{credentials:'include'}).then(r=>r.json()).catch(()=>({})),fetch(API+'/api/research-analytics',{credentials:'include'}).then(r=>r.json()).catch(()=>({})),fetch(API+'/api/data-conflicts',{credentials:'include'}).then(r=>r.json()).catch(()=>({}))]);_renderDqBody(b,h,a,c)}catch(e){if(b)b.innerHTML='<div style="color:var(--danger)">Failed</div>'}}
-function closeDataQualityPanel(){document.getElementById('dqOverlay')?.classList.add('hidden')}
-function _dqM(v,l,c){return'<div style="background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 10px;text-align:center"><div style="font-size:22px;font-weight:800;font-family:\'JetBrains Mono\',monospace;color:'+c+'">'+(typeof v==="number"?v.toLocaleString():v)+'</div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-top:4px">'+l+'</div></div>'}
-function _renderDqBody(el,h,a,c){if(!el)return;h=h||{};a=a||{};c=c||{};const cb=h.cabinet_breakdown||{},kg=a.knowledge_graph||{},ml=a.ml||{};const cabR=Object.entries(cb).map(([l,n])=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0"><span style="font-family:\'JetBrains Mono\',monospace;font-weight:800;font-size:14px;color:#b080e0;width:22px">'+l+'</span><div style="flex:1;height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+Math.min(100,n/80)+'%;background:linear-gradient(90deg,#79a8e0,#b080e0);border-radius:3px"></div></div><span style="font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--text2);min-width:50px;text-align:right">'+n.toLocaleString()+'</span></div>').join('');const cfl=(c.conflicts||[]).slice(0,20).map(f=>{const ic=f.level==='error'?'🔴':f.level==='warning'?'⚠️':'ℹ️';const cl=f.level==='error'?'#ff7b72':f.level==='warning'?'#e3c55a':'var(--text3)';return'<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px"><span>'+ic+'</span><span style="font-family:\'JetBrains Mono\',monospace;font-weight:700;color:var(--accent2);min-width:38px">#'+(f.job||'?')+'</span><span style="color:var(--text2);flex:1">'+(f.client||'')+'</span><span style="color:'+cl+'">'+(f.message||'')+'</span></div>'}).join('');el.innerHTML='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">'+_dqM(h.total_cabinet_files||0,'Cabinet Files','#79a8e0')+_dqM(h.total_parcels||0,'KML Parcels','#b080e0')+_dqM(kg.nodes||0,'KG Nodes','#56d3a0')+_dqM(a.jobs_scanned||0,'ML Jobs','#e3c55a')+'</div><div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px;margin-bottom:12px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:10px">🗄️ Cabinet Breakdown</div>'+cabR+'<div style="display:flex;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);font-size:11px;color:var(--text3)"><span>Updated: <strong style="color:var(--text2)">'+(h.last_updated||'?')+'</strong></span><span>ArcGIS: <strong style="color:var(--accent2)">'+(h.arcgis_pct||0)+'%</strong></span>'+(h.is_stale?'<span style="color:#ff7b72;font-weight:600">⏰ Stale</span>':'<span style="color:#56d3a0">✓ Fresh</span>')+'</div></div><div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px;margin-bottom:12px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:8px">🧠 AI Subsystem</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;font-size:12px"><div><div style="color:var(--text3);font-size:10px;font-weight:600;margin-bottom:2px">Knowledge Graph</div><div style="color:var(--text2)">'+(kg.nodes||0).toLocaleString()+' nodes · '+(kg.edges||0).toLocaleString()+' edges</div></div><div><div style="color:var(--text3);font-size:10px;font-weight:600;margin-bottom:2px">ML Model</div><div style="color:var(--text2)">Trained: '+(ml.trained_at?ml.trained_at.slice(0,10):'never')+'</div></div><div><div style="color:var(--text3);font-size:10px;font-weight:600;margin-bottom:2px">Anomaly Baselines</div><div style="color:var(--text2)">'+(a.anomaly_detector?.baselines||0)+' types</div></div></div></div><div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3)">⚠️ Data Conflicts</div><span style="font-size:11px;color:var(--text3)">'+(c.total||0)+' issues · '+(c.jobs_scanned||0)+' sessions</span></div>'+(cfl||'<div style="font-size:12px;color:#56d3a0;padding:8px 0">✅ No conflicts</div>')+'</div>'}
+async function showDataQualityPanel() {
+  const o = document.getElementById('dqOverlay');
+  if (!o) return;
+  o.classList.remove('hidden');
+  const b = document.getElementById('dqBody');
+  if (b) b.innerHTML = '<div class="loading-state">Loading metrics…</div>';
+  try {
+    const [h, a, c] = await Promise.all([
+      fetch(API + '/api/index-health',       { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+      fetch(API + '/api/research-analytics', { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+      fetch(API + '/api/data-conflicts',     { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+    ]);
+    _renderDqBody(b, h, a, c);
+  } catch (e) {
+    if (b) b.innerHTML = '<div style="color:var(--danger);padding:20px">Failed to load: ' + e.message + '</div>';
+  }
+}
+
+function closeDataQualityPanel() {
+  document.getElementById('dqOverlay')?.classList.add('hidden');
+}
+
+function _dqM(v, l, c) {
+  const disp = typeof v === 'number' ? v.toLocaleString() : (v || '—');
+  return `<div style="background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 10px;text-align:center">
+    <div style="font-size:22px;font-weight:800;font-family:'JetBrains Mono',monospace;color:${c}">${disp}</div>
+    <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-top:4px">${l}</div>
+  </div>`;
+}
+
+function _renderDqBody(el, h, a, c) {
+  if (!el) return;
+  h = h || {}; a = a || {}; c = c || {};
+
+  // ── Normalize research-analytics response shape ──────────────────────────
+  // Endpoint returns: { stats: {...}, predictions: {...}, scanned_jobs: N }
+  // OLD shape had: { knowledge_graph, ml, anomaly_detector, jobs_scanned }
+  const stats    = a.stats       || {};       // aggregate stats from scan
+  const preds    = a.predictions || {};       // complexity predictions
+  const scanned  = a.scanned_jobs ?? a.jobs_scanned ?? stats.total_jobs ?? 0;
+
+  // ── Normalize index-health (actual response keys) ────────────────────────
+  // total_parcels ✓, pct_with_arcgis, built_at, stale_warning, sources[]
+  const cabBreak   = h.cabinet_breakdown || {};     // not in response — will be empty
+  const totalCab   = h.total_cabinet_files
+                   ?? h.has_polygon        // best proxy: parcels with geometry
+                   ?? Object.values(cabBreak).reduce((a,b) => a+b, 0)
+                   ?? 0;
+  const totalParc  = h.total_parcels ?? h.parcel_count ?? 0;
+  const arcgisPct  = h.arcgis_pct
+                   ?? h.pct_with_arcgis   // actual key from xml_processor
+                   ?? (h.arcgis_enriched && totalParc ? Math.round(h.arcgis_enriched/totalParc*100) : 0);
+  const lastUpd    = h.last_updated
+                   ?? (h.built_at ? h.built_at.slice(0,10) : '?');
+  const isStale    = h.is_stale ?? h.stale_warning ?? false;
+
+  // ── Cabinet bars — build from sources[] since no breakdown in response ───
+  const sources = h.sources || [];
+  const cabRaw  = sources.length
+    ? sources.map(s => ({
+        label: s.name?.replace(/\..+$/, '').replace(/_/g, ' ').slice(0, 20),
+        count: s.record_count || 0
+      }))
+    : Object.entries(cabBreak).map(([l, n]) => ({ label: l, count: n }));
+
+  const maxCab = Math.max(...cabRaw.map(s => s.count), 1);
+  const cabR = cabRaw.length
+    ? cabRaw.map(s =>
+        `<div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+          <span style="font-size:11px;color:#b080e0;min-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.label}</span>
+          <div style="flex:1;height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${Math.round(s.count/maxCab*100)}%;background:linear-gradient(90deg,#79a8e0,#b080e0);border-radius:3px"></div>
+          </div>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text2);min-width:60px;text-align:right">${s.count.toLocaleString()}</span>
+        </div>`
+      ).join('')
+    : '<div style="font-size:11px;color:var(--text3);padding:6px 0">No index data — rebuild index in Settings</div>';
+
+
+  // ── Conflicts ─────────────────────────────────────────────────────────────
+  const conflicts = c.conflicts || [];
+  const cfl = conflicts.slice(0, 20).map(f => {
+    const ic = f.level === 'error' ? '🔴' : f.level === 'warning' ? '⚠️' : 'ℹ️';
+    const cl = f.level === 'error' ? '#ff7b72' : f.level === 'warning' ? '#e3c55a' : 'var(--text3)';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px">
+      <span>${ic}</span>
+      <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--accent2);min-width:38px">#${f.job || '?'}</span>
+      <span style="color:var(--text2);flex:1">${escHtml(f.client || '')}</span>
+      <span style="color:${cl}">${escHtml(f.message || '')}</span>
+    </div>`;
+  }).join('');
+
+  // ── Stats row from research_analytics ─────────────────────────────────────
+  const totalJobs  = stats.total_jobs   ?? scanned;
+  const avgAdj     = stats.avg_adjoiners ?? '—';
+  const topCabs    = preds.likely_cabinets?.join(', ') ?? (stats.cabinet_distribution ? Object.keys(stats.cabinet_distribution).slice(0,3).join(', ') : '—');
+  const predAdj    = preds.predicted_adjoiners ?? '—';
+  const predComp   = preds.predicted_complexity ?? '—';
+
+  el.innerHTML = `
+    <!-- Top metrics -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
+      ${_dqM(totalCab,   'Cabinet Files', '#79a8e0')}
+      ${_dqM(totalParc,  'KML Parcels',   '#b080e0')}
+      ${_dqM(totalJobs,  'Jobs Scanned',  '#56d3a0')}
+      ${_dqM(predAdj,    'Pred. Adjoiners','#e3c55a')}
+    </div>
+
+    <!-- Cabinet breakdown -->
+    <div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:10px">🗄️ Cabinet Breakdown</div>
+      ${cabR}
+      <div style="display:flex;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);font-size:11px;color:var(--text3)">
+        <span>Updated: <strong style="color:var(--text2)">${lastUpd}</strong></span>
+        <span>ArcGIS: <strong style="color:var(--accent2)">${typeof arcgisPct === 'number' ? arcgisPct.toFixed(1) : arcgisPct}%</strong></span>
+        ${isStale ? '<span style="color:#ff7b72;font-weight:600">⏰ Stale</span>' : '<span style="color:#56d3a0">✓ Fresh</span>'}
+      </div>
+    </div>
+
+    <!-- Research intelligence -->
+    <div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:8px">📊 Research Intelligence</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;font-size:12px">
+        <div>
+          <div style="color:var(--text3);font-size:10px;font-weight:600;margin-bottom:2px">Avg Adjoiners</div>
+          <div style="color:var(--text2)">${avgAdj} per job</div>
+        </div>
+        <div>
+          <div style="color:var(--text3);font-size:10px;font-weight:600;margin-bottom:2px">Likely Cabinets</div>
+          <div style="color:var(--text2)">${topCabs}</div>
+        </div>
+        <div>
+          <div style="color:var(--text3);font-size:10px;font-weight:600;margin-bottom:2px">Typical Complexity</div>
+          <div style="color:var(--text2)">${predComp}</div>
+        </div>
+      </div>
+      ${stats.date_range ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);font-size:11px;color:var(--text3)">
+        Jobs from <strong style="color:var(--text2)">${stats.date_range.oldest}</strong> to <strong style="color:var(--text2)">${stats.date_range.newest}</strong>
+      </div>` : ''}
+    </div>
+
+    <!-- Data conflicts -->
+    <div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3)">⚠️ Data Conflicts</div>
+        <span style="font-size:11px;color:var(--text3)">${c.total || 0} issues · ${c.jobs_scanned || scanned} sessions</span>
+      </div>
+      ${cfl || '<div style="font-size:12px;color:#56d3a0;padding:8px 0">✅ No conflicts detected</div>'}
+    </div>
+
+    <!-- Action buttons -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <button class="btn btn-outline btn-sm" onclick="dqAction('scan-conflicts')" style="font-size:11px">🔍 Re-scan Conflicts</button>
+      <button class="btn btn-outline btn-sm" onclick="dqAction('rebuild-index')"  style="font-size:11px">🔄 Rebuild Index</button>
+      <button class="btn btn-outline btn-sm" onclick="dqAction('kg-sessions')"    style="font-size:11px;border-color:rgba(86,211,160,.3);color:#56d3a0">🕸️ KG ← Sessions</button>
+      <button class="btn btn-outline btn-sm" onclick="dqAction('ml-retrain')"     style="font-size:11px;border-color:rgba(227,197,90,.3);color:#e3c55a">🎯 Retrain ML</button>
+    </div>
+  `;
+}
+
+/** Handle action buttons inside the DQ dashboard. */
+async function dqAction(action) {
+  const b = document.getElementById('dqBody');
+  const toast = (msg, t) => showToast(msg, t);
+
+  if (action === 'scan-conflicts') {
+    toast('Scanning for conflicts…', 'info');
+    const r = await fetch(API + '/api/data-conflicts?max_conflicts=500', { credentials: 'include' }).then(r => r.json()).catch(() => ({}));
+    toast(`Found ${r.total || 0} conflict(s) across ${r.jobs_scanned || 0} sessions`, r.total ? 'warn' : 'success');
+    showDataQualityPanel();  // refresh
+
+  } else if (action === 'rebuild-index') {
+    toast('Rebuilding KML index…', 'info');
+    const r = await fetch(API + '/api/rebuild-index', { method: 'POST', credentials: 'include' }).then(r => r.json()).catch(() => ({}));
+    toast(r.success ? `Index rebuilt: ${r.count || 0} parcels` : ('Error: ' + r.error), r.success ? 'success' : 'error');
+    showDataQualityPanel();  // refresh
+
+  } else if (action === 'kg-sessions') {
+    toast('Learning from research sessions…', 'info');
+    const r = await fetch(API + '/api/ai/graph/populate', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' } }).then(r => r.json()).catch(() => ({}));
+    if (r.available === false) { toast('Knowledge graph offline', 'warn'); return; }
+    toast(r.success ? `KG updated: ${(r.total_nodes||0).toLocaleString()} nodes, ${(r.total_edges||0).toLocaleString()} edges` : 'KG update failed', r.success ? 'success' : 'error');
+    showDataQualityPanel();
+
+  } else if (action === 'ml-retrain') {
+    toast('Retraining ML models from archive…', 'info');
+    const r = await fetch(API + '/api/train-models', { method: 'POST', credentials: 'include' }).then(r => r.json()).catch(() => ({}));
+    toast(r.success ? `ML retrained on ${r.jobs_used || 0} jobs` : ('ML: ' + (r.error || 'offline')), r.success ? 'success' : 'warn');
+    showDataQualityPanel();
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AI ENTITY EXTRACTION ON DEED LOAD  (Feature F)

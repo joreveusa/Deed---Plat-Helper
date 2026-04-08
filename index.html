@@ -53,6 +53,7 @@
         <div class="status-dot offline"></div>
         <span id="statusText">Offline</span>
       </div>
+      <button class="btn btn-outline btn-sm" onclick="window.open('/api/ai/graph/visualize', '_blank')" title="Knowledge Graph Explorer" style="border-color:rgba(128,90,213,.3);color:#b794f4">🕸️ Knowledge Graph</button>
       <button class="btn btn-outline btn-sm" onclick="showDataQualityPanel()" title="Data Quality Dashboard" style="border-color:rgba(121,168,224,.3);color:#79a8e0">📊 Data Quality</button>
       <button class="btn btn-outline btn-sm" onclick="showSettingsModal()">⚙️ Settings</button>
     </div>
@@ -93,7 +94,7 @@
     <!-- PROPERTY CONTEXT PANEL — persistent color-coded mini-map + subject list (steps 2–6) -->
     <div class="property-context-panel" id="propertyContextPanel">
       <div class="pcp-minimap-wrap" id="pcpMinimapWrap">
-        <canvas id="pcpMiniCanvas" width="400" height="280"></canvas>
+        <canvas id="pcpMiniCanvas" width="480" height="320"></canvas>
         <div class="pcp-minimap-label">Property Map</div>
       </div>
       <div class="pcp-divider"></div>
@@ -1585,22 +1586,56 @@
 
   <!-- DATA QUALITY DASHBOARD MODAL -->
   <div class="modal-overlay hidden" id="dqOverlay" onclick="if(event.target===this) closeDataQualityPanel()">
-    <div class="modal glass-card" style="max-width:720px;width:95vw">
+    <div class="modal glass-card" style="max-width:760px;width:95vw">
       <div class="modal-header" style="background:linear-gradient(135deg,rgba(121,168,224,.12),rgba(176,128,224,.08))">
         <div style="display:flex;align-items:center;gap:10px">
           <span style="font-size:22px">📊</span>
           <div>
             <h2 style="margin:0;font-family:'Outfit',sans-serif;font-size:17px;background:linear-gradient(135deg,#79a8e0,#b080e0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Data Quality Dashboard</h2>
-            <div style="font-size:10px;color:var(--text3)">System health · AI models · Conflict scanner</div>
+            <div style="font-size:10px;color:var(--text3)">System health · AI models · Conflict scanner · Learning pipeline</div>
           </div>
         </div>
         <button class="close-btn" onclick="closeDataQualityPanel()" aria-label="Close">✕</button>
       </div>
-      <div class="modal-body" style="padding:16px;max-height:65vh;overflow-y:auto" id="dqBody">
+      <div class="modal-body" style="padding:16px;max-height:55vh;overflow-y:auto" id="dqBody">
         <div class="loading-state">Loading data quality metrics...</div>
       </div>
+      <!-- Learning pipeline toolbar -->
+      <div style="padding:12px 16px;border-top:1px solid var(--border);background:rgba(0,0,0,.2);display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start">
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px">🧠 Knowledge Graph Learning</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <button id="btnKgSessions" class="btn btn-outline btn-sm" onclick="kgPopulateFromSessions()" title="Scan live research.json files on J: drive and update the KG" style="font-size:11px">
+              📂 From Sessions
+            </button>
+            <button id="btnKgPopulate" class="btn btn-outline btn-sm" onclick="kgPopulateFromArchive()" title="Build KG from archive training data" style="font-size:11px">
+              🕸️ From Archive
+            </button>
+            <button id="btnKgDuplicates" class="btn btn-outline btn-sm" onclick="kgFindDuplicates()" title="Find fuzzy-duplicate person nodes" style="font-size:11px;border-color:rgba(227,197,90,.4);color:#e3c55a">
+              🔍 Find Duplicates
+            </button>
+            <button id="btnKgAutoMerge" class="btn btn-outline btn-sm" onclick="kgAutoMerge(0.92)" title="Auto-merge high-confidence duplicates (≥92% similarity)" style="font-size:11px;border-color:rgba(86,211,160,.3);color:#56d3a0">
+              ⚡ Auto-merge
+            </button>
+          </div>
+        </div>
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px">🎓 ML Training</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <button class="btn btn-outline btn-sm" onclick="runMlTrain()" id="btnMlTrain" title="Re-train ML models from all research sessions" style="font-size:11px">
+              🎯 Retrain Models
+            </button>
+            <button class="btn btn-outline btn-sm" onclick="runEmbedSessions()" id="btnEmbedSessions" title="Bulk-index deed descriptions into the similarity search vector store" style="font-size:11px;border-color:rgba(176,128,224,.4);color:#b080e0">
+              🔎 Index Deeds
+            </button>
+          </div>
+        </div>
+      </div>
+      <!-- Entity resolution results area -->
+      <div id="kgDuplicatesResult" style="padding:0 16px 12px;max-height:200px;overflow-y:auto;border-top:1px solid rgba(255,255,255,.04)"></div>
     </div>
   </div>
+
 
   <script src="app.js" onerror="
     _showErrBox('\u274c Failed to load app.js — server may be down');
