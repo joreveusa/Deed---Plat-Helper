@@ -1,3 +1,8 @@
+import sys, io
+# Force UTF-8 output so emoji in print() never crash on Windows cp1252 consoles
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+
 from flask import Flask, request, jsonify, send_from_directory, send_file, Response, make_response, g
 import requests as req_lib
 from bs4 import BeautifulSoup
@@ -427,16 +432,83 @@ def _session() -> req_lib.Session:
         pid = None  # called outside request context
     return _get_web_session(pid)
 
+
+def _auto_login() -> bool:
+    """Log into the 1stNMTitle portal using config.json credentials.
+
+    Used by the auto-research background worker which has no browser
+    cookie/session.  Returns True if login succeeded, False otherwise.
+    The authenticated session is stored under the '__auto__' profile key.
+    """
+    try:
+        cfg = load_config()
+        username = cfg.get("firstnm_user", "")
+        password = cfg.get("firstnm_pass", "")
+        if not username or not password:
+            print("[auto-login] No credentials in config.json — skipping portal login", flush=True)
+            return False
+
+        sess = _get_web_session("__auto__")
+
+        # Check if already logged in
+        check = sess.get(_get_portal_url() + "/scripts/hfweb.asp?Application=FNM&Database=TP", timeout=10)
+        if 'CROSSNAMEFIELD' in check.text:
+            print("[auto-login] Session already active", flush=True)
+            return True
+
+        # Fetch login page
+        resp = sess.get(_get_portal_url() + "/", timeout=10)
+        soup = BeautifulSoup(resp.text, "lxml")
+        form = soup.find("form")
+        if not form:
+            print("[auto-login] Login form not found", flush=True)
+            return False
+
+        action = form.get("action", "/")
+        if not action.startswith("http"):
+            action = _get_portal_url() + "/" + action.lstrip("/")
+
+        form_data = {}
+        for inp in form.find_all('input'):
+            nm = inp.get('name')
+            itype = (inp.get('type') or 'text').lower()
+            if nm:
+                if itype == 'image':
+                    form_data[nm + '.x'] = '1'
+                    form_data[nm + '.y'] = '1'
+                else:
+                    form_data[nm] = inp.get('value', '')
+
+        # Map credentials (e.halFILE field names)
+        for inp in form.find_all('input'):
+            nm = inp.get('name', '')
+            if nm == 'FormUser':
+                form_data['FormUser'] = username
+            elif nm == 'FormPassword':
+                form_data['FormPassword'] = password
+
+        post_resp = sess.post(action, data=form_data, timeout=10)
+        portal_root = _get_portal_url().lower().rstrip('/')
+        landed_url  = post_resp.url.lower()
+        success = ('hfweb' in landed_url or
+                   'new search' in post_resp.text.lower() or
+                   ('logout' in post_resp.text.lower() and
+                    landed_url.rstrip('/') != portal_root))
+
+        if success:
+            print(f"[auto-login] ✓ Logged in as {username}", flush=True)
+        else:
+            print(f"[auto-login] ✗ Login failed for {username}", flush=True)
+        return success
+
+    except Exception as e:
+        print(f"[auto-login] Error: {e}", flush=True)
+        return False
+
 # ── helpers (load_config / save_config defined above, before drive detection) ──
 
 def _trigger_portal_pdf(doc_no: str):
-    """Visit the portal document detail page to force PDF generation in WebTemp.
-
-    The e.halFILE / 1stNMTitle portal only creates WebTemp/{doc_no}.pdf
-    after the document detail page (hfpage.asp) is visited.  Call this
-    before fetching the PDF when the document hasn't been viewed yet
-    (e.g. Step 3 online plat save, direct download, etc.).
-    """
+    """Visit the portal document detail page to force PDF generation in WebTemp."""
     try:
         cfg = load_config()
         fuser = ""
@@ -452,9 +524,14 @@ def _trigger_portal_pdf(doc_no: str):
             fuser = cfg.get("firstnm_user", "")
         trigger_url = (f"{_get_portal_url()}/scripts/hfpage.asp"
                        f"?Appl=FNM&Doctype=TP&DocNo={doc_no}&FormUser={fuser}")
-        _session().get(trigger_url, timeout=15)
+        # Use __auto__ session when outside request context (background thread)
+        try:
+            sess = _session()
+        except RuntimeError:
+            sess = _get_web_session("__auto__")
+        sess.get(trigger_url, timeout=15)
     except Exception:
-        pass  # best-effort — the PDF might already be cached
+        pass  # best-effort
 
 
 def _fetch_portal_pdf(doc_no: str, pdf_url: str = "", max_retries: int = 3):
@@ -479,7 +556,12 @@ def _fetch_portal_pdf(doc_no: str, pdf_url: str = "", max_retries: int = 3):
             print(f"[pdf-fetch] Retry {attempt}/{max_retries} for {doc_no}…", flush=True)
             _trigger_portal_pdf(doc_no)  # re-trigger on retry
 
-        pdf_resp = _session().get(pdf_url, stream=True, timeout=30)
+        # Use __auto__ session when outside request context (background thread)
+        try:
+            _sess = _session()
+        except RuntimeError:
+            _sess = _get_web_session("__auto__")
+        pdf_resp = _sess.get(pdf_url, stream=True, timeout=30)
         last_status = pdf_resp.status_code
 
         if pdf_resp.status_code == 200:
@@ -5818,6 +5900,15 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
             _log(f"  Workflow: {wf['name']} ({job_type})")
             _log(f"  Research depth: {wf['research_depth']}, Adjoiners: {wf['needs_adjoiners']}")
 
+            # ── Auto-login to 1stNMTitle portal ─────────────────────────────
+            _log("Step 0: Logging into 1stNMTitle portal...")
+            login_ok = _auto_login()
+            if login_ok:
+                _log("  ✓ Portal session established")
+            else:
+                _log("  ⚠ Portal login failed — deed searches may not work")
+                _log("    Check config.json: firstnm_user / firstnm_pass")
+
             # ── STEP 1: Setup — create project and session ──────────────────
             _update_inquiry(inquiry_id, {"status": "researching", "step": 1})
             _log("Step 1: Creating project and session...")
@@ -6218,11 +6309,12 @@ def api_workflows():
 def _auto_search_deed(name: str, job_type: str = "BDY") -> dict | None:
     """Search 1stNMTitle for deeds matching `name`, return scored results.
 
+    Uses the '__auto__' background session (logged in via _auto_login).
     Returns: { results: [...], best: {...}, count: int } or None on failure.
     """
     try:
         search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
-        sess = _session()
+        sess = _get_web_session("__auto__")  # use background session, not request session
         resp = sess.get(search_url, timeout=15)
 
         if 'CROSSNAMEFIELD' not in resp.text:

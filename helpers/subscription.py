@@ -10,6 +10,7 @@ Local mode:  When DEED_APP_URL is not set or does not start with https://,
 """
 
 import os
+import sys
 from functools import wraps
 from flask import request, jsonify, g
 from helpers.auth import verify_token, get_user, reset_monthly_counts_if_needed
@@ -20,7 +21,7 @@ _is_production = os.environ.get("DEED_APP_URL", "").startswith("https://")
 LOCAL_MODE = not _is_production
 
 if LOCAL_MODE:
-    print("[subscription] 🔓 LOCAL MODE — all Pro features unlocked, no payment required.", flush=True)
+    print("[subscription] LOCAL MODE - all Pro features unlocked, no payment required.", flush=True)
 
 
 # ── Tier definitions ──────────────────────────────────────────────────────────
