@@ -3,11 +3,24 @@ helpers/subscription.py — Tier-based feature gating for Deed & Plat Helper Saa
 
 Tiers:  free  →  pro  →  team
 Each tier inherits all permissions of the tier below it.
+
+Local mode:  When DEED_APP_URL is not set or does not start with https://,
+             all tier checks are bypassed — every user gets full Pro access.
+             This lets the office LAN use the app without Stripe.
 """
 
+import os
 from functools import wraps
 from flask import request, jsonify, g
 from helpers.auth import verify_token, get_user, reset_monthly_counts_if_needed
+
+# ── Local-mode detection ─────────────────────────────────────────────────────
+# When True, subscription gating is completely bypassed.
+_is_production = os.environ.get("DEED_APP_URL", "").startswith("https://")
+LOCAL_MODE = not _is_production
+
+if LOCAL_MODE:
+    print("[subscription] 🔓 LOCAL MODE — all Pro features unlocked, no payment required.", flush=True)
 
 
 # ── Tier definitions ──────────────────────────────────────────────────────────
@@ -69,12 +82,16 @@ def tier_rank(tier: str) -> int:
 
 def has_feature(user: dict, feature: str) -> bool:
     """Check if a user's tier grants access to a given feature."""
+    if LOCAL_MODE:
+        return True
     limits = get_tier_limits(user.get("tier", "free"))
     return bool(limits.get(feature, False))
 
 
 def check_search_quota(user: dict) -> tuple[bool, str]:
     """Returns (allowed, error_message). Checks monthly search limit."""
+    if LOCAL_MODE:
+        return True, ""
     user  = reset_monthly_counts_if_needed(user)
     tier  = user.get("tier", "free")
     limit = TIER_LIMITS[tier]["searches_per_month"]
@@ -103,27 +120,43 @@ def _get_token_from_request() -> str | None:
 
 def require_auth(f):
     """Decorator: requires a valid deed_token cookie or Bearer header.
-    Attaches g.current_user on success."""
+    Attaches g.current_user on success.
+    In LOCAL_MODE, synthesises a dev user if no token is present."""
     @wraps(f)
     def wrapper(*args, **kwargs):
         token   = _get_token_from_request()
         user_id = verify_token(token) if token else None
         user    = get_user(user_id) if user_id else None
         if not user or not user.get("active", True):
+            if LOCAL_MODE:
+                # Auto-create a local dev user so auth never blocks
+                g.current_user = {
+                    "id": "local_dev", "email": "dev@localhost",
+                    "tier": "pro", "active": True,
+                    "search_count_this_month": 0,
+                }
+                return f(*args, **kwargs)
             return jsonify({
                 "success":   False,
                 "error":     "Authentication required.",
                 "auth_required": True,
             }), 401
+        # In local mode, always override tier to pro
+        if LOCAL_MODE:
+            user = dict(user)       # don't mutate the stored user
+            user["tier"] = "pro"
         g.current_user = reset_monthly_counts_if_needed(user)
         return f(*args, **kwargs)
     return wrapper
 
 
 def require_pro(f):
-    """Decorator: requires pro or team tier. Must be used AFTER @require_auth."""
+    """Decorator: requires pro or team tier. Must be used AFTER @require_auth.
+    In LOCAL_MODE this is a no-op — all users pass."""
     @wraps(f)
     def wrapper(*args, **kwargs):
+        if LOCAL_MODE:
+            return f(*args, **kwargs)
         user = getattr(g, "current_user", None)
         if not user or tier_rank(user.get("tier", "free")) < tier_rank("pro"):
             return jsonify({
@@ -138,9 +171,12 @@ def require_pro(f):
 
 
 def require_team(f):
-    """Decorator: requires team tier. Must be used AFTER @require_auth."""
+    """Decorator: requires team tier. Must be used AFTER @require_auth.
+    In LOCAL_MODE this is a no-op."""
     @wraps(f)
     def wrapper(*args, **kwargs):
+        if LOCAL_MODE:
+            return f(*args, **kwargs)
         user = getattr(g, "current_user", None)
         if not user or tier_rank(user.get("tier", "free")) < tier_rank("team"):
             return jsonify({

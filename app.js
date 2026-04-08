@@ -7223,6 +7223,23 @@ function closeUpgradeModal() {
   document.getElementById('upgradeOverlay').classList.add('hidden');
 }
 
+/** Detect if we're running on a local/LAN server (no SaaS billing applies). */
+function _isLocalMode() {
+  const h = window.location.hostname;
+  return h === 'localhost' || h === '127.0.0.1' || h.startsWith('192.168.') || h.startsWith('10.') || h.endsWith('.local');
+}
+
+/**
+ * Returns true if the current SaaS user has Pro or Team.
+ * In local/LAN mode, always returns true — no payment required.
+ */
+function _hasPro() {
+  if (_isLocalMode()) return true;
+  if (!_saasUser) return false;
+  const tier = _saasUser.tier || 'free';
+  return tier === 'pro' || tier === 'team';
+}
+
 /** Call this when an API returns upgrade_required: true */
 function handleUpgradeRequired(res, featureName) {
   const msg = res.error || 'This feature requires a Pro subscription.';
@@ -7487,16 +7504,6 @@ function _checkUpgradeSuccess() {
     // Refresh session to get new tier
     initSaasAuth();
   }
-}
-
-/**
- * Returns true if the current SaaS user has Pro or Team.
- * Falls back to false (free) if not logged in.
- */
-function _hasPro() {
-  if (!_saasUser) return false;
-  const tier = _saasUser.tier || 'free';
-  return tier === 'pro' || tier === 'team';
 }
 
 /**
@@ -8314,3 +8321,82 @@ function _applyTeamVisibility(userTier, userRole) {
     }, 900);
   });
 })();
+
+// ── doGeneratePlat — paste after doGenerateDxf() in app.js ──────────────────
+
+async function doGeneratePlat() {
+  const rs = state.researchSession;
+  if (!rs) { showToast('Load a session first', 'warn'); return; }
+  if (!state.parsedCalls.length && !state.adjoinParcels.some(p => p.calls.length)) {
+    showToast('No boundary calls to generate', 'warn'); return;
+  }
+
+  const btn    = document.getElementById('btnGeneratePlat');
+  const status = document.getElementById('s6GenerateStatus');
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Generating Full Plat...';
+  status.textContent = '';
+
+  // Build parcels payload (same structure as DXF)
+  const parcels = [];
+  if (state.parsedCalls.length) {
+    parcels.push({ label: `Client  ${rs.client_name}`, layer: 'CLIENT', calls: state.parsedCalls, start_x: 0, start_y: 0 });
+  }
+  state.adjoinParcels.forEach(p => {
+    if (p.calls.length) parcels.push({ label: p.label, layer: p.layer || 'ADJOINERS', calls: p.calls, start_x: p.start_x || 0, start_y: p.start_y || 0 });
+  });
+
+  // Adjoiner names for labeling
+  const adjoiners = (state.researchSession?.subjects || [])
+    .filter(s => s.role !== 'client')
+    .map(s => s.name || '')
+    .filter(Boolean);
+
+  const options = {
+    draw_boundary:    document.getElementById('optDrawBoundary')?.checked ?? true,
+    draw_labels:      document.getElementById('optDrawLabels')?.checked ?? true,
+    draw_north_arrow: true,
+    draw_scale_bar:   true,
+    draw_title_block: true,
+    draw_adjoiners:   adjoiners.length > 0,
+    text_height:      parseFloat(document.getElementById('optLabelSize')?.value) || 2.0,
+    close_tolerance:  parseFloat(document.getElementById('optCloseTol')?.value) || 0.5,
+  };
+
+  try {
+    const res = await apiFetch('/generate-plat', 'POST', {
+      job_number: rs.job_number, client_name: rs.client_name,
+      job_type: rs.job_type, parcels, adjoiners, options
+    });
+
+    if (!res.success) {
+      showToast('Plat failed: ' + res.error, 'error');
+      status.textContent = 'Error: ' + res.error;
+      return;
+    }
+
+    showToast(`📐 Plat saved: ${res.filename}`, 'success');
+
+    // Build summary
+    let summary = `<span class="text-accent2">📐 ${escHtml(res.filename)}</span>`;
+    if (res.area && res.area[0]) {
+      const a = res.area[0];
+      summary += `<br><span class="text-text3" style="font-size:11px">Area: ${a.acres?.toFixed(4)} ac · Closure: ${res.closure?.[0]?.error_ft?.toFixed(4)} ft · Precision: ${res.closure?.[0]?.precision}</span>`;
+    }
+    status.innerHTML = summary;
+
+    // Open the folder after a short delay
+    setTimeout(() => {
+      const dir = res.file_path?.substring(0, res.file_path.lastIndexOf('\\')) || res.file_path?.substring(0, res.file_path.lastIndexOf('/'));
+      if (dir) apiFetch('/open-folder', 'POST', { path: dir }).catch(() => {});
+    }, 600);
+
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+    status.textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<span class="btn-icon">📐</span> Generate Full Plat';
+  }
+}
+

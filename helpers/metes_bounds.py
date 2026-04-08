@@ -251,6 +251,20 @@ def parse_metes_bounds(text: str) -> list[dict]:
             delta_deg = math.degrees(arc_len / radius)
             chord_len = 2 * radius * math.sin(math.radians(delta_deg) / 2)
 
+        # Derive azimuth_deg from chord bearing for downstream compatibility
+        curve_azimuth = 0.0
+        if chord_brg:
+            cb_m = re.match(
+                r'([NS])\s*(\d+)[°\-\s]*(\d{0,2})[\'′\-\s]*(\d{0,2})[\"″\-\s]*([EW])',
+                chord_brg.strip().upper()
+            )
+            if cb_m:
+                curve_azimuth = _bearing_to_azimuth(
+                    cb_m.group(1), float(cb_m.group(2)),
+                    float(cb_m.group(3) or 0), float(cb_m.group(4) or 0),
+                    cb_m.group(5)
+                )
+
         calls.append({
             "type":         "curve",
             "direction":    direction,
@@ -260,8 +274,9 @@ def parse_metes_bounds(text: str) -> list[dict]:
             "chord_length": round(chord_len, 2),
             "chord_bearing": chord_brg,
             "distance":     round(arc_len or chord_len, 2),
+            "azimuth_deg":  round(curve_azimuth, 6),
             "bearing_raw":  m.group(0).strip(),
-            "bearing_label": f"Curve {direction} R={radius:.1f}'",
+            "bearing_label": f"Curve {direction} R={radius:.1f}' Δ={delta_deg:.2f}°",
             "pos":          m.start(),
         })
 

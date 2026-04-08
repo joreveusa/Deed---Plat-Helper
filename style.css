@@ -2752,6 +2752,22 @@ body, body * {
   color: #ff7b72;
 }
 
+/* ── Cross-link: text ↔ plot highlights ───────────────────── */
+.call-text-link {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.call-text-link:hover {
+  background: rgba(79, 195, 247, 0.15) !important;
+  box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.2);
+}
+.call-text-link.call-text-active {
+  background: rgba(79, 195, 247, 0.25) !important;
+  box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.4);
+  font-weight: 800;
+}
+
 /* ═══════════════════════════ PROFILE SYSTEM ═══════════════════════════ */
 
 /* Profile Badge in Topbar */

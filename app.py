@@ -128,6 +128,14 @@ app.register_blueprint(stripe_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(team_bp)
 
+# AI integration (optional — works without AI deps installed)
+try:
+    from ai.routes import ai_bp
+    app.register_blueprint(ai_bp)
+    print("[ai] AI endpoints registered at /api/ai/*", flush=True)
+except ImportError:
+    print("[ai] AI modules not available — install networkx, scikit-learn to enable", flush=True)
+
 # Inject Stripe functions into the Stripe Blueprint (avoids circular import)
 init_stripe(
     available=_STRIPE_AVAILABLE,
@@ -940,6 +948,85 @@ def api_arcgis_test():
         return jsonify({"success": False, "error": str(e)})
 
 # County Registry -> moved to routes/admin.py Blueprint
+
+# ── test-connection (onboarding wizard) ────────────────────────────────────────
+
+@app.route("/api/test-connection", methods=["POST"])
+def api_test_connection():
+    """Test portal login with a caller-supplied URL + credentials.
+
+    Body: { url, username, password }
+    Returns: { success, error? }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        portal_url = (data.get("url") or "").strip().rstrip("/")
+        username   = data.get("username", "")
+        password   = data.get("password", "")
+
+        if not portal_url:
+            return jsonify({"success": False, "error": "No portal URL provided"})
+
+        # Use a temporary session so we don't pollute the main one
+        tmp_sess = req_lib.Session()
+        tmp_sess.headers.update({"User-Agent": "DeedPlatHelper/1.0"})
+
+        resp = tmp_sess.get(portal_url + "/", timeout=10)
+        soup = BeautifulSoup(resp.text, "lxml")
+        form = soup.find("form")
+        if not form:
+            return jsonify({"success": False, "error": "Login form not found at that URL"})
+
+        action = form.get("action", "/")
+        if not action.startswith("http"):
+            action = portal_url + "/" + action.lstrip("/")
+
+        form_data = {}
+        for inp in form.find_all("input"):
+            nm = inp.get("name")
+            itype = (inp.get("type") or "text").lower()
+            if nm:
+                if itype == "image":
+                    form_data[nm + ".x"] = "1"
+                    form_data[nm + ".y"] = "1"
+                else:
+                    form_data[nm] = inp.get("value", "")
+
+        # Map credentials
+        mapped = False
+        for inp in form.find_all("input"):
+            nm = inp.get("name", "")
+            if nm == "FormUser":
+                form_data["FormUser"] = username; mapped = True
+            elif nm == "FormPassword":
+                form_data["FormPassword"] = password; mapped = True
+        if not mapped:
+            for inp in form.find_all("input"):
+                itype = (inp.get("type") or "text").lower()
+                iname = (inp.get("name") or "").lower()
+                if itype == "password":
+                    form_data[inp["name"]] = password
+                elif itype == "text" and ("user" in iname or "login" in iname):
+                    form_data[inp["name"]] = username
+
+        post_resp = tmp_sess.post(action, data=form_data, timeout=10)
+        landed_url = post_resp.url.lower()
+        portal_root = portal_url.lower().rstrip("/")
+        success = ("hfweb" in landed_url
+                   or "new search" in post_resp.text.lower()
+                   or ("logout" in post_resp.text.lower()
+                       and landed_url.rstrip("/") != portal_root))
+
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "Invalid credentials or login failed"})
+    except req_lib.exceptions.Timeout:
+        return jsonify({"success": False, "error": "Connection timed out — check the URL"})
+    except req_lib.exceptions.ConnectionError:
+        return jsonify({"success": False, "error": "Cannot reach that URL — check the address"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 # ── login ──────────────────────────────────────────────────────
 
@@ -3070,6 +3157,126 @@ def api_research_post():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+
+# ── session control (for AI Surveyor orchestrator) ─────────────────────────
+
+@app.route("/api/session/status")
+def api_session_status():
+    """Lightweight session status for the AI Surveyor orchestrator.
+
+    Query params: job_number, client_name, job_type (default BDY)
+    Returns: {
+      success, step, progress: { total, deeds, plats, done, pct },
+      client_upc, has_deed, has_plat, has_description, adjoiner_count
+    }
+    """
+    try:
+        job_number  = request.args.get("job_number", "")
+        client_name = request.args.get("client_name", "")
+        job_type    = request.args.get("job_type", "BDY")
+        if not job_number or not client_name:
+            return jsonify({"success": False, "error": "job_number + client_name required"})
+
+        data = load_research(job_number, client_name, job_type)
+        subjects = data.get("subjects", [])
+        total = len(subjects)
+        deeds = sum(1 for s in subjects if s.get("deed_saved"))
+        plats = sum(1 for s in subjects if s.get("plat_saved"))
+        done  = sum(1 for s in subjects if s.get("deed_saved") and s.get("plat_saved"))
+
+        client_subj = next((s for s in subjects if s.get("type") == "client"), None)
+        adjoiners = [s for s in subjects if s.get("type") == "adjoiner"]
+
+        # Infer current step from what's been completed
+        if not client_subj:
+            step = 1  # not started
+        elif not client_subj.get("deed_saved"):
+            step = 2  # searching for client deed
+        elif not client_subj.get("property_description") and not client_subj.get("desc_type"):
+            step = 3  # need property description
+        elif not adjoiners:
+            step = 4  # need adjoiner discovery
+        elif not all(s.get("deed_saved") and s.get("plat_saved") for s in adjoiners):
+            step = 5  # researching adjoiners
+        else:
+            step = 6  # ready for plat drafting
+
+        return jsonify({
+            "success": True,
+            "step": step,
+            "progress": {
+                "total": total, "deeds": deeds, "plats": plats,
+                "done": done, "pct": round(done / total * 100, 1) if total else 0,
+            },
+            "client_upc": data.get("client_upc", ""),
+            "has_deed": bool(client_subj and client_subj.get("deed_saved")),
+            "has_plat": bool(client_subj and client_subj.get("plat_saved")),
+            "has_description": bool(client_subj and (client_subj.get("property_description") or client_subj.get("desc_type"))),
+            "adjoiner_count": len(adjoiners),
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/session/advance", methods=["POST"])
+def api_session_advance():
+    """Advance a research session to a specific step.
+
+    Used by the AI Surveyor orchestrator to programmatically move through
+    the research workflow after completing each phase.
+
+    Body: { job_number, client_name, job_type, target_step: int (2-6),
+            data: { ... optional fields to merge into session } }
+    Returns: { success, step, message }
+    """
+    try:
+        body = request.get_json() or {}
+        job_number  = body.get("job_number", "")
+        client_name = body.get("client_name", "")
+        job_type    = body.get("job_type", "BDY")
+        target_step = int(body.get("target_step", 0))
+        merge_data  = body.get("data", {})
+
+        if not job_number or not client_name:
+            return jsonify({"success": False, "error": "job_number + client_name required"})
+        if target_step < 1 or target_step > 6:
+            return jsonify({"success": False, "error": "target_step must be 1-6"})
+
+        data = load_research(job_number, client_name, job_type)
+
+        # Merge any additional data (e.g., new subjects, updated fields)
+        if merge_data:
+            if "subjects" in merge_data:
+                # Merge new subjects without duplicating existing ones
+                existing_ids = {s.get("id") for s in data.get("subjects", [])}
+                for new_subj in merge_data["subjects"]:
+                    if new_subj.get("id") not in existing_ids:
+                        data.setdefault("subjects", []).append(new_subj)
+                    else:
+                        # Update existing subject
+                        for i, s in enumerate(data["subjects"]):
+                            if s.get("id") == new_subj.get("id"):
+                                data["subjects"][i].update(new_subj)
+                                break
+            # Merge top-level keys (client_upc, client_parcel, etc.)
+            for k, v in merge_data.items():
+                if k != "subjects":
+                    data[k] = v
+
+        data["_last_step"] = target_step
+        save_research(job_number, client_name, job_type, data)
+
+        return jsonify({
+            "success": True,
+            "step": target_step,
+            "message": f"Session advanced to step {target_step}",
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
 # ── research analytics (historical patterns + predictions) ─────────────────
 
 @app.route("/api/research-analytics")
@@ -3147,170 +3354,6 @@ def api_session_completeness():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
 
-
-# ── AI Surveyor Bridge endpoints ─────────────────────────────────────────────
-
-@app.route("/api/session/status", methods=["GET"])
-def api_session_status():
-    """Return the current research session status for the AI Surveyor bridge.
-
-    Query: ?job_number=<str>&client_name=<str>&job_type=<str>
-    Returns: {
-        success, session, step, progress,
-        property_description, calls_count, closure_error,
-        subjects_summary: [{name, type, deed_saved, plat_saved}]
-    }
-    """
-    try:
-        job_number  = request.args.get("job_number", "")
-        client_name = request.args.get("client_name", "")
-        job_type    = request.args.get("job_type", "BDY")
-
-        if not job_number or not client_name:
-            return jsonify({"success": False, "error": "job_number + client_name required"})
-
-        data = load_research(job_number, client_name, job_type)
-        subjects = data.get("subjects", [])
-        client = next((s for s in subjects if s.get("type") == "client"), None)
-
-        # Determine current step based on what data exists
-        step = 1  # Job Setup
-        if client:
-            if client.get("deed_saved"):
-                step = 3  # Plat search
-            elif client.get("name"):
-                step = 2  # Deed search
-            if any(s.get("type") == "adjoiner" for s in subjects):
-                step = max(step, 4)  # Adjoiner board
-            if all(s.get("deed_saved") and s.get("plat_saved") for s in subjects if s.get("type") == "adjoiner"):
-                step = 6  # Export
-
-        # Property description summary
-        prop_desc = client.get("property_description", "") if client else ""
-        calls_count = client.get("calls_count", 0) if client else 0
-
-        total = len(subjects)
-        deeds = sum(1 for s in subjects if s.get("deed_saved"))
-        plats = sum(1 for s in subjects if s.get("plat_saved"))
-
-        return jsonify({
-            "success": True,
-            "job_number": job_number,
-            "client_name": client_name,
-            "step": step,
-            "progress": {"total": total, "deeds": deeds, "plats": plats},
-            "has_property_description": bool(prop_desc),
-            "calls_count": calls_count,
-            "desc_type": client.get("desc_type", "") if client else "",
-            "trs_refs": client.get("trs_refs", []) if client else [],
-            "subjects_summary": [
-                {
-                    "name": s.get("name", ""),
-                    "type": s.get("type", ""),
-                    "deed_saved": bool(s.get("deed_saved")),
-                    "plat_saved": bool(s.get("plat_saved")),
-                    "upc": s.get("upc", ""),
-                }
-                for s in subjects
-            ],
-        })
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)})
-
-
-@app.route("/api/session/advance", methods=["POST"])
-def api_session_advance():
-    """Allow the AI Surveyor bridge to advance the research session.
-
-    Body: {
-        job_number: str, client_name: str, job_type: str,
-        action: str (one of: "add_adjoiner", "mark_deed", "mark_plat", "set_description"),
-        subject_name: str (for adjoiner actions),
-        upc: str (optional),
-        description: str (for set_description),
-        desc_type: str (for set_description),
-    }
-    Returns: { success, message }
-    """
-    try:
-        body = request.get_json() or {}
-        job_number  = body.get("job_number", "")
-        client_name = body.get("client_name", "")
-        job_type    = body.get("job_type", "BDY")
-        action      = body.get("action", "")
-
-        if not job_number or not client_name:
-            return jsonify({"success": False, "error": "job_number + client_name required"})
-        if not action:
-            return jsonify({"success": False, "error": "action required"})
-
-        data = load_research(job_number, client_name, job_type)
-        subjects = data.get("subjects", [])
-
-        if action == "add_adjoiner":
-            name = body.get("subject_name", "").strip()
-            upc  = body.get("upc", "").strip()
-            if not name and not upc:
-                return jsonify({"success": False, "error": "subject_name or upc required"})
-            # Check for duplicates
-            existing = any(
-                s.get("name", "").lower() == name.lower() or
-                (upc and s.get("upc", "") == upc)
-                for s in subjects if s.get("type") == "adjoiner"
-            )
-            if existing:
-                return jsonify({"success": True, "message": f"Adjoiner '{name}' already exists"})
-            subjects.append({
-                "type": "adjoiner",
-                "name": name or f"UPC {upc}",
-                "upc": upc,
-                "deed_saved": False,
-                "plat_saved": False,
-            })
-            data["subjects"] = subjects
-            save_research(job_number, client_name, data, job_type)
-            return jsonify({"success": True, "message": f"Added adjoiner '{name or upc}'"})
-
-        elif action == "mark_deed":
-            target = body.get("subject_name", "").strip()
-            for s in subjects:
-                if s.get("name", "").lower() == target.lower():
-                    s["deed_saved"] = True
-                    break
-            else:
-                return jsonify({"success": False, "error": f"Subject '{target}' not found"})
-            save_research(job_number, client_name, data, job_type)
-            return jsonify({"success": True, "message": f"Marked deed saved for '{target}'"})
-
-        elif action == "mark_plat":
-            target = body.get("subject_name", "").strip()
-            for s in subjects:
-                if s.get("name", "").lower() == target.lower():
-                    s["plat_saved"] = True
-                    break
-            else:
-                return jsonify({"success": False, "error": f"Subject '{target}' not found"})
-            save_research(job_number, client_name, data, job_type)
-            return jsonify({"success": True, "message": f"Marked plat saved for '{target}'"})
-
-        elif action == "set_description":
-            desc_text = body.get("description", "").strip()
-            desc_type = body.get("desc_type", "unknown")
-            client = next((s for s in subjects if s.get("type") == "client"), None)
-            if not client:
-                return jsonify({"success": False, "error": "No client subject in session"})
-            client["property_description"] = desc_text
-            client["desc_type"] = desc_type
-            save_research(job_number, client_name, data, job_type)
-            return jsonify({"success": True, "message": "Property description updated"})
-
-        else:
-            return jsonify({"success": False, "error": f"Unknown action: {action}"})
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)})
 
 
 # ── legal description similarity search ───────────────────────────────────────
@@ -3565,7 +3608,206 @@ def api_parse_calls():
 
 
 
-# ── /api/extract-calls-from-pdf ───────────────────────────────────────────────
+# ── /api/feedback ─────────────────────────────────────────────────────────────
+
+@app.route("/api/feedback", methods=["POST"])
+def api_feedback():
+    """
+    Submit a surveyor correction to the AI feedback log.
+
+    Body (all optional except type + job_number):
+      {
+        type:               "deed_correction" | "adjoiner_count" | "complexity_label"
+                            | "boundary_call" | "cabinet_prediction" | "general",
+        job_number:         int,
+        client_name:        str,
+
+        # deed_correction
+        ai_suggested:       str,
+        surveyor_selected:  str,
+
+        # adjoiner_count
+        ai_predicted:       int,
+        actual:             int,
+        job_type:           str,
+        trs:                str,
+
+        # complexity_label
+        ai_label:           str,
+        actual_label:       str,
+
+        # general
+        note:               str,
+        reason:             str,
+      }
+
+    Returns: { success, id, type, job_number }
+    """
+    import sys as _sys
+    try:
+        data       = request.get_json() or {}
+        fb_type    = data.get("type", "general")
+        job_number = int(data.get("job_number", 0))
+        client     = data.get("client_name", "")
+
+        if not job_number:
+            return jsonify({"success": False, "error": "job_number is required"})
+
+        # Try to import from AI Surveyor services path
+        ai_surveyor_path = str(Path(__file__).resolve().parents[1] / "AI Surveyor")
+        if ai_surveyor_path not in _sys.path:
+            _sys.path.insert(0, ai_surveyor_path)
+
+        try:
+            from services.surveyor.feedback_collector import FeedbackCollector, FeedbackType
+        except ImportError:
+            # Inline fallback — just write to a local JSONL file
+            import json as _json, threading as _threading
+            _fb_log = Path(__file__).resolve().parent / "data" / "feedback.jsonl"
+            _fb_log.parent.mkdir(parents=True, exist_ok=True)
+            record = {"type": fb_type, "job_number": job_number,
+                      "client_name": client, **data,
+                      "timestamp": datetime.now().isoformat()}
+            with _threading.Lock():
+                with open(_fb_log, "a", encoding="utf-8") as _f:
+                    _f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+            return jsonify({"success": True, "id": "local", "type": fb_type,
+                            "job_number": job_number})
+
+        fb = FeedbackCollector()
+
+        if fb_type == FeedbackType.DEED_CORRECTION:
+            rec = fb.record_deed_correction(
+                job_number, client,
+                ai_suggested_doc    = data.get("ai_suggested", ""),
+                surveyor_selected_doc = data.get("surveyor_selected", ""),
+                reason              = data.get("reason", ""),
+            )
+        elif fb_type == FeedbackType.ADJOINER_COUNT:
+            rec = fb.record_adjoiner_correction(
+                job_number, client,
+                ai_predicted = int(data.get("ai_predicted", 0)),
+                actual_count = int(data.get("actual", 0)),
+                job_type     = data.get("job_type", ""),
+                trs          = data.get("trs", ""),
+            )
+        elif fb_type == FeedbackType.COMPLEXITY_LABEL:
+            rec = fb.record_complexity_correction(
+                job_number, client,
+                ai_label     = data.get("ai_label", ""),
+                actual_label = data.get("actual_label", ""),
+                job_type     = data.get("job_type", ""),
+            )
+        elif fb_type == FeedbackType.CABINET_PREDICTION:
+            rec = fb.record_cabinet_correction(
+                job_number, client,
+                ai_predicted_cab = data.get("ai_predicted", ""),
+                actual_cab       = data.get("actual", ""),
+                job_type         = data.get("job_type", ""),
+                trs              = data.get("trs", ""),
+            )
+        else:
+            rec = fb.record_note(job_number, client, data.get("note", data.get("reason", "")))
+
+        return jsonify({"success": True, "id": rec.get("id"),
+                        "type": fb_type, "job_number": job_number})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+
+# ── /api/generate-plat ────────────────────────────────────────────────────────
+
+@app.route("/api/generate-plat", methods=["POST"])
+def api_generate_plat():
+    """
+    Generate a complete survey plat DXF with title block, north arrow,
+    scale bar, area, and bearing/distance labels.
+
+    Body:
+      {
+        job_number:  str | int,
+        client_name: str,
+        job_type:    str,           # BDY, ILR, etc.
+        parcels:     [{label, calls, layer, start_x, start_y}],
+        adjoiners:   [str],         # optional list of adjoiner names
+        options:     {}             # optional overrides
+      }
+
+    Returns:
+      { success, file_path, filename, closure: [...], area: [...] }
+    """
+    try:
+        data        = request.get_json() or {}
+        job_number  = data.get("job_number", "???")
+        client_name = data.get("client_name", "Unknown")
+        job_type    = data.get("job_type", "BDY")
+        parcels     = data.get("parcels", [])
+        adjoiners   = data.get("adjoiners", [])
+        options     = data.get("options", {})
+
+        if not parcels:
+            return jsonify({"success": False, "error": "No parcels provided"})
+
+        # Import generator (lazy — avoids import at startup)
+        try:
+            import sys
+            ai_surveyor_path = str(Path(__file__).resolve().parents[1].parent / "AI Surveyor")
+            if ai_surveyor_path not in sys.path:
+                sys.path.insert(0, ai_surveyor_path)
+            from plat.generator import PlatGenerator
+        except ImportError:
+            # Fallback: try relative to same drive root
+            try:
+                import importlib.util
+                gen_path = Path(__file__).resolve().drive + "\\Under Development\\AI Surveyor\\plat\\generator.py"
+                spec = importlib.util.spec_from_file_location("plat.generator", gen_path)
+                mod  = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                PlatGenerator = mod.PlatGenerator
+            except Exception as ie:
+                return jsonify({"success": False, "error": f"PlatGenerator not available: {ie}"})
+
+        # Determine output directory (job folder if session active)
+        out_dir = ""
+        session_data = load_research()
+        if session_data and session_data.get("job_number"):
+            job_folder = _get_job_folder(session_data["job_number"])
+            if job_folder and Path(job_folder).exists():
+                out_dir = str(Path(job_folder) / "Plat Files")
+
+        gen    = PlatGenerator()
+        result = gen.generate(
+            job_number  = job_number,
+            client_name = client_name,
+            job_type    = job_type,
+            parcels     = parcels,
+            adjoiners   = adjoiners or [],
+            output_dir  = out_dir,
+            options     = options or {},
+        )
+
+        if not result.get("success"):
+            return jsonify({"success": False, "error": result.get("error", "Unknown error")})
+
+        file_path = result.get("file_path", "")
+        return jsonify({
+            "success":   True,
+            "file_path": file_path,
+            "filename":  Path(file_path).name if file_path else "",
+            "closure":   result.get("closure", []),
+            "area":      result.get("area", []),
+            "parcels":   result.get("parcels_drawn", 0),
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+
 
 @app.route("/api/extract-calls-from-pdf", methods=["POST"])
 def api_extract_calls_from_pdf():
