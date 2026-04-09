@@ -40,7 +40,7 @@ except ImportError:
 research_bp = Blueprint("research", __name__)
 
 # ── arXiv config ──────────────────────────────────────────────────────────────
-ARXIV_BASE   = "http://export.arxiv.org/api/query"
+ARXIV_BASE   = "https://export.arxiv.org/api/query"
 MAX_RESULTS  = 15       # cap per query to stay light
 REQUEST_TO   = 8.0      # seconds timeout
 _last_call   = 0.0
