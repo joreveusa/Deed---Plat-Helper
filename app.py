@@ -136,6 +136,15 @@ try:
 except ImportError:
     print("[ai] AI modules not available — install networkx, scikit-learn to enable", flush=True)
 
+# Research intelligence tab (arXiv miner + novelty scoring)
+try:
+    from routes.research import research_bp
+    app.register_blueprint(research_bp)
+    print("[research] Research endpoints registered at /api/research/*", flush=True)
+except ImportError as _re:
+    print(f"[research] Research module unavailable: {_re}", flush=True)
+
+
 # Inject Stripe functions into the Stripe Blueprint (avoids circular import)
 init_stripe(
     available=_STRIPE_AVAILABLE,
