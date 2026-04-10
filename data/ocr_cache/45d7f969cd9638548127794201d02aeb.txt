@@ -1,0 +1,42 @@
+: PROPERTY DESCRIPTIONS
+\ TRACT "C~1D” (Sale) ; REMAINDER TRACT "C-1” (retained by owner)
+: A certain tract of land in Los Cordovas, Taos County, New Mexico, A certain tract of land in Les Cordovas, Taos County, New Mexico, :
+seeton within the Gljosa Grant, located in projected Section 27, Township 25 within the Gijosa Grant, located In projected Section 27, Township 25
+7 North, Range 12 East, N.M.P.M.; described as part of Tract 68, Map North, Range 12 East, N.M.P.M.; described as part of Tract 25, Map
+: i 42, and part of Tract 25, map 45, all of Survey 2 of the 1941 Taos . 45, Survey 2 of the 1941 Taos County Reassessment Survey; and os
+eo County Reassessment Survey; and more particularly described by more particularly described by metes and bounds os follows:
+| metes and bounds as follows: Beginning at a 1/2 inch rebar found for the most southerly corner
+i Beginning at a 5/8 inch rebar set for the most easterly corner of of this tract, and the true point of beginning, from whence
+i this tract, and the true point of beginning, from whence Triangulation Triangulation Station “Gravel,” 0 1973 State Engineer Office brass cap
+| : Station “Gravel,” a 1973 State Engineer Office brass cap monument monument found, bears S 10°42°34" W, 1343.24 feet distant, thence:
+found, bears S 23°25'31” W, 1,915.90 feet distant, thence; ;
+foe N 48°47°58” W, 135.47 feet to a 5/8 Inch rebar set for the most
+aaa S$ 49°26°41" W, 23.98 feet toa 1/2 inch rebar found, thence; westerly corner of this tract, thence;
+» S 49°26°53” W, 99.85 feet to a 5/8 inch rebar set for the most N 50°57°53” E, 572.88 feet to a 5/8 inch rebar set for the most
+southerly corner of this tract, thence; northerly corner of this tract, thence;
+N 39°02’07” W, 118.94 feet to a 5/8 inch rebar set for the most S$ 39°02°07" E, 118.94 feet to a 5/8 inch rebar set for the most
+: westerly corner of this tract, thence; easterly corner of this tract, thence;
+: N 50°57°53” E, 123.78 feet to a 5/8 inch rebar set for the most § 49°26’53” W, 550.10 feet to the TRUE POINT AND PLACE OF :
+northerly corner of this fract, thence; BEGINNING.
+: S 39°02°07" E, 115.66 feet to the TRUE POINT AND PLACE OF
+: BEGINNING. This tract contains 1.629 acres, more or less, is subject fo a sewer
+; line easement; and accrues an ingress, egress and utility easement :
+: This tract contains 14,520 square feet, or 0.335 of an acre, more or 25 feet In width northeasterly to Las Tusas Road (County Road
+less, fs subject to a sewer line easement; is also subject to an AC-030) as shown on this survey plat. :
+i ingress, egress and ulffity easement 25 feet in width along the ;
+northwesterly boundary, and accrues the same easement northeasterly ;
+to Las Tusas Read (County Read AC-030) as shown on this survey
+plat. Be
+| SHEET 2 OF 2
+| | mS Ane [BOUNDARY & LOT SPLIT SURVEY PLAT for]
+FOR COUNTY CLERK Lawrence g, A BOUNDARY & LOT SPLIT SURVEY PLAT for:
+; ; ; PROPERTY OWNER ON DEED: °
+} FELIPE A. RODRIGUEZ Professional Surveyor FELIPE A. RODRIGUEZ
+; : : SECTION | TOWNSHIP RANGE | ve57 noceu © TAOS, NEW MEXICO, 97671 © (505)750-450
+S 22 & 27 25N 12 LAND SURVEYING * CONSTRUCTION SURVEYING
+SUBDIVISION NAME
+SEO TOA aBLE: |__| LOCATION: LOS CORDOVAS, TAOS COUNTY, NEW MEXICO
+BY
+WY one ; CHECKED BY: } SCALE: DRAWN BY: PROJ. No. DATE:
+_ IB2BLOG.DWG : LSM 1°=60’° BV 1228LC6 09/17/10
+

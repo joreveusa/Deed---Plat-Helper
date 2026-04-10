@@ -1,0 +1,77 @@
+;
+i Line Table
+1
+| , | NORTH | | NUMBER[DRECTION [DISTANCE] ee
+| 1000 900 ie 200 300 N_10°55'06"-E [97.81 |
+Scale: 1" = 100 4 [S 101605" W_ 72.97 __]
+SHEET 20F 2 USS #2529" w_ | 13855")
+: ; jis TS 1e3e36e" E Nie2r
+. . S_71°20'24" W [46.87°
+: | oe . ' S$ _80°06'36” Ww 133.09"
+| ee Gove ? [Lio IN 6113°05" w_ [49.13 _|
+; enz < L1i__[S_32°39°56" w_|33.80° |
+: ert tot y = . Liz |S 831354" €_[51.25"
+| / —_—_—_ of 2605 9 Nay Moxiog “c Be CHORD DIRECTION ENGR Tay
+| Govern, Se SR” IM Moniog NOW tray “a: NUMBER] CHORD _DIR }CHORD LENGTH (feet) [TANGENT (FR) [RADIUS (1)
+™Ment Lot @~ oui PPS RCE NE State p, ald ci [s s72e'se" ww fi11.44 Fe7.10 T0000
+. Se gs oo ee Se eS of af / N 803515" W__ 199.90 374 a0. | ,
+-. i 43 FE a SE ic4[N_55*06'50" W [20.00 10.01 988.04
+a EY vee 9 an ~G ae GE “8 a a SS Pe Se ee S 804722" £288.07 [144.72] 1482.30]
+< .C, 107. ee a SRT SC © eT Pl aes 19.49:
+& Sas a a ee ao a > pie Pe. 4446, Teg = SSS cohen _ __
+, as & S. “Fl a ve a, an Y 5.81 do. . 40 Wide oS ay - Legend
+. By Dabs ia Sad * oo recone * a ‘ “ oY * . .
+9 8 rae 2545'+ % a Z Y el om Se ae ent of eat” line 6 N\BSES 2 @ © DENOTES REBAR, OR AS SHOWN FOUND
+dm J: Pek ged BE 2 Tagg, Boon Baer sme S NA~ f © OENOTES REBAR, OR AS SHOWN SET
+. On NOME Bo Bt 7 en ell housing as Mes Prati ip . an E N\P py... © 9 DENOTES CALCULATED POINT NOT SET
+; es Dy ARAN nel ms Ohl ———$—— ohraf _ B Vid & jo @ DENOTES BRASS CAP FOUND i
+; go ia = Be eee Es of am “ well housing ‘ ofe7 shui shut ——~——_ iy BR chur Leed Book Seph Fernan, @ DENOTES UTILITY POLE
+i g &,; ; Gonna ea ra and storagé 3 # This overhead power line oa M 33g Page dez & DENOTES UTILITY POLE ANCHOR
+| 4 ‘ fe Sn ie: meee Pe / Ea aS) Lis to be retired og Po — 860. wehei—ene DENOTES OVERHEAD UTILITY LINE
+fw ¢ coe ae Boundaries eZ per Kit Carson electric Yo F Pc 38357 ~*~ *— DENOTES EXISTING BARBED WIRE FENCE OR AS SHOWN.
+. NN PE PC dup 2 perative, Inc. ca . Try .. .B.., DENOTES UTILITY METER/VALVE/PEDISTAL/BOX/ETC.
+. Gg WO aS rT 3 as sured , | ER F_ #030" DENOTES PAVEMENT
+als roe. i <S SR on Soe (wy Pragt tt 26th op 4 o § = MP dey. serec 2 DENOTES AREA TAKEN BY N.M.D.O.T. SEE DOC. REF. 3-7
+: gore Soni Gt Ee ic nes SORE SEREY Dae Ca * 26, tong - Mae -——\ deg t & Maroy «+i._,, DENOTES AREAS AFFECTED BY RIPARIAN ISSUES. SEF | |
+Qe San; TRON SRR Lee ei V8 Book ay 330 + Fe Rande, 2.7 14gi", LEGEND, NOTES AND DOCUMENTS REFERENCED NUMBERS ff... 2
+Rta ‘B ; Be es Oe ee Bee Log N 77° ESE ; fe IS oe » Page 861 ™ oss 8,910 and’ 11 ON SHEET 1 OF 1. TOTAL AREA
+som : N\ pe ) “Pbar, G 8. 77°F SRO Core 5° i aa Wf dS 2! . ' AFFECTED = 1.593 ACRES MORE OR LESS.
+, Deed Flore, Tang oe HS Ccoesenesenesees Si / é / sectseaggen, DENOTES AREA BETWEEN THE CALCULATED EAST BOUNDARY a =
+| np, O8ed BOK M 42; 5° Luj jt NN ae OE 91 lo issue? OF PRIVATE CLAIM 4446, TRACT 3 AND THE EXISTING FENCE.
+Ne, Pat of pK A 155." Page gavan ‘ PN 1é SOEUBSE TOTAL AREA BETWEEN THE FENCE AND SAID CALCULATED :
+New Mex; F lands in an Page 189. 7988 eh Saas ae aay i t . - EAST BOUNDARY = 0.040 ACRES MORE OR LESS.
+: IC. - : a . oS Tks 7 ae
+- Corgis. "Ton Within theo Winty Of 190 : / ; S&B ae on —— “~ 38 ‘ u.s.g..o.b.im, :
+fed by o os Count Ontg Bq Vadito” f NERS - As XN. be brass cap j
+Priang 4, New rborg — : Su +~- 8s M.C. 104 |
+| Quiet Pigg - MAttiner © Mexicg "7 Grane” a : TVeye, 678 Fy ee »
+Plaintite Title Sui of #8 not NMP Seton. (1070,23" SS BIU6'S4F E 544.70"
+ntiff, py uit No reco, “GS, 399, er 5°60) (S 89°02" £) ; .
+inal Judgems, 85~ 39 Cy hee > (r et.) M\r Davig | 3. 1919 : ($45.84') _
+| | Mt ong De® Ramon Deed py & Patric, thru November 26, 1913
+. “€.-date, dy, Bareig "0, Deeg Bo M 19) B a Romer, : 8
+. un 26 7. : lat of Ig A 155 p Oge 7.7; .
+. aa 1985 Ney Weg n the ad 189-199"
+“ . . Es , u tT 3 . i
+_ 0s Cc si the Santa Bop Vodite» :
+: Cetttiag . Ounty, Barbary Grang*
+; by “prion, by: New Mey: mt : Ho
+, : Plog is tines, Nitpy CO ” ;
+: : . : Surveyor’s Certificate
+. : . To Santiago V. Abeyta, Edna M. Abeyta, Bernadette Abeyta, Monica Abeyta, . ‘
+: we < any Advantage Land Title and First American Title insurance Company:
+: : oR “ny This is to certifiy that this plot and the survey on which it is based were
+: : ; : ky en a7 uF mode in.accordance with the “Minimum Standard Detail Requirements for
+. ; . : : : ee WE ey 4 ALTA/ACSM Lond Title Surveys” jointly established and adopted by ALTA and |
+: . : SE OO < “oC 4. NSPS in 2005. Pursuant to the Accuracy Standards as adopted by ALTA and :
+: . | ; : : zg : eo we NSPS and in effect on the date of this certification, undersigned further :
+| - : ZR: i9Z certifies that in my professional opinion, as a land surveyor registered in the
+i ; ; aes i @Z state of ‘New Mexico, the Relative Positional! Accuracy of this survey does not
+: ! ; . : 4. ag. 2 — exceed that which is specified therein.
+| | . : 7 : Ci Sean >
+: ; KR Vigil, 7EM.P.LS. 12658 Date
+: a : . U.P.C.. Designator : :
+D : 1-070-133-375~380
+? REVISION BLOCK INDEXING INFORMATION FOR THE COUNTY CLERK .
+7 ; ; : : ALTAVAC AND TITLE SURVEY . :
+| ; SANTIAG

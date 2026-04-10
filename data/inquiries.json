@@ -1,0 +1,73 @@
+[
+  {
+    "id": "INQ-3001",
+    "client_name": "Rael, Adela",
+    "address": "",
+    "job_type": "BDY",
+    "email": "",
+    "phone": "",
+    "notes": "auto test",
+    "upc": "",
+    "status": "complete",
+    "step": 6,
+    "created_at": "2026-04-08T11:40:01.499179",
+    "updated_at": "2026-04-08T11:40:09.140065",
+    "complexity": {
+      "complexity": "low",
+      "predicted_adjoiners": 0.0,
+      "predicted_cabinet": "C",
+      "confidence": "gradient_boosting"
+    },
+    "kg_info": {
+      "known_adjoiners": [
+        "McCracken, Kaplan"
+      ],
+      "past_jobs": 1,
+      "in_knowledge_graph": true
+    },
+    "research": {
+      "job_number": "10000",
+      "subjects": [
+        {
+          "id": "client",
+          "type": "client",
+          "name": "Rael, Adela",
+          "deed_saved": false,
+          "plat_saved": true,
+          "status": "pending",
+          "notes": "",
+          "deed_path": "",
+          "plat_path": "J:\\AI DATA CENTER\\Survey Data\\10000-10099\\10000 Rael\\10000-01-BDY Rael\\E Research\\B Plats\\P2 10595.001   Rael, Trujillo et al.PDF"
+        }
+      ]
+    },
+    "log": [
+      "Inquiry created at 2026-04-08T11:40:01.499189",
+      "[11:40:03] Starting autonomous research pipeline...",
+      "[11:40:03]   Workflow: Boundary Survey (BDY)",
+      "[11:40:03]   Research depth: full, Adjoiners: all",
+      "[11:40:03] Step 0: Logging into 1stNMTitle portal...",
+      "[11:40:04]   ✓ Portal session established",
+      "[11:40:04] Step 1: Creating project and session...",
+      "[11:40:04]   Project #10000 created",
+      "[11:40:04]   Session created",
+      "[11:40:04] Step 2: Searching for client deed...",
+      "[11:40:05]   Found 65 results, best: I0000215 (score: 48)",
+      "[11:40:08]   ✗ Deed save failed: PDF fetch failed after 3 attempts (last status: 404)",
+      "[11:40:08] Step 3: Searching for client plat...",
+      "[11:40:08]   Found plat: cabinet",
+      "[11:40:08]   ✓ Client plat saved",
+      "[11:40:08] Step 4: Discovering adjoiners (mode: all)...",
+      "[11:40:08]   No UPC — skipping spatial discovery (add adjoiners manually)",
+      "[11:40:08] Step 5: Researching 0 adjoiners...",
+      "[11:40:08] Step 6: Generating reference table and package...",
+      "[11:40:09]   ✓ Excel reference table saved: Reference_Table_10000.xlsx",
+      "[11:40:09]   QA: Client deed=✗, Client plat=✓, Adjoiners with deeds=0/0",
+      "[11:40:09]   ⚠ 1 items need human review",
+      "[11:40:09]     → Client deed not found — manual search required",
+      "[11:40:09] ✅ COMPLETE — Job #10000: 1 subjects, 0 deeds, 1 plats",
+      "[11:40:09]   Deliverables: boundary_plat, legal_description, reference_table, dxf",
+      "[11:40:09]   Workflow notes: Full research — client deed, plat, ALL adjoiners"
+    ]
+  }
+]

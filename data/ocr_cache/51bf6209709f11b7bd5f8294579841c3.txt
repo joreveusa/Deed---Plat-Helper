@@ -1,0 +1,73 @@
+: The Taos Grosvenor House Condominium, Units 1A, 1B, 2A, and 2B, first and second floors =A
+. “LCE -porch a LCE porch : : ; : o o fbe
+2F th a EE EE aN oy . ELEMENT
+: i. 16.1 : \ ee 2291 RN 22.98" ie : ; : carport. : v es ;
+jo, LCE Unit 1-A N ar Rg — BF 120°
+- P carpert ; : Ne , WE Lnit 28 Uni |
+| N Unit_1~A N Unit 1-B N my carport ae @ Unit 2-B
+bo —— ——- HN ist Floor wh 1st Floor Sh : sone | fF deck |
+. N Min. Elev: 99.3" uN Min.. Elev: 99.3° an ; : N2354'22°E 1t* see note 4 : : !
+. -». COMMON N Max. Elev 107.2" =n Mox. Elev: 107.26 is oo ne ie PSS SESS SSS SSS SSH |
+: ' ELEMENT N Int. Area: 484 sq. feet. H Int. Area: 486 sq. feet. : b | b iN . 2 N 21.12 No °
+: carport aN . N i ao ee Ro , :
+| | A N 3B 4° aan . : : |
+wae ee : H Ny apo 4 ‘ o> N q - S wea
+: N ‘ N Sie # Nas N . 5 =.
+| COMMON N : es N . het a N Unit 2—B N
+LEM=NI 25.9 : N ist Floor eh Unit N Min. Eiev.: 107.9" 3h
+| carpo! : N Min. Etev.: 98.6" “yj — 5 . “|
+| Pp _ 4 Mox. Elev: 106.47” : 2—6 - N Int Areas yan ve tt “H |
+LCE . LCE Fd N Int. Area: 485 sq. feet. N Yard H :
+| é Unit_T-A @ >. Unit 1-8 3 N . : H N :
+| : Yord Yord
+: oe : i |
+N
+: s ES et oe Be
+: eh P —* NER i y H ok
+“— : R H N H if
+. H ; : H Unit _2—A H |
+: | ist Fl H Ist Floor eh w H Min, Elev: 107.9' eh
+ms : h Min. Elev: 98.6" RN LCE & N Mox. Elev.: 119.62 Sh co |p
+° N N ry N . i os
+9 N N N y
+: | an : 8 4 oat i N y
+Sex ae r 22.92" N =z SSS eet a toe ESEESSSSESSSSS
+i ; N 4 ae N : ee LCE. Unit 2-A... = ad vi q - ~ seach <tc
+Syslesty : * ; ao N a : “a a : No 8.0) ; . * iS Carport ‘ ss oa a ies POLE Ky Unit_2--A call ae aad aes ° | : :
+ge Unit 1-A 2 A ~ Unit 1-8 N3_ see note 4
+| 206 N dnd Floor SN 2nd Floor SNoeros |
+| : ao bsN . n . “an Min. Elev.: 108.4” aN@o bs ; : ; _—_—
+| . ; a2 ESN Min. Elev: 108.4" aly idex. Elev: 120.05" aN ea : : . . . a ie
+o il Noo Max. Elev.: 120.09 H “2 Wnts Area: 485 sq. feet. N | : .
+| m PON Int Area: 488 09, fl : : > COMMON |
+| "_f i LEMENT Units 2A & 2B |
+| N ‘ N N —,— |
+; | i ro A oor : ;
+ep ~ 1, LCE Unit 1—B 3K |
+| . i carport . we i:
+, . . 2 | |
+Units 1A & 1B | Gyr of
+| | 2nd Floor | | eA an
+| Units 2A & 2B | A |
+en Ist Floor gg |
+a —" and Unit 1-B LCE :
+: an mit is ' , , , ,
+. (= ELECTRIC METER a. 5’ 10 20 30’ 40’
+@ UTILITY POLE SS
+UNIT TIE TABLE }- @ SEWER CLEANOUT oe V=10
+. From Unit tie point to ——><— FENCE
+site tie point: THICKNESS OF BLDG WALLS SHEET 2 of 2
+Unit_Tie : -<@j UNIT TIE POINT ;
+roa [Nor so'sere _|as643" :
+wg L.C.E. LIMITED COMMON ELEMENT ;
+Bs 1—B | NOO"49°16"E =: 1514.95" . OVERHEAD POWER LINE : CONDOMINIUM SURVEY
+7: NOS 2eOTE [473.96 | , Toavenor Howse, 0
+[2-8 | _Nos‘09'36"E_| 467.35 : . : Projected Section 17, T 25N, R 13E, NMPM. |
+| Red Tail Surveying, Inc. Survey plat. prepared for: :
+: Complete Surveying and Th T G
+| Earth Information Services e@ aos froSsve no Ke
+| Taos, New Mexico 87571-6654 Hl C al
+: | 505.758.7441 B005TS.STS @ U Se (0) fl (0) fn {| fh \ Ul inn
+| : ; : redrail@redtailsurvey Da :
+IC:\ LAND PROJECTS 2005\1220 DESEO PARADISIO. GROSVENOR\DWG\1220 GROSVENOR CONDC_23 APRIL Last Saved: 5/20/2009 7:58 AM - _ § Draftsman: FMJ {Proofs Robert A. Watt} Date: 23 Apr 2009 | Scale: 17=10" | Job no.1220G.CONDO!
+

@@ -1,0 +1,68 @@
+or a
+: STA 10400 RT & LT .
+BUILD eae uF
+. Y | 4 A SS = ° __ Mitchell Feldman ,
+oy S| |i == SS ee NeeB51.22
+I, a ) Mer) STA 19480000 og a STALL ADDITIONAL Em158i.42
+\ ES” " Lp a | SOE elm wanioue WAU sta cone ee MAIN SEWER LINE
+ne E , , fi LD \. va! id ‘A 20450.00
+~ OF, HEIGHT=6.00 | N=1002.53 E=1476.66 Sx . PLAN & PROFILE
+NO - © se é . IN=6997, ei roy T=6,00° En |
+YF —_— Coy 7 bf INV, OUT=6997.31 PEL 7 yao72,18 RIM ELEV.= 7005.22 CHECKED: ARA [DATE: JAN, 2007 ENGR’S, FILE NO. SHEET NO.
+6 \ GERSOEE ™ STA 18445 LT ge ie = . INm6989,27 JDRAWN: KLV_[SCALE: AS SHOWN |
+| NF LS ae in he PLAN essow| 0545 | 18
+// Nec1929 E744 . YY ODS a jy <> le et SCALE: 1" = 60' ma CaN
+) PO Seat omar LSC Sige 1 Fl OES | GAG
+el \ Racnteet (ERFY) y ea OS MNES
+& / 4. ~ RM eLev.96970.73 LR \ a CCT (4 2 | vant
+bhnd\ INV. IN(FORCED MAIN)=6974.4 >» LONE BUILD 31.0 LF 4 Me °
+é . INV. OUT=6971.7 (ASSUMED) CU gx 4° PVC SERVICE UNgg te
+@ \ zg, ao. PERPENDICULAR 4 8// /y
+| PFN \ LB | V7 | | ome
+as NSN \, Mgf y YA STA 18+70.00 3injox
+& C7 HY ce RM BE. STA 16420 LT RVK/Z N=1048.89 E=1317.85
+é > . ; SAY 7 TAN - BUILD 31.0 LF te XL 4 : “oO”
+; Wo) Mer ‘4 YEN Pv Sette une GP Sp BUILD 4° DIA, TYPE “C” MANHOLE
+WES," = IN| Hee ay AY Sea RIM ELEV.=7000.79 is /
+Xs RN ae i NN A oS x G PerPeNDUR -= INV. INw6994.84 “Sat
+IN COM. - P oo YAN REE STA 15430 LT , y 4s ef SS INV. OUT=6994.74 m~ ~s N=1879.10
+oS oo WAXY Ly . WAX NAGE STA 14450 LT ‘phthS IN ™ . =
+x \S \ . 6 Loor rN Zilia \, -Syhe 2a JB C4 IN ! a ica7ae ;
+Ke) , Set eet te 7 YK roweciu "GG %e, S14 15160. ~ Ss ,
+\ \ , \\ \ Byun ao LF CE ” BUILD 4 DA, NPE sc JANHOLE oS SY Ox)
+<A We UN , "OF a HEIGHT=6.00" , MOR 2 10" Sey,
+a \ x Nae ee tae 4 RIM ELEV.=6993.09 ~ Gan <a No t3e838
+ww MNS KO a Np INV. IN=6987.14 oTN — ~R wee Lo
+| - - RAYA N \ CO OR’, TASES feet _INV. OuT=6987.0 Net795¢2 ~~ Q4p =
+yD LT IN - Ser, hw,
+: NON Tee 25 a , , fo TEE en a
+DN SS BUILD 14.0,40.8 LF gf gee 4 STA 13+40.00 TOWN OF TAOS Semen Pity ie
+SK RS = LOE LO, BUILD 4° DIA. TYPE “D” : TO POINTS INDI ee omoua Wt
+wot a a, Was > SE eg? NG Bit ieg if HEIGHT=11.53" D” MANHOLE SNEET 19 ENING el i \
+a Em650.45—— eS | - GE. SP “2-4°-Pvc SERVICE LINE RIM ELEV:=6987.77 TAOS SEWER UNE Lor 3 ES\
+| | MM Sr Ie eee | | a no
+STA 10+-00.0 IN? a, > OUT™6976.35 ce : TOW OF TA \
+- 406.¢ : UK ae STA_11+22.00 . / "
+; (SEE SHEET 21) a 3 \ N=1365.04 E=650.78 re) C LOTS 1°3' Eniioose
+| (SEE SHEET 21) / Y watassge etaeure BULD 4° Did TYPE "E* MANHOLE “. ex a
+IN. nv=6060.00 eceeie Yo SIA 10400 rw ur RIM ELEV.~6580.24 i NOTE: SEE SHEET 4 FOR SURVEY CONTROL INFORMATION
+-_ ORCED OUT=6970.40 =" ASK tain hd . IN=6974. .
+, Naie3s LY 4 Bye SRE UNE RY. OUT sop ans ~-NOTE: 4° PVC SERVICE LINES TERMINATE WITH DOUBLE SEWER CLEANOUT |
+| | ff NOTE: PLAN AND PROFILE SCALES DIFFER FOR THIS SHEET : PLAN
+| 3 700) ee CES Cece cee epee COCA eeepc CopCop occ cpcecey LAS OLAS RESIDENTIAL [~~ }--f COeproceseeerre-
+| EEE EEE EERE EERE EE EEE EEE HERRERO CeCe Con cocci coher ee eee TAOS, NEW MEXICO “SIRES ce eee ee sep mas
+| | CCLER ee HORIZ, SCALE: 1" = 50") eee etc cee cee eR -E oeeroeopc e iu ase wh 20450.00
+| e908 PP VERT. SCALE: 1" = 5° bee eee ee oO no Soccer ec ee nate tI ea SSI PTB a ree “or we
+mfp fon noeen oe nf nef nf nf an DCI SESE SERRE RSD Deeeeee = ioe ea RERGRRERE: ree fe coe caecteeeae pop I BLEvi=7008.22
+i epoca nf nfm oe ee ee oe ee rn io Pig ib og a: pp pp peepee poe ono re ee ee Oe ne ee ee oe ee pf wafeon ENG. SERMCE UNE | relegt-ag ml i CCE NgOR NEC: O) [IN OUT=6999.17 _
+pope fn et need ntennfnalomboond ant bond-ctad) 414 Ee ee ee TING GRADE G0 GONSTRUMTION oo SH Lee sta teen ir: | I Be ele pHi 08%- von YTB So
+: Oe erect cece ete pe eee epee ee re eff ge pS Reef aged Spe non OD IL UE || = an: Pid Sacre jn AAV OUT S904 78 | SSER ene nde nn
+jonf eff nffen nec fnn el nae a fnfeonpond ond bn} LL pronto eee eee eee ree ea tr weitedoo tnd Cceepe ee eH pf
+: geo CCIE CEES ECC oor eT RINIBH GRADE [O-LAS-OLAS-DRIVE|~ <p pee ong eee oo nv Weber Pm eee ee eC eer
+6980 mT err pepe Poop fi eee ate fain affine el ng Eb gd bbcode oer dvefoc dood odovociaccben tt fLOL || BUMD 29.3 te PEt bo bobo: Pop fa | 2 NV.TOUTS6987.0¢° 7” peepee pepe pre it ia ae Onl OE Ge oe ee Cr Lenn ned :
+| 6975 on Seen --A-PE AS a Heer cpr COPercerrcce rn =P aeeeee ja Ba srg pL PS a Tb nd SERnnene eh pper popepeepop prep “eee REA
+a aca i <0 A Is Od A lS 2° Eo BUILD 15.6.47.8,62.0,90.4 UF tt ep eee Lt) (BUND 4 DIAT TYPE “D" MANHOLE Do Pepi} EEE TPP Pre rerprprerrrprrre
+; aa se RRR ee offen ~ fa ff ie on ee ca aan wade rf ss0oo7e Sa dda pope eo a egg agagee ope ered nner bf eff on bon edb oefetboeel abomtanocinod at BEER CPP ep i
+i SS 7° Es Se as OS eee eee se ee ag, PrP BURD DIA GYRE PER MANUOLE ETc ToT RIM LENS BUB E77 orotate peepee tere beep edd
+| 6970 BOD # DATYbET" se-iyatans PR eS CACC researc Foe poe aearet evan oh is is i ie ee ee Inve Roosated t——- on SRRRGeeenn senbewbote dol ttt LL Corre ee fee eee pene
+"BUILD OIA TYPE "tr" ANHO Ss SAPs Fm fmf mn a wn EIGHT Os of ne efi ef fd on ell Wet Ne OF 

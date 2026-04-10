@@ -1,0 +1,119 @@
+f | Ist FLOOR — ee RRS
+Brat F
+iy FLOOR PLAN DETAIL
+ty LYING AND BEING SITUATED WITHIN
+OP), at SECTION 9, T. 27.N., R. 14 E., N.M.PLM.,
+ie COUNTY OF TAOS, NEW MEXICO
+g au
+Ete GL# GENERAL COMMON ELEMENT DEFINITION LINE
+ce PL# RESIDENTIAL LIMITED COMMON ELEMENT DEFINITIONLINE .
+‘i cle COMMERCIAL LIMITED COMMON ELEMENT DEFINITION LINE
+i A.L.C.E. | RESIDENTIAL LIMITED COMMON ELEMENT
+| C.L.C.E. COMMERCIAL LIMITED COMMON ELEMENT .
+S G.C.E. . GENERAL COMMON ELEMENT
+RUL# RESIDENTIAL UNIT DEFINITION LINE
+Graphic Seale 1" =, CUL# COMMERCIAL UNIT DEFINITION LINE
+ams Sore : NOTE: .
+ee ne sere ALL AREAS NOT DESIGNATED AS UNIT, RESIDENTIAL LIMITED COMMON ELEMENT, OR
+oes 6 ~C~«SN'; COMMERCIAL LIMITED COMMON ELEMENT ARE GENERAL COMMON ELEMENTS.
+_ RESIDENTIAL
+VV \ UNIT 104
+——— ' 673 SQ.feet4
+— : a DATA CHART
+a eer | \\ VA\VVAA YA \ \ \ | fuL2| S 00 *00"00"E} 3.09"
+ae 1 \ FAVA pe 8 : . RUL3} N90°0O'00"W] 14.45")
+eee SALA AAAS eee \ ch \ NOO 09. 003-2
+_——- Co Lee e\ \ Cee) AULS! N9O‘00'OO"W| 0.33"
+i ee of) \ 0 eT RUL6| NOO*O0'OO"E| 4. 70'|
+\ \ee—- 7 \ ee | RUL7| N@Q*Ss9°S 8° E| 4.00°]
+\ a ‘ oc AL 3 RULB| NOO*°00'22"E] 5.60 |
+\ \ a 7" \ : Vipeas M\ RULS| N 90°00'00" W] 1.00 |
+\ Ve a \\ | \ —— a , RUL10/ NOO a
+4 On AA \ —— AM ae VN RUL14{ NSO *00'OO"E| 14.04"
+\ Po UPPER \\ \ 0 ; \ ae \ RULi2| S47°S6"10"E) 4. 15"
+\ \ nor Fila \ A EE ah eee een a RULi3| N90 °00'0O"E| 10.54" |
+vo \\ \ ee \ oo .\ AUL14[ $00*00'O00"E| 24.77'|
+\ \ aan LEP, in iw a TREATMENT \ = an \ \ :
+\ ‘ eee i an , yee STAIR BEAL
+\ i _ ee ee wo TREATMENT a a _ eet aa \
+BB 5 . a .
+nN 5 > EXERCISE _ ron. * \ \
+| \ . ij _ ~ : . 7 . : . io . ee = 'y \ .
+N\ \\ \\ \ ‘TOILET in ay ALA ALa5 °
+: . mi SAUNA RM \ eo} .
+, Nee a REE ona nv ade
+ON ELECTRICAL yee |
+_ HALL
+| : _ . MULTI- , \
+m FLEV a PURPOSE 2 .
+| a LOBBY ES ‘ wl \
+| a re ELEVATOR . \
+a UP at “ey gooT \ 1 ‘
+; | GBR EY LOCKER 4 7 \
+RESIDENTIAL LIMITED 7 |[Remse | maar A ee
+4863 SQ.feet+ . — =) AL30 BUL 141 Ms ont a aan 4 ae
+=o : = : i en ove —
+BEARING | DISTANCE . %S SS ae
+[ALA] S 77°22'00" W] 29.08" | al [2 RUL13 i ae
+NSO *O0'OO"W] 14.04") al is | ee TYPICAL UNIT DEFINITION
+[_ALa|_N47“se'S3"w] 4.16") : “We ONE PLAZA —ooo
+YAL4| N90 °00'00"H ey H OR DEFINITION,
+FL4 NGO *00'00"W| 14.63'] q (MANAGER'S UNIT) (INTERI )
+N90 *00'00"E| _1.00'| “ RUL | MIN. ELEV.
+— : : 9414. 80° ey
+S 00 *00"00"W] 5.00" | ' asl T— | MAX ELEY, |
+N90 *00'00"W| —_:4.00'| ; i :
+: S 00°00'00" E| 14. 14°| {| _ In = f of i} GENERAL COMMON ELEMENT:
+AL10| N90 °00'00"E| 12.94' Tt PUR A A | , aE
+AL14| NOO“0O"00"W] 2.36] LT [fyi ?? | 48 oN NX, Ne a
+AL12) NSO *00°00"E| 17.20" \ a = _—= ees : =]
+AL13/ S 00 ‘00‘O0"E| 7.83" OE AUL7 7 \ SN ;
+fo : SNS i 4th FLOOR
+AL14[ NSO‘OO"OO"W] 30.14") | pfes = —_ SY . FUTURE RESERVED DEVELOPMENT RIGHTS
+ALi5| S00‘°00'00"E| 13. 48'| . 2 oN - .
+~ nee een t ~
+NQO"OO"OO"E] 3.52’ - RULS "55 RAL COMMON ELEMENT
+S00 -0000"E| 5.51" 7 : “at. 80, ad |
+ALi8| NSO“00'O0"W| 6.03"! MA .
+ALI9| N45°00'00°W] 5. 75° | | = \ 34u2.60 3rd FLOOR
+- a “ j FUTURE RESERVED DEVELOPMENT RIGHTS
+RL20| N44°5S9'°59°E| 1,50°| . . \ "
+AL21| NOO*0O'OO"W] 10. 11' =! ___\ UL! |
+RL22| N90*00'O0"W| 4.00°| | a x « os nT a GENERAL COMMON ELEMENT
+AL23| NOQ‘00'OO"W| —5.00'| Fed iE
+NSO *00"OO"E] _1.00'| | al & | | | ae : =: end arre <| FUTURE RESERVED DEVELOPMENT RIGHTS
+AL25} NOO*00'00"E| 15.56' . ROL ak ] BS /yrenron nr rione
+AL26] N9O°00'O00"W] 4.00 : Seek IE INTERIOR DEF EMETIOM
+See ess i rd < : PO i: . A
+RL27|_NOO*00'O0"W, 5.00" | | CORAIDOR AL40 RLCE ted eed STAIR A o “ : : GENERAL COMMON ELEMENT
+. Tn ae oo! : LING MAX. ELEY. Geos Tne lal ;
+AL28] N9O“00700"E) 1.00°| | | ann ze 3 " mae, JS
+AL2g} NOO*00'0O"E) 10.38" rit He ist FLOOR 1 te te B fst’ FLOOR f
+N90 “00 "00" ' _\ _i L414 | “INTERIOR RE INIT ION | C.LGE. | AL GET | (INTERIOR DEFINITION) ||
+x a oe — | AL24 — + Sf 10p OF CONCRETE _WIN__ELEV.| | M470 oF concRETE NIN, oI =
+7 a |_—_-— =
+AL33| NOO*0O"GO"E] 24.45") = pe CEILING MAX. ELEY. |
+AL34| NS5i°i9°00"W| 22.69" | ; | AL22 oe ll __ 3 GARAGE
+AL35| Ni2°38'00"°W) 10.14" — _: -— tae: LE GARAGE A.L.C.E., G.C.E. & C.L.C.E.
+AL36|_N 77°22'00" E| 20.50"} L, ( CINTERIOR DEFINITION
+AL37|_Nie‘3@00°W| 17.33° [ o . I: TOP OF CONCRETE NIN. ELEVA
+RL36|_N77*22'00°E| 27.00' . * | LEE 1 70P OF COMPETE MIN ELEY _____t_tty—
+AL39|_$i2‘38‘00"E| 17.33° | = —
+N77°22'00°E| 16.06' : fi
+AL4i| Nia‘sa'OO"W] 1.98'| | a
+AL42|_N77°22'00°E| 8. 12'| tL
+RAL43} S 12°38'O4°E| 30.14"| SHEET 5 OF 19
+Tataa|N77-22"017E| 8.72" | | | SOUTHNEST
+AL45[_N32-22°017E| 1.54" | : ; =e: .
+5 ALI6
+Aas] 957"37'59"e| 5.20] — fA—AL20 Iv MOUNTAIN
+AL47| s32°22‘01"W] 5.75] sip
+AL48[ S 12°37°59"E| 6.94" 7 ™®, . x y) SURVEYS
+AL49| S§77°21'59°W| 7.44" | q | \
+ALSO] S 12°38°00°E| 20.00"| Alia _—jbLy- sty &
+De
+| | i = & >
+—s oe: VA. —- 41444 HICKOX ST., SANTA FE, N.M. 87504
+(503) 962-9429 FAX (505) 966-3413
+aa FS} PRO ; 4
+

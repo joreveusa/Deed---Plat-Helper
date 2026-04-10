@@ -1,0 +1,39 @@
+| | SW PROPERTY CORNER IN yr, S a :
+: 3/ 4 gIRON PIPE SSS SSA ON ,
+4 | UNIT 10 \ % 20.80" .
+SegsT Ne 2s N LEGEND
+roo N : . | N F.F.EL, = FINISHED FLOOR ELEVATION
+aaa _ {2 J ° IN CEL. = CEILING ELEVATION
+50" ; LC.E. = DENOTES LIMITED COMMON ELEMENT
+. N \ \ || > 7 = == DENOTES CHANGE IN CEILING ELEVATION
+: 2 . . 4 = DENOTES SKYLIGHT
+SSN CEL. = 6955.8 “N urd ouon \ = DENOTES LIMITED COMMON ELEMENT
+| N UNIT 6 N ELEMENT 4 AS INDICATED
+| N CEL =9987.6" | , N NY ELEVATIONS SHOWN HEREON ARE SCALED FROM USGS TOPOGRAPHICAL
+, Ne Pe! Y \\ MAP ENTITLED "TAOS NEW MEXICO”. ALL ELEVATIONS SHOWN ARE
+- NB ci N \ RELATIVE TO ESTABLISHED BENCHMARK.
+_ me ee 5.20"
+| | NE CEL. 6958.5" N bce. LCE. SASS :
+UNIT 9 \ 8 Lg N , a, 8 N/ 12.00° N
+ee a mil tases, CZ,
+| N C.EL. = 6955.17 N . N ; N .
+N) 6957.9 \ N oh)
+N mot Ne . oN
+. N eae7s L- zh cs sep “COMMON N a Using 3 oy ob .
+. | : . LEMENT + Ng LEMENT // 5
+; : N S 31°37'00" W__18.00° NB . \ eS is uw”
+) SRSA SANSA --- . | N “Wy : eae
+Nhe / a oF
+NB cass A \aeen N ,
+; N 6.10" N /_S 31°37'00" W 12.80" eee hee NK O28 sn
+, UNIT 8 NZ a | (IN FEET) |
+, N INCH = 5 FEET
+\ Ess . a ,
+, | , N se : | 7 on CASA ENCANTADA |
+K 4) | mc o UNIT 6 LIMITED COMMON
+y, a. Ly 7a ELEMENT (GARAGE) |
+| Forrest - Lorry L. Sterling, RPS No. 11010 Date:
+7 Spaffola, New Mexico 87532-8915
+. Phone: (505) 753-4171
+. — : LA oRTZ | 05061-6
+

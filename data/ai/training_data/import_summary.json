@@ -1,0 +1,90 @@
+{
+  "run_at": "2026-04-10T09:32:45.688860",
+  "total_elapsed_s": 773.5,
+  "results": [
+    {
+      "success": true,
+      "total_records": 7303,
+      "table_stats": {
+        "Contact Types": 7,
+        "Contacts": 25,
+        "Customer addresses 99-2001": 205,
+        "Drawings, non-plat": 0,
+        "Engineering/misc drawings": 0,
+        "Estimates": 0,
+        "Federal Maps, Assorted": 147,
+        "Highway Right-of-Way Plats": 90,
+        "Land Grants": 19,
+        "Lawyers": 0,
+        "Location": 90,
+        "Paste Errors": 1,
+        "Physical Document Location": 0,
+        "Plat Size": 2,
+        "Plats of Other Surveyors": 1779,
+        "Plats of Red Tail Surveying": 1968,
+        "Plats of Rio Grande Surveying": 1617,
+        "Property ID Maps": 512,
+        "Reassessment Survey Maps": 291,
+        "Red Tail Job Applicants": 1,
+        "Red Tail Project": 1,
+        "Subdivisions": 250,
+        "Surveyors": 149,
+        "Topo Map Scales": 4,
+        "US (Federal) Maps & Publications": 35,
+        "US Publication Types": 0,
+        "USGS Topographic Maps": 110
+      },
+      "output_file": "J:\\AI DATA CENTER\\AI Agents\\Deed & Plat Helper\\data\\ai\\training_data\\access_db_export.json",
+      "elapsed_seconds": 9.5,
+      "kg": {
+        "success": true,
+        "persons": 0,
+        "jobs": 0,
+        "edges": 0
+      },
+      "script": "import_access_db",
+      "elapsed": 10.4
+    },
+    {
+      "saved": 456,
+      "kg_persons": 369,
+      "kg_plats": 456,
+      "kg_edges": 456,
+      "success": true,
+      "elapsed_seconds": 0.2,
+      "script": "import_plats_index",
+      "elapsed": 0.2
+    },
+    {
+      "success": true,
+      "total_files": 1869,
+      "parsed": 1680,
+      "no_coords": 1680,
+      "skipped": 189,
+      "elapsed_seconds": 243.0,
+      "output_file": "J:\\AI DATA CENTER\\AI Agents\\Deed & Plat Helper\\data\\ai\\training_data\\kmz_job_locations.json",
+      "kg": {
+        "updated": 347,
+        "created": 1333,
+        "persons": 1150,
+        "edges": 1448
+      },
+      "script": "import_kmz_locations",
+      "elapsed": 243.0
+    },
+    {
+      "success": true,
+      "total_records": 65054,
+      "elapsed_seconds": 762.9,
+      "output_file": "J:\\AI DATA CENTER\\AI Agents\\Deed & Plat Helper\\data\\ai\\training_data\\parcel_shapefile.json",
+      "kg": {
+        "matched_persons": 12059,
+        "new_persons": 34751,
+        "parcels_added": 65054,
+        "edges_added": 65054
+      },
+      "script": "import_parcel_shapefile",
+      "elapsed": 762.9
+    }
+  ]
+}

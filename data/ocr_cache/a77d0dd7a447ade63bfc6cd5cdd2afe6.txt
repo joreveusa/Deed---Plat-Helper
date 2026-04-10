@@ -1,0 +1,34 @@
+: The following property description is based on a BOUNDARY SURVEY PLAT entitlea
+“Sarajean Esquibel Norris, et al.”, survey no. 899 by Jeffrey B. Stadler, NMLS no. 8327,
+: dated March 23, 2005.
+a PROPERTY DESCRIPTION
+A certain tract of land near Taos, Taos County, New Mexico; located within the SW % of
+a Section 18, Township 25 North, Range 13 East, NMPM; located within the Gijosa Grant;
+described as being part of Tract 7, Map 29, Survey 2 of the 1941 Taor County
+a Reassessment Survey; and more particularly described by metes and bounds as follows:
+- BEGINNING at a 1/2 in. rebar found for the North comer of this tract, from whence
+oS Triangulation Station ‘Bliss’, a 1973 State Engineer’s Office brass cap monument, bears
+a N 46° 21’ W, 5697.2 feet. distant, thence:
+o S 43° 57° E, 124.3 feet. toa 1/2 in. rebar found, thence;
+a S 43° 19° E, 115.2 feet. toa 1/2 in. rebar found, thence; :
+a S$ 43° 43° BE, 221.6 feet. to a 1/2 in. rebar found, thence;
+a S.°52’E, 288.4 feet. toa 1/2 in. rebar found, thence;
+i S 8 45°35°E, 86.0 feet. toa 1/2 in. rebar found, thence;
+u S$ 42°26" E, 60.8 feet. to a 1/2 in. rebar found, thence;
+- S 43°17°E, 78.7 feet. toa 1/2 in. rebar found, thence;
+S 42°02°E, 37.6 feet. toa 1/2 in. rebar found, thence;
+E S 44° 37° E, 196.3 feet. toa 1/2 in. rebar found, thence;
+E S 44° 46° E, 78.4 feet. toa 1/2 in. rebar found, thence;
+ee S 42°31’ E, 51.4 feet. toa 1/2 in. rebar found for the East corner, thence;
+a S 33° 47° W, 413.4 feet. to a 5/8 in. rebar found, thence;
+a S 35° 33° W, 43.8 fi. to a 1/2 in. rebar found for the South corner, thence;
+a N 42° 32? W, 505.2 feet. to a 5/8 in. rebar found, thence;
+Ee N 41° 45° W, 303.1 feet. to a 1/2 in, rebar found, thence;
+E N 41° 43° W, 150.6 feet. to a 1/2 in, rebar found, thence;
+N 43° O1' W, 491.7 feet. to a 1/2 in. rebar found for the West corner, thence;
+ie N 46° 50’ E, 199.6 feet. toa 1/2 in. rebar found, thence;
+a N 46°48' E, 217.1 feet. to the POINT AND PLACE OF BEGINNING.
+This tract contains 13.778 acres, more or less.
+| .
+;
+

@@ -1,0 +1,70 @@
+; f OP i, .
+: 000331042
+| Book 599 Page 2595
+' : 1loof 1 i
+[CURVE | __LENGTH DELTA] RADIUS] CH. DIST, CHBEARING 1 on
+\ 57.62] 855843" | 38.40 | 52.37 |__N_02°34'39"_E | Avcertain treat ‘of | PROPERTY DESCRIPTION:
+\\ acr of tand_in Rodarte, Taos County, New Mexico, within
+rune] | DISTANCE | the Uano Sania Barbara Tract in the Las Trampas Grant:
+| LEGEND \ \\ \ en ee Bro8's0" W (N 49°56' W, 34.68") Projected Section 9, Township 22 North, Range 12 East, Me MS in
+e 5/8" REBAR SET W/ CAP STAMPED #12349 : \ i. | seo ri2 | N 303843" W (N 30°38' Waz 21’) atso described as part of Tracts 17, 19, 21, 22, 23 and 26, all of
+: 4 £0, Z : ee lap 26, Survey of the 1941 Taos County R : .
+O 1/2” REBAR FOUND (GR AS NOTED) i \ la "RAINBOW" LUST ON 4802"43" Wl 58.28 JN 4605" w, 58.26") and more porticularly described by motes and bounds os follows. ,
+1873 SEO BRASS CAP MONUMENT FOUND ; ne pi4 tN 0403°43" W 41.47 |(N 0406" W, 41.46°) Beginning at a 5/8 inch rebar set for the most northerly corner of
+g , 115s {_ iN S002 Se" EE] 5.95 | this tract and the true point of beginning, from whence Triangulation
+° POINT \ ee ; A | ris. —Ss| ~=SON S0@'34'12"E| 9.02] Station “Rainbow,” a 1973 State Engineer Office brass cap monument
+() DENOTES RECORD BEARINGS é& \ 1b Ora i ; found, bears N 28°04’00 E, 1286.52 feet distant, thence;
+DISTANCES FROM REFERENCES SHOWN : Se Siz | - : S 38°50'39" E, 77.26
+WCBL Se 313 ° + 77.26 feet to a 1/2 inch rebar found, th $
+he 3 or ind, thence;
+N/F DENOTES NOW OR FORMERLY | i is = ' * S 10°07'01" E, 88.79 feet to a 1/2 inch rebar found, thence;
+o- UTILITY POLE . j if 31° 3 sresae” Mi ie fest to a 1/2 inch rebar found, thence;
+. TELEPHONE. PEDESTAL . ; } ' / Stare OF Netw e000 » easterly corner of this tract, theneas. inch rebar Found for the most
+a ELECTRIC METER ‘ NF : S 49°42'23" W, 62.23 feet to a 1/2 inch rebar found for the most
++ VICTOR MUNIZ (ecb cat that ws pnt wae 5 southerly corner of this tract, thence; .
+—— > — OVERHEAD POWER LINE in TOR MUNI ter reooiis on th. voted ptadean, N 50°06'SO” W, 34.78 feet to a 1/2 h :
+“OOF. oe haasg oS 08 90 - a Inch rebar found, thence;
+—— x—— FENCE St fe seeees “feet and was Gels ee CARE N ye ooeaa W ples of to a point used, thence;
+’ ( St. 8 County ° -W, 58. eet t 5 ;
+—at - © —— IRRIGATION DITCH (OR AS NOTED) ir Cf 16 | oe Wiihoes s: sei of Offoe N 04°03'43” W, 41.47 feet to q B78 Inch vee thence;
+Ch Or AN kiss ict N 36°35°43” W, 97.56 feet
+941 TeRS TRACT LINE vere wuz fs p Cement , 97. eet to a 1/2 Inch rebar found, thence;
+, TOR Mi Oe YA S ae eX EN H Z tial nid Sr ieaNe = ounty. Feld. ; An are distance of 57.62 feet along a 38.40 foot nonradial radius
+| oe? SEWER CLEANOUT Oi i 2” Bn De. | 3° tin Deputy curve to the right, a central angle of 85°58’43” and a long chord
+J 7 a 4 \ ey é “ ; phich bears, N 02°34°39" E, 52.37 feet to a 1/2 inch rebar found,
+7 y « 7% _ ' x : a carga”
+fy = Zé <> I Ad N 45 36° 21 E, 180.10 feet fo the TRUE POINT AND PLACE OF
+C4 Wo iN o . CY LSf6843 : 8
+‘f a ”n : ABET yyy i rs
+7, & a” LS \ 3 ” osu ren, This tract contains 42,318 square feet or 0.971 of an acre, more or
+. y Of @ . \ BIS 3 . ss es oh, less, and accrues an Ingress and Ingress easement northerly to Santa
+- Jf & / ; AN 2 3 iy YS a Barbara Road (County Road C-021) as shown on this survey plat.
+fs 7° ja | 9 40’ Bo’ 120" » — #°F Reoonpen }*2
+; oh / of 160 z Sea, } =
+_ S fos
+: 4 & 17=40’ % s
+por \% tf» / : “ey wae
+ie ! * e daagi ght
+: — . * N TZ = 9
+| ; \ Y, pt. Tracts 17, 19, 21, 23 and 26, @ \e RAMON CHACON : EFERENCES
+pps \ if ; a "Mop 26, Survey 15 3 ref. 8 " ‘ Ref. Nol Tile or Client sob Now “Date TT Surveyor/Fim ~~ Rego, [Sabine] Page |
+| On : / ag) 4 ee Modesto Muniz [2723 [38/10/96 | Conrad Romero "dees te ee
+\ rh 12 446 ge" i" 5 }—S__| Esuigen_ cnovan to Teotte Gonzaieg "Tf 2982 1 6/10/06 | conrad Romero ees
+| Naispeess eS Ret, No] Type +d _ $e
+vA ONS J n Lg [4] warranty Deog se 6 Mee te ane Prone | nase |
+4 NSN . 7h 4° \ a a F. & Edonila Muniz Vivic Ro MnizSSSC*@ R. Muniz 43/21/90 | A108 | sie
+ra a Ven >, “ct be : | _ Worrant ty Deed | éEya Tafoya Sanchez sSSSC~*” Tafoya Sanchez | Ramon Chacon SSSCS~*Y Chacon | 02/08/94 | A-217 | | 536-535 |
+; \ ‘. . ASS L102 f werronty Sead ettigen Chacon reotig Corson fo/5yos | wace | ae]
+“ £* ~ SX is9664s ; [12 | Werenty Deed | cof tele 28
+y < one yy a S YL }_Edubigan Cracon Simon ir, and Joe & doin Wansios | - | Aca] “os0-880 7
+NAN Z * s jet erronty eed ene 6 ns Tit 5. ety A Wartnes | 10708785 | anos | 580 .
+Na oY EXNANG, ad : ee on oe ae e
+\ Ww SES, 5 % ERB =: [20] worronty Doug sone Fetiron wurig TT Miter nie “iP onyaayea | an203 [enn]
+? Fp Lad : -
+. ‘ Y =e Ai an ar”
+LS#6845 ty ‘ : : 2
+x 0 “y oN | 4, Lawrence S. Montoyo, a Registered Profe at Sui di
+rd 2 yf /* ' use i“ ¢ : : : the Lows of the State of New Mexico, Number 12348 | hereby
+A y \ & x o 7: certify that this plot was prepared by me or under my supervision,
+“o rN, a ne h A % : : and that it meets the Minimum Requirements of the Standards for
+\ %, Xe % ‘ A ¥ } Land Surveying i

@@ -1,0 +1,60 @@
+a J Qa .
+: Show Bear Inn Condominium Units C 1-4, D-1
+I
+r MMON NT
+x N 83°37'23" E (Covered Walkway)
+. Fa Y a, 38.1 Ne 125 axe ine Thee Ta Nex. 25 4 .
+. Py -_ y ~ S y Y
+, af 4 |
+NY H H H 4 :
+sy ‘ Hy i 4
+: oV ‘ i H H 4
+: a iy HY i 4
+| Rao H UNIT_D—1 } H i } Y
+. > oe ; Min. Elev: 9409.8 feet. Y H i H 4
+. 2», <em>, dun e - Wan a gis te Urs
+, ting Nag ey i ——H} ae y* y* i H
+Re 4 } =4 } UNT C-3- 7 unt c-2 unto-1
+. —Y H Min, Elev: S405 feet. H] Min. Elevs BAGDS feet. }] Min. Elev 9400.8 feet. 1] Nin. Elev.c 84008 feet i
+: concrete = }j Max. Elevs 417.8 feet. 1] Max. Elev.: 9417.8 feet. [] Max. Elev: 9417.8 feet} Max Elen: 947h0 4
+slab 4 er ne Moe 8 wait Ye aos: east feet Av S69 anf hes Ara G88 oe
+: [poznenbderres H } H f Y
+H H H H } 4
+g H Hy 4 ‘ 3
+=f y 74 ff 4 H { H
+3 4 COMMON H Hy Y for exclusive { H : H
+= ELEMENT | val] YZ use of H f H 4 sees
+? H (Spa) i ne Ey Y management H } } H :
+sy i COMMON i’ H H } 4
+4 i ‘| 4 4 4
+| a8 7 | (ELEMENT I sof y | f , : |
+i p Mesh Rm caiton A feet f i |
+COMMON ELEMENT (Covered Watkway) =: |
+EEE y : £ :
+: Oo _— : BLD Grew ne Story) rr ae | oo
+K UNIT TIE TABLE |
+) From Unit tie point to oe
+‘ site tie point:
+Po UNiT[ Unit Te feet OST , |
+NY N7558'04¢°W 1137.28"
+z [ona | N7SSsIeTW [125.19 ,
+‘_— N 64°31'04" W __[90.70° =
+| [aca | _NSeasGsW [56.80 | |
+UN fa-3 | Nisz07e'w [26.95" | , |
+, NO2°33'15°W 45.75" 7
+| 6 65’ «10° 20° (30 40’ ; SHEET 3
+a
+or 1"=10" .
+CONDOMINIUM SURVEY
+| 2 LEGEND Current owner: Reg— Christian and Donna Marie Heavens
+—_—, r . Projected Section 9, T 27N,.R 14E, NMPM
+a. . : | . . .
+~é UNIT TIE POINT . Red Tail Surveying, Inc. Survey plat prepared for: .
+WZ BUILDING WALL Complete Surveying and
+| Earth Information Services Snow Bear (nn
+: 301-A Hinde Street
+Taos, New Mexico 87571-6654 ao
+| 505.758.7441 800.579.6373 Condomin UA
+| redtail@reditailsurvey.com
+SALAND_ PROJECTS 2005), 1223 HEAVENS\DWG\ 1223 HEAVENS SNOW BEAR COND QSSEPTO6.UWG Last_Soved: 9/5/2006 4:15 PM ; ne = — ff Draftsman: MacLS |Proof: Robert A. Watt! Date: 07 July 2006 f Scale: 1”=10' | Job no. 1223.01
+

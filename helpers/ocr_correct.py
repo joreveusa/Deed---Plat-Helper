@@ -130,7 +130,25 @@ def _fix_degree_symbols(text: str) -> str:
     # "N45-30-00E"   → "N 45°30'00\" E"
     # "S 4530'00\" E" → "S 45°30'00\" E"  (missing °)
 
-    # Pattern: direction + degrees (possibly mangled separator) + minutes + seconds + direction
+    # ── Pre-pass: "° 52°15'15\" E" → "N 52°15'15\" E" ──────────────────────
+    # OCR sometimes renders the leading N or S as a degree symbol.
+    # If we see a bare ° at the start of a line (or after whitespace) followed
+    # by digits and a clear bearing pattern, treat it as N.
+    text = re.sub(
+        r'(?:^|(?<=\n))\s*°\s*(\d{1,3}°\d{1,2}\')',
+        r'N \1',
+        text,
+        flags=re.MULTILINE
+    )
+    # Same with the unicode variants that Tesseract emits (� \u00c2° etc.)
+    text = re.sub(
+        r'(?:^|(?<=\n))\s*\ufffd\s*(\d{1,3}°\d{1,2}\')',
+        r'N \1',
+        text,
+        flags=re.MULTILINE
+    )
+
+
     # Handles: N 45 30 00 E, N45-30-00E, S45o30'00"E, N 45*30'00"E
     def _fix_bearing(m):
         ns = m.group(1).upper()
@@ -171,13 +189,37 @@ def _fix_direction_letters(text: str) -> str:
 
     Common substitutions in bearing context:
       $ → S, 5 → S (at start of bearing), | → I, l → I
+      ° → N (when OCR renders the N as a degree symbol at line start)
+      3/8 → N (single digit prefix that's actually N before bearing degrees)
     """
-    # $ or 5 before digits in bearing context → S
-    text = re.sub(r'(?<!\w)\$\s*(\d{1,3}[°\s])', r'S \1', text)
+    # $ before digits or decimals in bearing context → S
+    # Handles: "$  52°" and "$.07°" and "$ 03°"
+    text = re.sub(r'(?<!\w)\$\.?(\d)', r'S \1', text)
 
-    # At start of a bearing-like context, 5 followed by space+digits → S
-    # Only fix when it clearly looks like a bearing (5 45° → S 45°)
+    # At start of a bearing-like context, 5 followed by space+digits → S  
     text = re.sub(r'(?<!\d)5\s+(\d{1,3}\s*°)', r'S \1', text)
+
+    # Unicode replacement char (\ufffd / \u25ca / \u00c2) used as N or S
+    # Pattern: «garbage» DIGITS°DIGITS DIGITS" EW
+    text = re.sub(
+        r'(?:^|(?<=\n))[\ufffd\u25ca\u00b0\u00c2\u00e2\u2022\*\|\!\#]\s*(\d{1,3}[°\s])',
+        r'N \1', text
+    )
+    # Same but preceded by line noise and clearly S-bearing (large azimuth)
+    # We can't know N vs S from the digit alone, so we emit N and rely on
+    # the surveyor to verify; at least the call is parseable.
+
+    # "3 73°" → "N 73°" — single non-zero digit before bearing degrees
+    # Only when it's a lone digit at line start followed by bearing pattern
+    text = re.sub(
+        r'(?:^|(?<=\n))(\d)\s+(\d{1,3}°\d{1,2}\'\d{1,2}\"\s*[EW])',
+        lambda m: ('N' if m.group(1) in '013489' else 'S') + ' ' + m.group(2),
+        text,
+        flags=re.MULTILINE
+    )
+
+    # "\u2022 52°" style bullets used as direction markers → N
+    text = re.sub(r'[•·▪▸→]\s*(\d{1,3}°)', r'N \1', text)
 
     return text
 

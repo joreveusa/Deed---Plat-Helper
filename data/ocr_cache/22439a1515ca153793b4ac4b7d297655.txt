@@ -1,0 +1,45 @@
+; PROPERTY DESCRIPTION: TRACT ”A” (Manuelita Maestas) PROPERTY DESCRIPTION: TRACT ”B~1” (Sale)
+; A certain tract of land in Talpa, Taos County, New Mexico, within the A certain tract of fand in Telpa, Taos County, New Mexico, within the f
+: Cristoval de la Serna Grant; located in projected Sections 31 & 32, Cristoval de la Serna Grant; located in projected Section 32, Township. 25
+va . : Township 25 North, Range 13 East, N.M.P.M.: described as part of Tracts North, Range 13 East, N.M.P.M.; described as part of Tract 8, Map 7,
+: [ 8 & 9, Map 7, and Tracts 74 & 77, and part of Tract 82 Map 8, all of Survey 1 of the 1941 Taos County Reassessment Survey; and more i
+‘ 3 Survey 1 of the 1941 Taos County Reassessment Survey; and more particularly described by metes and bounds as follows: '
+ws particularly described by metes and bounds as follows: ; Beginning at a 5/8 inch rebar set for the S.E. corner of this tract,
+Beginning at a 1/2 inch rebar found for the N.W. corner of this tract and the true point of beginning, from whence Triangulation Station *Talpa,”
+| on the southerly line of Espinoza Road, and the true point of beginning, a 1975 State Engineer Office brass cap monument found, bears S
+from whence Triangulation Station "Talpa,” a 1973 State Engineer Office 61°09'28”" E, 2,493.10 feet distant, thence;
+brass cap monument found, bears S 49°07’33” E, 2,918.86 feet distant,
+‘ thence along said southerly line; N 60°05'44" W, 144.25 feet to a 5/8 inch rebar set for the S.W. corner
+teen . of this tract, thence;
+S 78'30'05" E, 104.55 feet to a 5/8 inch rebar set, thence; N 24°46'18" £, 656.44 feet to a 5/8 inch rebar set for the N.W. corner
+a S 7440°38" E, 51.12 feet to a 5/8 inch rebar set, thence; of this tract on the southerly line of Espinoza Raod, thence along said
+[ S 7326'25" E, 16.84 feet to a 5/8 inch rebar set, thence; southerly line;
+S 77°02'21” £, 8.18 feet to a 5/8 inch rebar set for the NE. corner of S 77°02'21" E, 122.69 feet to o 5/8 inch rebar set, thence;
+: this tract, thence leaving said southerly line of Espinoza Road: S 83°22'58" E, 65.65 feet to a 5/8 inch rebar set for the N.E. corner of
+S 24°46'18" W, 1895.30 feet to a 5/8 inch rebar set for the S.E. corner this tract, thence leaving said southerly line of Espinoza Road: !
+: i of this tract, thence; S 26°26'58”" W, 34.77 feet to a 5/8 inch rebar set, thence;
+N 51°32’31" W, 62.85 feet to a 5/8 inch rebar set for the S.W. corner S 28°57'10" W, 89.65 feet to a 5/8 inch rebar set, thence; }
+of this tract, thence; ; S 29°54'16” W, 147.87 feet to a 5/8 inch rebar set, thence;
+N 24°10°39" E, 293.82 feet to @ 5/8 inch rebar set, thence; S 26'37'23" W, 123.50 feet to a 5/8 inch rebar set, thence;
+N 361646" W, 9.92 feet to a 5/8 inch rebar set, thence: - S$ 28°18°35”" W, 165.63 feet to a 5/8 inch rebar set, thence:
+~N-08'22°01" W, 55.34 feet to a 1/2 inch rebar found, thence; : S 26°04’57" W, 97.94 feet to a 5/8 inch rebar set, thence: |
+4 N 07'58'41” E, 31.61 feet to a 5/8 inch rebar found, thence; S 29°22°12” W, 56.72 feet to the TRUE POINT AND PLACE OF BEGINNING. :
+N 23°14’58" E, 264.49 feet to a 1/2 inch rebar found, thence:
+N 20°55°03” E, 241.12 feet to a 1/2 inch rebar found, thence; This tract contains 2.500 acres, more or less, is subject to an ingess, i
+s N 22°48'54" E£, 144.87 feet to a 1/2 inch rebar found, thence; egress & utility easement 10 feet in width along the westerly boundary
+N 21°26'45" E£, 317.53 feet to a 1/2 inch rebar found, thence: and accrues cn ingress, egress & utility easement 20 feet in width north i
+N 19°25’53” £, 162.68 feet to a 1/2 inch rebar found, thence: to Espinoza Road as shown on this plat.
+, N 22°07°18" E, 115.07 feet to a 1/2 inch rebar found, thence;
+N 25°19°46" E, 225.14 feet to the TRUE POINT AND PLACE OF BEGINNING,
+This tract contains 5.637 acres, more or less, is subject to an ingess,
+egress & utility easement 10 feet in width along the easterly boundary i
+and accrues an ingress, egress & utility easement 20 feet in width north /
+to Espinoza Road as shown on this plat. /
+| PROPERTY DESCRIPTION: TRACT ”B-2” (Freddie PROPERTY DESCRIPTION: TRACT ”B-3” (retained by owner) i
+a Maestas- Nephew) / A certain tract of land In Taloa, Taos County, New Mexico, within the
+: A certain tract of land in Talpa, Taos County, New Mexico, within the Cristoval de la Serna Grant; located in projected Section 31 & 32, _
+‘. Cristoval de ia Serna Grant; located in projected Section 32, Township 25 / Township 25 North, Range 13 East, N.M.P.M.; described as part of Tract 8,
+i North, Range 13 East, N.M.P.M.; described as part of Tract 8 Map 7, : Map 7, and part of Tract 82, Map 8, all of Survey 1 of the 1941 Taos
+| Survey 1 of the 1941 Taos County Reassessment Survey; and more i County Reassessment Survey, and more Particularly described by metes
+; particularly described by metes ond bounds as follows: and bounds as follows: |
+ee Beginning “at a°5/8° inch rebar set forthe N.E: ‘corner~of* this ‘tract and <0 ee . -Beginning.-at a. 

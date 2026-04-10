@@ -1,0 +1,27 @@
+- ; Rio Grande Surveying Service
+Box 6351, Taos, New Mexico 87571 /
+(505) 758-2901
+i ‘ Supplement to:
+RGSS plat no. 1-4698 -
+: Plat title: Lafe Harrower & Jessica Crowley
+: Plat date: =. 03/16/2006 - ce .
+PROPERTY DESCRIPTION |
+Tract “A” (revised) |
++ |
+A certain tract of land in Des Montes, Taos County, New Mexico; within the Antonio |
+; Martinez and Antoine Leroux Grants; located within projected Section 6, Township 26 '
+: North, Range 13 East, NMPM; described as part of Tract 66, Map 42, Survey 4 of the |
+/ 1941 Taos County Reassessment Survey and more particularly described by metes _
+and bounds as follows; !
+BEGINNING at the SE corner of this tract, a 1/2 in. rebar set, from whence :
+| triangulation station "Antonio," a 1973 State Engineer's Office brass cap monument
+; found bears N 82°18'54" E, 5744.54 feet. distant, thence;
+ke S 64°37'42" W, 242.67 feet. to the SW corner, a 1/2 in. rebar set, thence;
+N 10°35'29" W, 16.97 feet. to a 1/2 in. rebar found, thence;
+N 09°14'50" W, 126.15 feet. to the NW corner, a 1/2 in. rebar found, thence;
+: N 59°20'11" E, 248.45 feet. to the NE corner, a 5/8 in. rebar found, thence; /
+: S 10°00'50" E, 166.46 feet. to the POINT AND PLACE OF BEGINNING.
+This tract contains 0.828 acre, more or less; all as shown on a survey plat entitled :
+"Lafe Harrower & Jessica Crowley,” RGSS survey no. -4698, by Scott B. Crowt, :
+NMLS no. 12441, dated 03/16/2006. ‘
+

@@ -428,29 +428,41 @@ class LegalEmbeddingIndex:
                         continue
 
                     for subject in data.get("subjects", []):
-                        # Only index saved deed descriptions — these have the
-                        # richest legal text
+                        # Try pre-extracted legal text first
                         legal_text = (
                             subject.get("legal_description")
                             or subject.get("description")
                             or subject.get("full_text", "")
                         )
+
+                        # Fallback: read from the saved deed PDF directly
+                        if (not legal_text or len(legal_text) < 30):
+                            deed_path = subject.get("deed_path", "")
+                            if deed_path and Path(deed_path).exists():
+                                try:
+                                    from helpers.pdf_extract import extract_pdf_text
+                                    legal_text, _ = extract_pdf_text(str(deed_path))
+                                except Exception as pdf_err:
+                                    logger.debug(f"[embeddings] PDF read failed {deed_path}: {pdf_err}")
+                                    legal_text = ""
+
                         if not legal_text or len(legal_text) < 30:
                             skipped += 1
                             continue
 
-                        cleaned = _clean_legal_text(legal_text)
+                        # Build index text — subject name + job context + deed text
+                        index_text = f"{subject.get('name', client_name)} | Job {job_number} | {legal_text}"
+                        cleaned = _clean_legal_text(index_text)
                         if not cleaned:
                             skipped += 1
                             continue
 
-                        # Stable doc_id — won't duplicate on re-runs
                         doc_no = (
                             subject.get("doc_no")
                             or subject.get("document_number")
                             or subject.get("name", "")
                         )
-                        doc_id = f"deed_{job_number}_{doc_no or hash(cleaned)}"
+                        doc_id = f"deed_{job_number}_{re.sub(r'[^a-zA-Z0-9_]', '_', str(doc_no or hash(cleaned)))}"
 
                         meta = _build_metadata({
                             "owner":       subject.get("name", client_name),

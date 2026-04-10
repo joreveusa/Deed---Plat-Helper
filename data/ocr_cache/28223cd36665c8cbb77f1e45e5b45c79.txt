@@ -1,0 +1,72 @@
+PROPERTY DESCRIPTIONS (9929-8
+| : TRACT “Int” 6-27 GS
+: : A certain tract of land in Ronchitos, Teos County, New Mexico, within the wild 5
+: : Martinez Grant: located in projected Section 12, Township 25 Nerth, Range 12 East, .
+-N.M.P.M.; described as part of Tract 6, Map 23, and part of Tract 8, Map 22 all of
+: Survey 7 of the 1941 Toos County Reassessment Survey; and more particularly described
+2 by metes and bounds os follows:
+: ss 5 Commencing at Triangulation Station “Bliss,” a 1973 State Engineer. Office brass
+: cap monument found, thence; N 33°30'56" E, 1816.30 feet to 5/8 inch rebar set,
+thence; N 42°03'22" W, 248.97 feet to a 5/8 inch rebar set for the S.E. corner of
+: this tract, and the true paint of beginning, thence; :
+‘ a : N 42°O3'22” W, 138.60 feet to a 1/2 inch rebar found, thence;
+A N 42°03'22” W, 114.18 feet to a 5/8 inch rebar set for the SW. corner
+: ! ‘ of this tract, thence;
+: N 21°27°39” E, 184.44 feet to a 5/8 inch rebar set, thence;
+- : N 21'27°39” E, 184.44 feet to a 5/8 inch rebar set for the N.W. corner
+of this tract, thence;
+S$ 42°12°49" &, 249.15 feet to a 5/8 inch rebar sat for the N.E. corner
+. of this tract, thence: :
+SQ S$ 21°00'21" W, 371.13 feet to the TRUE POINT AND PLACE OF BEGINNING.
+0 100 200 300 400 > This tract contains 1.908 aéres, more or less, ond is subject to an easement 15
+a lc LL VF_VK . , feet in width ond accrues an easement 30 feet in width ‘for ingress, egress &
+: ; utilities out to Blueberry Hill Road as shown on this survay plat.
+SCALE: 1”=100’
+2% 5 is v4
+% g TRACT “I-2 .
+so ” .
+oO TRACT F-4 A certain tract of land in Ronchitos, Taos County, New Mexico, within the Antonia
+> NF Martinez Grant; located in projected Section 12, Township 25 North, Range 12 East, :
+~~ MELITON N.M.P.M.: described os part of Tract 8, Map 22, Survey 7 of the 1941 Taos
+Sy TRUALLO : County Reassessment Survey; and more particularly deseribed by metes and bounds
+~ o\ - a8 follows: :
+N Commencing at Triangulation Station “Bliss,” a 1973 State Engineer Office brass
+AN a\ cap monument found, thence; N 33°30'56" E, 1816.30 feet to 5/8 inch rebar set
+IN TRACT "H—3” _ oo for the SE. corner of this tract, and the true point of beginning, thence;
+TRACT "G—2” ‘ oe NA Filed wm i N 42°03'22" W, 248.97 feet to a 5/8 inch rebar set for the S.W. corner
+DYANPs, STEPHEN yer of this tract, thence;
+NAF OLY fee TRUMLLO At a fim aan N 21°00'21" E, 371.43 feet to o 5/8 Inch rebar set for the N.W. corer /
+: JAKE a ‘\ o\%5 “i of this tract, thence;
+TRUJILLO \“~ . . i § 4292'49" E, 257.91 feet to a 8/8 inch rebar set for the N.E. comer
+* \ i 30° EASEMENT JUN 2 7 1995 | of this tract, thence;
+x NYY see ref. 6 S 21°27°38" W,. 171.69 feet to o 5/8 inch rebar set, thence:
+= Xs. w\ / Lo | S 21°27'38" W, 108.73 feet to the TRUE POINT AND PLACE OF BEGINNING.
+id PANS / /h . Medina This tract contains 1,906 acres, more or less, and is subject to an easement 15
+rN TRACT "H~4" | Cours: Zounty. AM. feet in width and accrues an easement 30 feet in width for ingress, egress &
+> ” a” % / - tot 7 See Deputy! utilities out to Blueberry Hill Road as shown on this survey plat.
+TRACT "G—4 WO NF sein |
+N/F DN STEPHEN REFERENCES: 1. . Survey plat entitled “Meliton Trujitlo, Sr.,” by Wallace R. Luchetti,
+UAKE P Se TRUGLLO : _N.MP-LS, No. 5040, project no. L-3-74-23, dated September
+: TRUMLLO y, - BAS = COUNTY OF TAOS SS 1974.
+: = ~~ : STATE OF NEW MEXICO } ,
+ay x a Ae ieee 2. Warranty Deed to Malitan Trujilo Heirs, and filed in the Taos
+ah /% TRACT “I-1” ° SSS Nea he ee page aided mane nou We Gounty Clerk's Office, Book A~165 , page 773%. es ree
+: Fe x : 1.906 ACRES+ 2 os ok. 2Ge_. at Yd oto’ Kon. 3. Survey ptat entitled "Dolores Struck,” project no. DS-MTE, by
+ee NS ; 4 Sy and Pg pgerorced in poor Cah D__. Lawrence S. Montoya, N.M.P.S. No 12349, dated 5/16/95. .
+Ny, : "Oy, : page of the record of Tans County . As lot entitled “Carles Trujllo, ur.,” by AGS Lond S ~ ~
+: Witness my Hand and Seal of Olen . Survey plat entitled “Carlos Trujillo, ur.,” by ond Surveying,
+2 NO BUILDINGS %, Carmen Nh Meena. "job no. 325, Ann Gilmor Stewart, N.M.P.S. No 11183, dated Apri
+MeN / JRUILLO ™ A a sar 5. Survey plat entitled “Cruz, Timmerhoff, Vigil, Jr.” by Luchetti
+x. x y TRACT * 9” BRE SS Surveys, proj. no. 93-104T, Wallace R. Luchetti, N.M.L.S. No.
+ep Ss x J- 5040, dated 12/03/93.
+: = an ¥ . aed "4 att r *
+Roe .) s TRACT "l—2 & ig 6. : Survey plot entitled “Meliton Trujillo, Sr. Estate,” by Lawrence
+o 5. Montoya, N.M.P.S. No. 12349, dated 6/04/96.
+re 4 a Fy 1.906 ACRESt .</” - .
+re ge %. & NO BUILDINGS ole ee atte BASIS OF BEARING: Bearings of this survey are based on the 1973 State
+) Ap o TRUJLLO ene ON Engineer Office published bearing between Triangulation
+we ” ‘s Ee? a -- Stations “Bliss” and “Bosque,” é 4512°52” E).
+CRUZ % af >
+; Ds, Ofe woe Sug’ | Lawrence S. Montoya, a Registered Professional Surveyor under
+,4 fi Ye riine Laws of the State of New Mexico, Number 12349, hereby
+: = f b Aa > ’ nC ‘| tertify that this plot was prepared

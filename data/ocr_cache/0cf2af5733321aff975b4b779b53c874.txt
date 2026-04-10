@@ -1,0 +1,68 @@
+: ; . . PAROS COUNTY
+: , : ‘ : JEANNETTE G. RABEL, CLERK
+i : : 000298728 53
+| Book 466 Page °
+| 11/17/2004 09:07:05 AM
+i . , BY DOLORES
+/ CURVE TABLE
+: xr [CURVE | LENGTH T RADIUS | CHORD | CH. BEARING DELTA : .
+: & cl | 4295" | 40.00 [4091 | Nes°04‘49°E | G1°ai03"_|
+oe | } |e. | 1686 | 2000 | in36 | s7e°36%4"w | 4s°2e's5"_|
+poe c Sef eew LEGAL DESCRIPTION a
+; , A tract of and being lot 7 of Mountain Shadows Subdivision as shown on a plat filed in Vol. 5 page
+: i c 87 in the Taos county Clerk office being more particularly described as follows: : noo
+: ; : ALE : Beginning at the Southwest comer of lot 7 of said subdivision marked by a found % inch rebar, : a
+poe , , VERDE D Thonce N25°S5'36°E a distance of 283.83 feet toa ¥%é Inch rebarwith cap stamped iS 5103; : .
+i ; : ; RIVE ‘Thence 42.95 fest_afong a curve with a radius = 40’ della = 61°31'03" a chord = NG5°04'43°E a Lo. :
+| mn TRANSFORMER distance of 40.91 feet: , - a
+‘ s ‘Thence 18.86 feet along a curve with a radius = 20.00 feet , delta = 48°22'56" and a chord = 7
+i ; : JOINT DRIVE ; N78°38'44°E a distance of 16.36 feet to # % inch rebar with cap stamped LS 5103; :
+| : . WITH LOT 6 ‘Thence S 77°26'24" E a distance of 39.22 feet to a % inch rebas with cap stamped LS 5103 marking ’ .
+1 ; the NE Lot 7 comer of said subdivision, Coo, . ‘ ‘
+} : . ELEC METERS Thence S12°33\)1°W a distance of 277.89 feet to a found 5/8 inch rebar marking the SE comer of : va
+; ee Lot 7 of said subdivision;
+! ; : : WELL : Thence N83°3717°W a distance of 169.77 feet along the South line of Lot 7 to the point and place :
+DRIVE of beginning. - _
+i. ; LOT 6 ¢ CONE es,
+boo, & 6+ ; ; . ;
+; & : COLRTY OF TANS 138 an
+; : & f, Ef ; : , |. STATE OF New Esso ) ; ;
+| ; DECK LH dfs n ay :
+' ; . a LY SP pes lou: ‘ 4 obttily that thie Ineser << cess
+: F PIS ; af, & wer. i Uhereby cactify that this ings “a file ;
+! ‘ a &e QS > SAT. DISH A for regerd on the he AD.
+: HOUSE e 5 ie? Lot 8 whee ne at 10! tek m :
+: Ky pi) = aren RECC a fos 7 and was duiy reserded in Book CAb “4 &
+: Q) g AREA USED FOR PARKING ee ee Pe ee as
+ince, Se gp ISDN: PROPERTY LINE 5 AY yoy CONCRETE a espa ; be . NG ee AT Ly y, 2 ote
+he Po — BEARING BASED ON THIS LINE REFERENCES: ;
+| PLAT = Negeae, DOCUMENTS USED IN THE PREPARATION OF THIS PLAT AND SURVEY:
+| —x 46°00, 160,99"
+. ——.x¢q = 159,77 1. PLAT ENTITLED MOUNTAIN SHADOWS SUBDIVISION, FILED IN VOL 5 PAGE67 ON
+ve —_—=—= =, 8/13/71
+I. : N83°37470), —= : .
+i x — 2. QUITCLAIM DEFD FROM WILSON H. AND MARY J, WILLIAMS TO MARY J. WILLAMS ts
+boos FOUND 3/4 INCH REBAR DEALING IN HER SOLE AND SEPARATE PROPERTY RECORD IN BOOK A~212 PAGE
+: = WITH TAG 5953 - 582 " .
+Doe : US. FOREST SERVICE ; a
+; : FOUND 5/8 IN REBAR
+WOOD AND WIRE FENCE é .
+€ FALLING DOWN> 8 NOTICE: ;
+e — SUBJECT TO A COMPLETE TITLE SEARCH . ;
+a f AS SHOWN. : : : :
+: GRAPHIC SCALE NOTE: o
+TAX ID NO. OF TRACT
+: 6 Q F-] 50 00 206
+, ( IN FEET ) ; LEGEND:
+Meee 1inch = 50 feet
+; ; _ ; : @ = SET 1/2" REBAR 18” LONG WITH SHIELDS CAP #5103
+. oe oe . INDEXING INFORMATION FOR COUNTY CLERK ,
+. 1, LEE SHIELDS, A NEW MEXICO REGISTERED PROFESSIONAL SURVEYTR CERTIFY THAT T CONDUCTED AND An Ge aD OWNER OF TRACT: MARY J. WILLAMS ,
+“| > RESPONSIBLE FOR THIS SURVEY. THIS SURV! N MY Al
+- BELIEF, AND THAT THIS SURVEY AND PLAT MEET THE MINIMUM STANDARDS FOR SURVEYING IN NEW HEXICO, Fleid Work Completed: AUGUST 2004 LOCATION: SEC. 32 T29N RISE of
+T FURTHER CERTIFY: THAT THIS SURVEY IS NOT A LAND DIVISION OR SUBDIVISION AS DEFINED IN THE NEW MEXICO BOUNDAR ;
+| SUBDIVISIDN ACT AND THAT THIS IS A BOUNDARY SURVEY PLAT OF AN EXISTING TRACT OR TRACTS. HIELDS S URVEY Li td Co ARY SURVEY PLAT.
+| | <a a co . . 619 South 2nd Street LOT 7 OF THE MOUNTAIN a
+aes | - P.O. Box 639 SHADOWS SUBDIVISON = |
+a i Ghee 2S. 5103 TE © COPYRIGHT 2004 by Shields Survey id. Co prone 446-1230 fe a as. 3 cE Dare REY Na ;
+

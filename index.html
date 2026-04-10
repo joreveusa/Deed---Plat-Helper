@@ -53,8 +53,9 @@
         <div class="status-dot offline"></div>
         <span id="statusText">Offline</span>
       </div>
-      <button class="btn btn-outline btn-sm" onclick="window.open('/api/ai/graph/visualize', '_blank')" title="Knowledge Graph Explorer" style="border-color:rgba(128,90,213,.3);color:#b794f4">🕸️ Knowledge Graph</button>
+      <button class="btn btn-outline btn-sm" onclick="window.open('/ai/graph/visualize', '_blank')" title="Knowledge Graph Explorer — interactive force graph of all surveyed parties" style="border-color:rgba(128,90,213,.3);color:#b794f4">🕸️ Knowledge Graph</button>
       <button class="btn btn-outline btn-sm" onclick="showDataQualityPanel()" title="Data Quality Dashboard" style="border-color:rgba(121,168,224,.3);color:#79a8e0">📊 Data Quality</button>
+      <button class="btn btn-outline btn-sm" onclick="showResumeModal()" title="Load a previous research session" style="border-color:rgba(86,211,160,.3);color:#56d3a0">📂 Resume</button>
       <button class="btn btn-outline btn-sm" onclick="showSettingsModal()">⚙️ Settings</button>
     </div>
   </header>
@@ -71,22 +72,14 @@
       </button>
       <button class="step-btn" data-step="2" onclick="goToStep(2)" id="btnStep2" disabled>
         <div class="step-num">2</div>
-        <div class="step-label">Client Deed</div>
+        <div class="step-label">Documents</div>
       </button>
       <button class="step-btn" data-step="3" onclick="goToStep(3)" id="btnStep3" disabled>
         <div class="step-num">3</div>
-        <div class="step-label">Client Plat</div>
+        <div class="step-label">Adjoiner Research</div>
       </button>
       <button class="step-btn" data-step="4" onclick="goToStep(4)" id="btnStep4" disabled>
         <div class="step-num">4</div>
-        <div class="step-label">Adjoiners</div>
-      </button>
-      <button class="step-btn" data-step="5" onclick="goToStep(5)" id="btnStep5" disabled>
-        <div class="step-num">5</div>
-        <div class="step-label">Research</div>
-      </button>
-      <button class="step-btn" data-step="6" onclick="goToStep(6)" id="btnStep6" disabled>
-        <div class="step-num">6</div>
         <div class="step-label">Boundary</div>
       </button>
     </nav>
@@ -124,8 +117,8 @@
 
           <div class="form-grid">
             <div class="form-group">
-              <label for="setupJobNum">Job Number <span class="hint" id="jobNumHint">(e.g. 3001)</span></label>
-              <input type="number" id="setupJobNum" class="inp" placeholder="Auto-detect next..." aria-describedby="jobNumHint">
+              <label for="setupJobNum">Job Number <span class="hint" id="jobNumHint">(e.g. 2932 or 2932-01)</span></label>
+              <input type="text" inputmode="numeric" id="setupJobNum" class="inp" placeholder="Auto-detect next..." aria-describedby="jobNumHint">
             </div>
             <div class="form-group">
               <label for="setupJobType">Job Type</label>
@@ -184,6 +177,9 @@
 
           <div class="setup-actions">
             <button class="btn btn-primary w-full" id="btnStartSession" onclick="startSession()">Start Research Session &rarr;</button>
+            <button class="btn btn-outline w-full" id="btnCreateProject" onclick="createProjectFolder()" style="margin-top:8px" title="Create the survey job folder structure on the J: drive">
+              📁 Create Project Folder
+            </button>
           </div>
         </div>
 
@@ -317,98 +313,106 @@
         </div>
       </div>
 
-      <!-- STEP 2: CLIENT DEED -->
+      <!-- STEP 2: DOCUMENTS (Client Deed + Client Plat) -->
       <section class="step-panel hidden" id="step2Panel">
-        <div class="split-layout">
 
-          <!-- Left: Search & Results -->
-          <div class="split-left">
-            <div class="glass-card search-card">
-              <div class="form-row">
-                <div class="form-group" style="flex:2">
-                  <label>Search Name / Grantor / Grantee</label>
-                  <div style="position:relative">
-                    <input type="text" id="s2SearchName" class="inp" placeholder="e.g. Rael, Carlos"
-                      onkeyup="if(event.key==='Enter') doStep2Search()"
-                      onfocus="_showSearchHistory()" onblur="_hideSearchHistoryDelay()">
-                    <div id="searchHistoryDropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:2000;
-                      background:rgba(22,27,34,.98);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;
-                      box-shadow:0 8px 24px rgba(0,0,0,.5);max-height:220px;overflow-y:auto"></div>
+        <!-- Doc-type tab strip -->
+        <div class="tabs-nav" id="s2DocTabs" style="margin-bottom:12px">
+          <button class="tab-btn active" id="docTabDeed" onclick="switchDocTab('deed')">📄 Client Deed</button>
+          <button class="tab-btn" id="docTabPlat" onclick="switchDocTab('plat')">📐 Client Plat</button>
+        </div>
+
+        <!-- ── TAB A: DEED ── -->
+        <div id="docPaneDeed">
+          <div class="split-layout">
+            <!-- Left: Search & Results -->
+            <div class="split-left">
+              <div class="glass-card search-card">
+                <div class="form-row">
+                  <div class="form-group" style="flex:2">
+                    <label>Search Name / Grantor / Grantee</label>
+                    <div style="position:relative">
+                      <input type="text" id="s2SearchName" class="inp" placeholder="e.g. Rael, Carlos"
+                        onkeyup="if(event.key==='Enter') doStep2Search()"
+                        onfocus="_showSearchHistory()" onblur="_hideSearchHistoryDelay()">
+                      <div id="searchHistoryDropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:2000;
+                        background:rgba(22,27,34,.98);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;
+                        box-shadow:0 8px 24px rgba(0,0,0,.5);max-height:220px;overflow-y:auto"></div>
+                    </div>
+                  </div>
+                  <div class="form-group" style="flex:1">
+                    <label>Operator</label>
+                    <select id="s2SearchOp" class="inp">
+                      <option value="begins with">Begins With</option>
+                      <option value="contains" selected>Contains</option>
+                      <option value="exactly">Exactly Matches</option>
+                    </select>
+                  </div>
+                  <button class="btn btn-accent btn-search" id="btnS2Search" onclick="doStep2Search()">Search</button>
+                </div>
+                <!-- Skip shortcut -->
+                <div style="text-align:right;margin-top:6px">
+                  <button class="btn btn-outline btn-sm" style="font-size:11px;opacity:.75" onclick="switchDocTab('plat')" title="Skip deed search and go straight to plat">Skip to Plat &rarr;</button>
+                </div>
+              </div>
+
+              <div class="results-container glass-card mt-3">
+                <div class="results-header">
+                  <h3 class="card-title text-sm">Search Results <span id="s2ResultCount" class="result-badge">0</span></h3>
+                  <div class="sort-controls">
+                    <label for="s2SortBy" class="sort-label">Sort:</label>
+                    <select id="s2SortBy" class="inp sort-select" onchange="doStep2Search(this.value)">
+                      <option value="relevance">Relevance</option>
+                      <option value="date">Date (newest)</option>
+                      <option value="type">Type (deeds first)</option>
+                      <option value="original">Original order</option>
+                    </select>
                   </div>
                 </div>
-                <div class="form-group" style="flex:1">
-                  <label>Operator</label>
-                  <select id="s2SearchOp" class="inp">
-                    <option value="begins with">Begins With</option>
-                    <option value="contains" selected>Contains</option>
-                    <option value="exactly">Exactly Matches</option>
-                  </select>
+                <div id="s2TrsContext"></div>
+                <div class="table-wrap">
+                  <table class="data-table" id="s2ResultsTable">
+                    <thead>
+                      <tr><th>Doc #</th><th>Grantor</th><th>Grantee</th><th>Type</th><th>Book/Page</th><th>Year</th><th style="width:80px">Relevance</th></tr>
+                    </thead>
+                    <tbody id="s2ResultsBody">
+                      <tr><td colspan="7" class="empty-cell">Enter a search above or start session.</td></tr>
+                    </tbody>
+                  </table>
                 </div>
-                <button class="btn btn-accent btn-search" id="btnS2Search" onclick="doStep2Search()">Search</button>
-              </div>
-              <!-- Skip shortcut for jobs that don't need deed research -->
-              <div style="text-align:right;margin-top:6px">
-                <button class="btn btn-outline btn-sm" style="font-size:11px;opacity:.75" onclick="skipToStep3()" title="Skip deed research and go straight to plat search">Skip to Plat &rarr;</button>
               </div>
             </div>
 
-            <div class="results-container glass-card mt-3">
-              <div class="results-header">
-                <h3 class="card-title text-sm">Search Results <span id="s2ResultCount" class="result-badge">0</span></h3>
-                <div class="sort-controls">
-                  <label for="s2SortBy" class="sort-label">Sort:</label>
-                  <select id="s2SortBy" class="inp sort-select" onchange="doStep2Search(this.value)">
-                    <option value="relevance">Relevance</option>
-                    <option value="date">Date (newest)</option>
-                    <option value="type">Type (deeds first)</option>
-                    <option value="original">Original order</option>
-                  </select>
+            <!-- Right: Deed Detail & Actions -->
+            <div class="split-right">
+              <div class="glass-card detail-card flex-col" id="s2DetailContainer">
+                <div class="empty-state">
+                  <div class="empty-icon">📄</div>
+                  <p>Select a deed from the results list to view its details and save it to the client folder.</p>
                 </div>
-              </div>
-              <div id="s2TrsContext"></div>
-              <div class="table-wrap">
-                <table class="data-table" id="s2ResultsTable">
-                  <thead>
-                    <tr><th>Doc #</th><th>Grantor</th><th>Grantee</th><th>Type</th><th>Book/Page</th><th>Year</th><th style="width:80px">Relevance</th></tr>
-                  </thead>
-                  <tbody id="s2ResultsBody">
-                    <tr><td colspan="7" class="empty-cell">Enter a search above or start session.</td></tr>
-                  </tbody>
-                </table>
               </div>
             </div>
           </div>
-
-          <!-- Right: Deed Detail & Actions -->
-          <div class="split-right">
-            <div class="glass-card detail-card flex-col" id="s2DetailContainer">
-              <div class="empty-state">
-                <div class="empty-icon">📄</div>
-                <p>Select a deed from the results list to view its details and save it to the client folder.</p>
-              </div>
-            </div>
-          </div>
-
         </div>
-      </section>
 
-      <!-- STEP 3: CLIENT PLAT -->
-      <section class="step-panel hidden" id="step3Panel">
-         <div class="glass-card header-card row-layout">
-           <div class="plat-context">
-             <h2 class="card-title">Find Client Plat</h2>
-             <p class="card-desc text-sm">Searching local cabinets, county KML parcel records, and online records for plats referenced in the client's deed.</p>
-           </div>
-           <div class="plat-tools">
-             <button class="btn btn-outline" onclick="openGlobalCabinetBrowser()">🗄️ Cabinet Browser</button>
-             <button class="btn btn-outline" onclick="showKmlIndexModal()">🗺️ KML Index</button>
-             <button class="btn btn-primary" onclick="doStep3Search()">⟳ Refresh</button>
-           </div>
-         </div>
+        <!-- ── TAB B: PLAT ── -->
+        <div id="docPanePlat" class="hidden">
+          <div class="glass-card header-card row-layout" style="margin-bottom:12px">
+            <div class="plat-context">
+              <h2 class="card-title">Find Client Plat</h2>
+              <p class="card-desc text-sm">Searching local cabinets, county KML parcel records, and online records for plats referenced in the client's deed.</p>
+            </div>
+            <div class="plat-tools">
+              <button class="btn btn-outline btn-upload" onclick="triggerDirectUpload('plat')" style="border-color:rgba(79,172,254,.3);color:#4facfe">📤 Direct Upload</button>
+              <button class="btn btn-outline" onclick="openGlobalCabinetBrowser()">🗄️ Cabinet Browser</button>
+              <button class="btn btn-outline" onclick="showKmlIndexModal()">🗺️ KML Index</button>
+              <button class="btn btn-primary" onclick="doStep3Search()">⟳ Refresh</button>
+            </div>
+          </div>
 
-         <div class="s3-three-col mt-3">
-           <!-- Col 1: Local Cabinets -->
-           <div class="flex-col">
+          <div class="s3-three-col">
+            <!-- Col 1: Local Cabinets -->
+            <div class="flex-col">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:0">
                 <h3 class="section-heading" style="margin-bottom:0">📁 Local Cabinet Plats <span class="badge badge-local">Cabinet Scans</span></h3>
                 <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
@@ -427,108 +431,105 @@
               <div class="glass-card plat-list-card flex-1" id="s3LocalPlats" style="margin-top:6px">
                 <div class="loading-state">Scanning cabinets...</div>
               </div>
-           </div>
-
-           <!-- Col 2: KML Parcel Records -->
-           <div class="flex-col">
+            </div>
+            <!-- Col 2: KML Parcel Records -->
+            <div class="flex-col">
               <h3 class="section-heading">🗺️ KML Parcel Records <span class="badge badge-kml">Taos County</span></h3>
               <div class="glass-card plat-list-card flex-1" id="s3KmlPlats">
                 <div class="loading-state">Querying parcel index...</div>
               </div>
-           </div>
-
-           <!-- Col 3: Online Survey Records -->
-           <div class="flex-col">
+            </div>
+            <!-- Col 3: Online Survey Records -->
+            <div class="flex-col">
               <h3 class="section-heading">🌐 Online Survey Records <span class="badge badge-online" id="s3OnlineBadge">County Records</span></h3>
               <div class="glass-card plat-list-card flex-1" id="s3OnlinePlats">
                 <div class="loading-state">Searching online...</div>
               </div>
-           </div>
-         </div>
-      </section>
-
-      <!-- KML Index Status Modal (2nd location removed, kept single above) -->
-
-      <!-- STEP 4: ADJOINER DISCOVERY -->
-      <section class="step-panel hidden" id="step4Panel">
-        <div class="glass-card header-card">
-          <div class="row-layout justify-between">
-            <div>
-              <h2 class="card-title">Discover Adjoiners</h2>
-              <p class="card-desc">Auto-extract neighboring property owners from the saved plat and online records. Or pick visually from the KML parcel map.</p>
-            </div>
-            <div class="row-layout gap-2">
-              <button class="btn btn-outline" id="btnKmlMapPicker" onclick="showPropertyPicker()" title="Pick adjoiners visually on a parcel map">
-                🗺️ Map Picker
-              </button>
-              <button class="btn btn-outline" id="btnArcgisSpatial" onclick="runArcgisSpatialDiscovery()" title="Find adjacent parcels using ArcGIS satellite geometry">
-                🛰️ ArcGIS Spatial
-              </button>
-              <button class="btn btn-primary" id="btnDiscoverAdjoiners" onclick="runAdjoinerDiscovery()">
-                ⚡ Run Discovery Scan
-              </button>
             </div>
           </div>
-        </div>
 
-        <div class="discovery-results mt-3 glass-card hidden" id="s4DiscoveryResults">
-          <div class="row-layout discovery-header">
-            <h3>Found <span id="s4CountText" class="text-accent2">0</span> Potential Adjoiners</h3>
-            <button class="btn btn-success btn-sm" onclick="addAllAndContinue()">&#10133; Add All &amp; Continue &rarr;</button>
-          </div>
-          <div class="adjoiner-discovery-grid" id="s4AdjoinerGrid">
-            <!-- Populated via JS -->
-          </div>
-        </div>
-
-        <div class="manual-add-card glass-card mt-3">
-          <h3 class="card-title text-sm mb-2">Manually Add Adjoiner</h3>
-          <div class="form-row">
-             <input type="text" id="s4ManualName" class="inp flex-1" placeholder="Adjoiner Name (Last, First)" onkeyup="if(event.key==='Enter') manualAddAdjoiner()">
-             <button class="btn btn-outline" onclick="manualAddAdjoiner()">+ Add</button>
-          </div>
-        </div>
-
-        <!-- KG Historical Suggestions -->
-        <div class="glass-card mt-3 hidden" id="s4KgSuggestions">
-          <div class="row-layout justify-between mb-2">
-            <div>
-              <h3 class="card-title text-sm" style="color:#79a8e0">🧠 AI: Past Adjoiners from History</h3>
-              <p class="card-desc" style="font-size:10px">Found in the knowledge graph from previous jobs involving this client.</p>
-            </div>
-            <button class="btn btn-outline btn-sm" onclick="kgAddAllSuggestions()" id="btnKgAddAll"
-              style="border-color:rgba(121,168,224,.3);color:#79a8e0;font-size:11px">
-              ✚ Add All
+          <!-- Continue to Adjoiners -->
+          <div class="glass-card mt-3 text-center" style="padding:14px 16px">
+            <button class="btn btn-success" onclick="goToStep(3)" style="font-size:14px;padding:10px 28px">
+              Continue to Adjoiner Research &rarr;
             </button>
           </div>
-          <div id="s4KgGrid" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
+
+      </section>
+
+      <!-- STEP 3: ADJOINER RESEARCH (Discovery + Board) -->
+      <section class="step-panel hidden" id="step3Panel">
+
+        <!-- Header row with all actions -->
+        <div class="glass-card header-card" style="margin-bottom:12px">
+          <div class="row-layout justify-between" style="flex-wrap:wrap;gap:8px">
+            <div>
+              <h2 class="card-title">Adjoiner Research</h2>
+              <p class="card-desc">Discover neighboring owners, then collect their deeds and plats.</p>
+            </div>
+            <div class="row-layout gap-2" style="flex-wrap:wrap">
+              <button class="btn btn-outline" id="btnKmlMapPicker" onclick="showPropertyPicker()" title="Pick adjoiners visually on a parcel map">🗺️ Map Picker</button>
+              <button class="btn btn-outline" id="btnArcgisSpatial" onclick="runArcgisSpatialDiscovery()" title="Find adjacent parcels using ArcGIS">🛰️ ArcGIS Spatial</button>
+              <button class="btn btn-primary" id="btnDiscoverAdjoiners" onclick="runAdjoinerDiscovery()">⚡ Run Discovery</button>
+              <button class="btn btn-outline" onclick="bulkSearchAdjoiners()" title="Auto-save deeds for all pending adjoiners">📄 Bulk Deeds</button>
+              <button class="btn btn-outline" onclick="bulkFindPlats()" title="Auto-find plats for all adjoiners">📐 Bulk Plats</button>
+              <button class="btn btn-outline" onclick="openFolderForContext()">📁 Folder</button>
+              <button class="btn btn-outline btn-sm" style="color:#ff7b72;border-color:rgba(255,123,114,.3)" onclick="removePendingSubjects()" title="Remove adjoiners with no saved docs">🗑️ Remove Pending</button>
+              <button class="btn btn-success" onclick="goToStep(4)" style="font-size:13px">Open Boundary Plotter &rarr;</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Side-by-side: Discovery left, Board right -->
+        <div class="split-layout" style="align-items:flex-start">
+
+          <!-- LEFT: Discovery Panel -->
+          <div class="split-left flex-col" style="min-width:280px;max-width:360px">
+
+            <div class="discovery-results glass-card hidden" id="s4DiscoveryResults">
+              <div class="row-layout discovery-header">
+                <h3>Found <span id="s4CountText" class="text-accent2">0</span> Adjoiners</h3>
+                <button class="btn btn-success btn-sm" onclick="addAllAndContinue()">&#10133; Add All</button>
+              </div>
+              <div class="adjoiner-discovery-grid" id="s4AdjoinerGrid"></div>
+            </div>
+
+            <div class="manual-add-card glass-card mt-3">
+              <h3 class="card-title text-sm mb-2">Manually Add Adjoiner</h3>
+              <div class="form-row">
+                <input type="text" id="s4ManualName" class="inp flex-1" placeholder="Adjoiner Name (Last, First)" onkeyup="if(event.key==='Enter') manualAddAdjoiner()">
+                <button class="btn btn-outline" onclick="manualAddAdjoiner()">+ Add</button>
+              </div>
+            </div>
+
+            <!-- KG Historical Suggestions -->
+            <div class="glass-card mt-3 hidden" id="s4KgSuggestions">
+              <div class="row-layout justify-between mb-2">
+                <div>
+                  <h3 class="card-title text-sm" style="color:#79a8e0">🧠 AI: Past Adjoiners</h3>
+                  <p class="card-desc" style="font-size:10px">From knowledge graph history.</p>
+                </div>
+                <button class="btn btn-outline btn-sm" onclick="kgAddAllSuggestions()" id="btnKgAddAll"
+                  style="border-color:rgba(121,168,224,.3);color:#79a8e0;font-size:11px">✚ Add All</button>
+              </div>
+              <div id="s4KgGrid" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+            </div>
+
+          </div>
+
+          <!-- RIGHT: Research Board -->
+          <div class="split-right flex-col" style="flex:1;min-width:0">
+            <div class="research-grid" id="s5ResearchGrid">
+              <div class="empty-state">No adjoiners yet — run Discovery or add manually.</div>
+            </div>
+          </div>
+
         </div>
       </section>
 
-      <!-- STEP 5: ADJOINER RESEARCH -->
-      <section class="step-panel hidden" id="step5Panel">
-        <div class="glass-card header-card row-layout justify-between mb-3">
-           <div>
-             <h2 class="card-title">Adjoiner Research Board</h2>
-             <p class="card-desc">Search, save deeds, and locate plats for all adjoiners.</p>
-           </div>
-           <div class="row-layout gap-2">
-             <button class="btn btn-outline btn-sm" style="color:#ff7b72;border-color:rgba(255,123,114,.3)" onclick="removePendingSubjects()" title="Remove all adjoiners that have no saved deeds or plats">🗑️ Remove Pending</button>
-             <button class="btn btn-outline" onclick="bulkSearchAdjoiners()" title="Search and auto-save deeds for all pending adjoiners">📄 Bulk Deeds</button>
-             <button class="btn btn-outline" onclick="bulkFindPlats()" title="Auto-find and save plats for all adjoiners missing plats">📐 Bulk Plats</button>
-             <button class="btn btn-outline" onclick="openFolderForContext()">📁 Open Folder</button>
-             <button class="btn btn-success" onclick="goToStep(6)">Continue to Boundary →</button>
-           </div>
-        </div>
-
-        <div class="research-grid" id="s5ResearchGrid">
-           <!-- Adjoiner cards populated via JS -->
-           <div class="empty-state">No adjoiners added yet. Go back to Step 4.</div>
-        </div>
-      </section>
-
-      <!-- STEP 6: BOUNDARY LINES -->
-      <section class="step-panel hidden" id="step6Panel">
+      <!-- STEP 4: BOUNDARY LINES -->
+      <section class="step-panel hidden" id="step4Panel">
         <div class="split-layout">
           <!-- Left: Calls + Parcels -->
           <div class="split-left flex-col">
@@ -645,6 +646,11 @@
               <button class="btn btn-success btn-lg w-full" id="btnGenerateDxf" onclick="doGenerateDxf()">
                 <span class="btn-icon">💾</span> Generate & Save DXF
               </button>
+              <button class="btn btn-outline w-full mt-2" id="btnGeneratePackage" onclick="doGenerateFullPackage()"
+                title="Generate DXF + refresh reference table + open project folder"
+                style="border-color:rgba(64,194,159,.4);color:#40c29f;font-size:13px">
+                <span class="btn-icon">📦</span> Generate Full Package
+              </button>
               <div id="s6GenerateStatus" class="mt-2 text-sm text-text3"></div>
             </div>
           </div>
@@ -753,6 +759,10 @@
         <!-- Leaflet map -->
         <div style="flex:1;position:relative;overflow:hidden">
           <div id="propPickerLeafletMap" style="position:absolute;inset:0;background:#0d1117"></div>
+          <!-- PLSS Toggle -->
+          <button id="btnTogglePlss" onclick="togglePlssLayer()" class="btn btn-sm" style="position:absolute;top:10px;right:10px;z-index:900;background:rgba(26,26,46,0.9);border:1px solid rgba(86,211,160,0.4);color:#56d3a0;font-size:11px;font-weight:700;letter-spacing:0.5px;padding:6px 10px;backdrop-filter:blur(4px);box-shadow:0 4px 12px rgba(0,0,0,0.5);">
+             #️⃣ PLSS Grid
+          </button>
           <!-- Loading overlay -->
           <div id="propPickerMapLoader" class="map-loader-overlay">
             <div class="map-loader-spinner"></div>
@@ -786,6 +796,12 @@
               + Add as Adjoiner
             </button>
             <div id="pickerActionHint" style="font-size:10px;color:var(--text3);text-align:center">Click a parcel, then choose an action.</div>
+            <hr style="border:none;border-top:1px solid var(--border);margin:4px 0">
+            <button class="btn btn-success w-full" onclick="closePropPicker(); goToStep(4);"
+              style="font-size:13px;padding:10px;letter-spacing:.3px"
+              title="Finish picking adjoiners and return to the Adjoiner Discovery step">
+              ✓ Done Selecting Adjoiners
+            </button>
           </div>
 
           <!-- Adjoiners added this session -->
@@ -1559,7 +1575,11 @@
     <!-- Quick Actions -->
     <div class="ai-chat-quick-actions" id="aiQuickActions">
       <button class="ai-quick-btn" onclick="aiQuickAction('predict')">📊 Predict Job</button>
+      <button class="ai-quick-btn" onclick="aiQuickAction('adjoiners')">🔢 Adj Count</button>
+      <button class="ai-quick-btn" onclick="aiQuickAction('cabinet')">🗄️ Cabinet</button>
       <button class="ai-quick-btn" onclick="aiQuickAction('graph')">🕸️ Graph Stats</button>
+      <button class="ai-quick-btn" onclick="aiQuickAction('chain')">🔗 Adj Chain</button>
+      <button class="ai-quick-btn" onclick="aiQuickAction('jobs')">📋 Past Jobs</button>
       <button class="ai-quick-btn" onclick="aiQuickAction('anomaly')">⚠️ QA Check</button>
       <button class="ai-quick-btn" onclick="showAnalyticsInNova()">📈 Analytics</button>
     </div>
@@ -1640,5 +1660,6 @@
   <script src="app.js" onerror="
     _showErrBox('\u274c Failed to load app.js — server may be down');
   "></script>
+  <input type="file" id="sysDirectUpload" style="display:none" accept="application/pdf" onchange="handleDirectUpload(event)">
 </body>
 </html>

@@ -3285,6 +3285,32 @@ body, body * {
   border: 1px solid rgba(176, 128, 224, 0.3);
 }
 
+/* Ownership chips in deed search results */
+.owner-chip {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-right: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+  cursor: default;
+}
+.owner-chip-client {
+  background: rgba(227, 197, 90, 0.18);
+  border: 1px solid rgba(227, 197, 90, 0.45);
+  color: #e3c55a;
+}
+.owner-chip-adj {
+  background: rgba(176, 128, 224, 0.15);
+  border: 1px solid rgba(176, 128, 224, 0.4);
+  color: #b080e0;
+}
+
+
 .relevance-score {
   display: inline-flex;
   align-items: center;

@@ -226,80 +226,6 @@ async function _initProfiles() {
 
 
 // ── Global Keyboard Shortcuts ─────────────────────────────────────────────────
-function _handleGlobalKeyboard(e) {
-  // Ignore events when an input/textarea/select is focused (let users type normally)
-  const tag = (e.target.tagName || '').toLowerCase();
-  const isInputFocused = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
-
-  // ── Escape: close any open modal ──────────────────────────────────────────
-  if (e.key === 'Escape') {
-    const modals = document.querySelectorAll('.modal-overlay:not(.hidden)');
-    if (modals.length) {
-      // Close the topmost (last) visible modal
-      const top = modals[modals.length - 1];
-      const closeBtn = top.querySelector('.close-btn');
-      if (closeBtn) closeBtn.click();
-      else top.classList.add('hidden');
-      e.preventDefault();
-      return;
-    }
-    // Close plat preview panel if open
-    const preview = document.getElementById('platPreviewPanel');
-    if (preview && preview.classList.contains('open')) {
-      closePlatPreview();
-      e.preventDefault();
-      return;
-    }
-  }
-
-  // ── Ctrl+Enter: primary action for current step ───────────────────────────
-  if (e.ctrlKey && e.key === 'Enter') {
-    e.preventDefault();
-    switch (state.currentStep) {
-      case 1: startSession(); break;
-      case 2: {
-        // If a deed is selected, save it; otherwise run search
-        if (state.selectedDetail) {
-          const saveBtn = document.querySelector('#s2DetailContainer .btn-success');
-          if (saveBtn) saveBtn.click();
-        } else {
-          doStep2Search();
-        }
-        break;
-      }
-      case 4: runAdjoinerDiscovery(); break;
-      case 5: goToStep(6); break;
-      case 6: doGenerateDxf(); break;
-    }
-    return;
-  }
-
-  // ── Ctrl+F: focus the search field for current step ───────────────────────
-  if (e.ctrlKey && e.key === 'f') {
-    let searchEl = null;
-    switch (state.currentStep) {
-      case 2: searchEl = document.getElementById('s2SearchName'); break;
-      case 3: searchEl = document.getElementById('s3CabinetSelect'); break;
-      case 4: searchEl = document.getElementById('s4ManualName'); break;
-    }
-    if (searchEl) {
-      e.preventDefault();
-      searchEl.focus();
-      searchEl.select?.();
-      return;
-    }
-  }
-
-  // ── Number keys 1-6: jump to step (only when not typing) ─────────────────
-  if (!isInputFocused && !e.ctrlKey && !e.altKey && !e.metaKey) {
-    const num = parseInt(e.key);
-    if (num >= 1 && num <= 6) {
-      goToStep(num);
-      e.preventDefault();
-      return;
-    }
-  }
-}
 
 // ── Unsaved-changes guard ─────────────────────────────────────────────────────
 window.addEventListener('beforeunload', (e) => {
@@ -392,12 +318,12 @@ function updateStepUI() {
     }
   });
 
-  // Update progress bar
-  const pct = ((state.currentStep - 1) / 5) * 100;
+  // Update progress bar (4 steps, so max fill at step 4 = 3/3)
+  const pct = ((state.currentStep - 1) / 3) * 100;
   document.getElementById("stepProgressFill").style.width = pct + "%";
 
   // Show active panel
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= 4; i++) {
     const panel = document.getElementById(`step${i}Panel`);
     if (panel) {
       if (i === state.currentStep) {
@@ -414,30 +340,30 @@ function updateStepUI() {
   // Trigger step-specific logic
   if (state.currentStep === 2 && state.researchSession) {
     const nameField = document.getElementById("s2SearchName");
-    if (!nameField.value) {
+    if (nameField && !nameField.value) {
       nameField.value = state.researchSession.client_name;
     }
-    // Auto-fire search if name is pre-populated (avoid redundant searches)
-    if (nameField.value && nameField.value.length >= 2 && !state._step2Searched) {
+    // Auto-fire deed search if name is pre-populated
+    if (nameField && nameField.value && nameField.value.length >= 2 && !state._step2Searched) {
       state._step2Searched = true;
       setTimeout(() => doStep2Search(), 400);
     }
+    // Kick off plat search in background so it's ready when they switch tabs
+    if (!state._step3Searched) {
+      state._step3Searched = true;
+      setTimeout(() => doStep3Search(), 800);
+    }
   }
-  if (state.currentStep === 3) {
-    doStep3Search();
-  }
-  if (state.currentStep === 4 && state.researchSession) {
+  if (state.currentStep === 3 && state.researchSession) {
     // Auto-run discovery scan if the client deed has been saved
     const clientSubj = state.researchSession.subjects.find(s => s.type === 'client');
     if (clientSubj && clientSubj.deed_saved && !state._adjDiscoveryRan) {
       state._adjDiscoveryRan = true;
       setTimeout(() => runAdjoinerDiscovery(true), 600);
     }
-  }
-  if (state.currentStep === 5) {
     renderResearchBoard();
   }
-  if (state.currentStep === 6) {
+  if (state.currentStep === 4) {
     switchS6Tab('calls');
     // Auto-import calls from deed if not already done
     if (state.selectedDetail && !state.parsedCalls.length) {
@@ -480,7 +406,7 @@ function renderPropertyContextPanel() {
   const reopenTab = document.getElementById('pcpReopenTab');
   if (!panel) return;
 
-  // Only show on steps 2–6 when a session is active
+  // Only show on steps 2–4 when a session is active
   const show = state.currentStep >= 2 && state.researchSession && !state._pcpCollapsed;
   panel.classList.toggle('visible', !!show);
 
@@ -701,10 +627,10 @@ function _pcpRenderMiniMap() {
 
   // ── Client-anchored bounding box with outlier rejection ───────────────────
   // Find the client polygon centroid as anchor point.
-  // Any adjoiner whose centroid is > OUTLIER_FACTOR × BASE_PAD degrees away
+  // Any adjoiner whose centroid is > OUTLIER_FACTOR Ã— BASE_PAD degrees away
   // from the client is excluded from the viewport (still shown in subject list).
   const CLIENT_PAD  = 0.004;   // ~0.004° ≈ 400m — base padding around client
-  const OUTLIER_FAC = 3.0;     // exclude parcels > 3× that distance away
+  const OUTLIER_FAC = 3.0;     // exclude parcels > 3Ã— that distance away
 
   const clientPoly = polys.find(p => p.isClient);
   let anchorLon, anchorLat;
@@ -969,9 +895,57 @@ async function _pcpFetchAllGeometry() {
 // 
 // STEP 1: JOB SETUP
 // 
+/** Create the RTSI project folder structure for the current job on the J: drive. */
+async function createProjectFolder() {
+  const rawJob    = document.getElementById('setupJobNum')?.value.trim().replace(/[^\d-]/g, '') || '';
+  const clientRaw = document.getElementById('setupClient')?.value.trim() || '';
+  const jobType   = document.getElementById('setupJobType')?.value || 'BDY';
+
+  // Use session values as fallback
+  const jobNum = rawJob || state.researchSession?.job_number || '';
+  const client = clientRaw || state.researchSession?.client_name || '';
+
+  if (!client) { showToast('Enter a client name first', 'warn'); return; }
+
+  const btn = document.getElementById('btnCreateProject');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Creating…'; }
+
+  try {
+    const res = await apiFetch('/create-project', {
+      method: 'POST',
+      body: JSON.stringify({ job_number: jobNum || null, client_name: client, job_type: jobType }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`📁 Project #${data.job_number} created — ${client}`, 'success');
+      // Open the folder in Explorer
+      if (data.project_path) {
+        await apiFetch('/open-folder', {
+          method: 'POST',
+          body: JSON.stringify({ path: data.project_path }),
+        });
+      }
+      // Pre-fill job number if it was auto-assigned
+      if (!rawJob && data.job_number) {
+        const el = document.getElementById('setupJobNum');
+        if (el) el.value = data.job_number;
+      }
+    } else {
+      showToast('❌ ' + (data.error || 'Create project failed'), 'error');
+    }
+  } catch (e) {
+    showToast('❌ ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📁 Create Project Folder'; }
+  }
+}
+
 async function startSession() {
-  const numInput = document.getElementById("setupJobNum").value;
-  const num = parseInt(numInput) || state.nextJobNum;
+
+  const rawInput = document.getElementById("setupJobNum").value.trim();
+  // Allow digits and hyphens only (e.g. 2932, 2932-01) — strip everything else
+  const cleanedInput = rawInput.replace(/[^\d-]/g, '').replace(/^-+|-+$/g, ''); // trim leading/trailing dashes
+  const num = cleanedInput || state.nextJobNum;
   const client = document.getElementById("setupClient").value.trim();
   const type = document.getElementById("setupJobType").value;
 
@@ -1140,92 +1114,12 @@ function quickLoadJob(num, client, type) {
 
 // ── AI Insights Panel ─────────────────────────────────────────────────────────
 /** Safely set textContent on an element by ID */
-function _setText(id, text) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = text;
-}
 
 /**
  * Populate the AI Insights card on Step 1.
  * @param {boolean} [full=false] - true when user clicks Refresh (runs data-conflicts too)
  * Fires independent requests so one failure doesn't blank the panel.
  */
-async function refreshAiInsights(full = false) {
-  // Helper: apiFetch with a timeout
-  function apiFetchTimeout(path, timeoutMs = 15000) {
-    const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), timeoutMs);
-    return apiFetch(path, 'GET', null, { signal: ctrl.signal })
-      .finally(() => clearTimeout(tid));
-  }
-
-  // ── Index Health ──────────────────────────────────────────────────────────
-  apiFetchTimeout("/index-health").then(h => {
-    if (!h.success) return;
-    _setText("aiTotalParcels", h.total_parcels?.toLocaleString() ?? "0");
-    _setText("aiArcgisPct", h.pct_with_arcgis != null ? h.pct_with_arcgis + "%" : "—");
-
-    // Stale-index warning
-    const staleRow = document.getElementById("aiStaleWarning");
-    if (staleRow) {
-      if (h.stale_warning || (h.newer_xml_files && h.newer_xml_files.length)) {
-        staleRow.classList.remove("hidden");
-        let msg = `Index is ${h.index_age_days} days old`;
-        if (h.newer_xml_files && h.newer_xml_files.length) {
-          msg += ` · ${h.newer_xml_files.length} XML file(s) newer than index`;
-        }
-        _setText("aiStaleText", msg);
-      } else {
-        staleRow.classList.add("hidden");
-      }
-    }
-  }).catch(e => {
-    if (e.name !== 'AbortError') console.warn("[AI Insights] index-health failed:", e);
-  });
-
-  // ── Data Conflicts — only on explicit Refresh (slow with 134K parcels) ───
-  if (full) {
-    _setText("aiConflictCount", "…");
-    apiFetchTimeout("/data-conflicts?max_conflicts=0", 30000).then(c => {
-      if (!c.success) { _setText("aiConflictCount", "—"); return; }
-      // Exclude missing_enrichment (info-level) — show only real cross-source conflicts
-      const total = (c.summary?.owner_mismatches || 0) +
-                    (c.summary?.area_mismatches || 0) +
-                    (c.summary?.trs_mismatches || 0);
-      _setText("aiConflictCount", total.toLocaleString());
-    }).catch(e => {
-      _setText("aiConflictCount", "—");
-      if (e.name !== 'AbortError') console.warn("[AI Insights] data-conflicts failed:", e);
-    });
-  }
-
-  // ── Research Analytics ────────────────────────────────────────────────────
-  apiFetchTimeout("/research-analytics").then(a => {
-    if (!a.success) return;
-    // API returns: { stats, predictions, scanned_jobs }
-    _setText("aiJobsScanned", (a.scanned_jobs ?? a.stats?.total_jobs ?? 0).toLocaleString());
-
-    // Complexity prediction (default BDY) — key is `predictions`
-    const pred = a.predictions;
-    if (pred) {
-      const row = document.getElementById("aiPredictionRow");
-      if (row) row.classList.remove("hidden");
-      _setText("aiPredComplexity", pred.predicted_complexity || "moderate");
-      const cpxEl = document.getElementById("aiPredComplexity");
-      if (cpxEl) cpxEl.dataset.level = pred.predicted_complexity || "moderate";
-      _setText("aiPredAdjoiners", pred.predicted_adjoiners ?? "—");
-      const rangeEl = document.getElementById("aiPredRange");
-      if (rangeEl && pred.adjoiner_range) {
-        rangeEl.textContent = `(${pred.adjoiner_range.p25}–${pred.adjoiner_range.p75})`;
-      }
-      _setText("aiPredCabinets", (pred.likely_cabinets || []).join(", ") || "—");
-      _setText("aiPredConfidence", pred.confidence || "—");
-      _setText("aiPredSimilar", pred.similar_jobs_count ?? "0");
-    }
-  }).catch(e => {
-    if (e.name !== 'AbortError') console.warn("[AI Insights] research-analytics failed:", e);
-  });
-}
 
 async function persistSession() {
   if (!state.researchSession) return false;
@@ -1365,6 +1259,39 @@ async function doStep2Search(sortBy) {
 
     document.getElementById("s2ResultCount").textContent = res.results.length;
     state.searchResults = res.results;
+
+    // Build session ownership map: normalizedName → {label, type}
+    const _ownerMap = {};
+    if (state.researchSession?.subjects) {
+      for (const s of state.researchSession.subjects) {
+        const norm = (s.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (norm) _ownerMap[norm] = { label: s.name, type: s.type };
+      }
+    }
+
+    /** Check if a name matches any session subject — returns chip HTML or '' */
+    function _ownerChip(name) {
+      if (!name || !Object.keys(_ownerMap).length) return '';
+      const norm = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      // Exact match
+      if (_ownerMap[norm]) {
+        const s = _ownerMap[norm];
+        return s.type === 'client'
+          ? `<span class="owner-chip owner-chip-client" title="★ Client: ${escHtml(s.label)}">★ CLIENT</span>`
+          : `<span class="owner-chip owner-chip-adj" title="Adjoiner: ${escHtml(s.label)}">🏘 ADJ</span>`;
+      }
+      // Partial — check if any session name starts with the name's first word
+      const firstWord = norm.slice(0, 6);
+      for (const [key, s] of Object.entries(_ownerMap)) {
+        if (key.startsWith(firstWord) && firstWord.length >= 4) {
+          return s.type === 'client'
+            ? `<span class="owner-chip owner-chip-client" title="Possible client: ${escHtml(s.label)}">★?</span>`
+            : `<span class="owner-chip owner-chip-adj" title="Possible adjoiner: ${escHtml(s.label)}">🏘?</span>`;
+        }
+      }
+      return '';
+    }
+
     tbody.innerHTML = res.results.map((r, i) => {
       const tags = r.relevance_tags || [];
       const score = r.relevance_score || 0;
@@ -1378,11 +1305,16 @@ async function doStep2Search(sortBy) {
       if (tags.includes('client_name'))      badges += '<span class="relevance-badge badge-client" title="Client name match">👤</span>';
       if (tags.includes('adjoiner'))         badges += '<span class="relevance-badge badge-adj" title="Adjoiner name match">🏘️</span>';
 
+      const grantorChip  = _ownerChip(r.grantor);
+      const granteeChip  = _ownerChip(r.grantee);
+      const grantorShort = escHtml((r.grantor || '').split(",")[0] || r.grantor || '');
+      const granteeShort = escHtml((r.grantee || '').split(",")[0] || r.grantee || '');
+
       return `
       <tr class="row-${getTypeClass(r.instrument_type)} ${rowClass}" onclick="loadS2Detail('${r.doc_no}', ${i}, this)">
         <td class="mono font-bold text-accent2">${r.doc_no || ''}</td>
-        <td title="${escHtml(r.grantor || '')}">${escHtml((r.grantor || '').split(",")[0] || r.grantor || '')}</td>
-        <td title="${escHtml(r.grantee || '')}" style="font-size:11px;color:var(--text2)">${escHtml((r.grantee || '').split(",")[0] || r.grantee || '')}</td>
+        <td title="${escHtml(r.grantor || '')}">${grantorChip}${grantorShort}</td>
+        <td title="${escHtml(r.grantee || '')}" style="font-size:11px;color:var(--text2)">${granteeChip}${granteeShort}</td>
         <td><span class="badge ${getTypeClass(r.instrument_type)}">${r.instrument_type || 'Deed'}</span></td>
         <td class="text-xs text-text3">${escHtml(r.location || '')}</td>
         <td class="text-xs text-text3">${(r.recorded_date || r.instrument_date || '').split("-")[0] || r.date || ''}</td>
@@ -1435,6 +1367,9 @@ async function loadS2Detail(docNo, idx, trEl) {
     const d = res.detail;
     const extracted = extractDeedData(d, docNo, state.selectedDoc);
     const pdfUrl = d.pdf_url || '';
+    // Use the server-side proxy for the iframe so portal auth is preserved.
+    // The "Open in Tab" link still points to the original portal URL.
+    const pdfProxyUrl = docNo ? `${API}/api/proxy-pdf?doc_no=${encodeURIComponent(docNo)}` : '';
 
     container.innerHTML = `
       <div class="deed-viewer-header">
@@ -1455,7 +1390,7 @@ async function loadS2Detail(docNo, idx, trEl) {
       <div class="deed-viewer-tabs">
         <button class="deed-viewer-tab active" onclick="switchDeedTab('summary')" id="dtab-summary">&#128203; Summary</button>
         <button class="deed-viewer-tab" onclick="switchDeedTab('fields')" id="dtab-fields">&#128194; All Fields</button>
-        ${pdfUrl ? `<button class="deed-viewer-tab" onclick="switchDeedTab('pdf')" id="dtab-pdf">&#128196; PDF</button>` : ''}
+        ${pdfProxyUrl ? `<button class="deed-viewer-tab" onclick="switchDeedTab('pdf')" id="dtab-pdf">&#128196; PDF</button>` : ''}
         <button class="deed-viewer-tab" onclick="switchDeedTab('analysis')" id="dtab-analysis">&#128269; Analysis</button>
       </div>
 
@@ -1469,13 +1404,13 @@ async function loadS2Detail(docNo, idx, trEl) {
         ${buildDeedAllFieldsTab(d)}
       </div>
 
-      ${pdfUrl ? `
+      ${pdfProxyUrl ? `
       <div class="deed-viewer-body hidden" id="deedTabPdf" style="display:flex;flex-direction:column;padding:0;min-height:420px">
         <div class="pdf-preview-bar">
           &#128196; <span style="font-family:monospace;color:var(--accent2)">${escHtml(docNo)}.pdf</span>
-          <a href="${escHtml(pdfUrl)}" target="_blank" class="btn btn-outline btn-sm ml-auto">Open in Tab &#8599;</a>
+          ${pdfUrl ? `<a href="${escHtml(pdfUrl)}" target="_blank" class="btn btn-outline btn-sm ml-auto">Open in Tab &#8599;</a>` : ''}
         </div>
-        <iframe src="${escHtml(pdfUrl)}" class="pdf-preview-frame" title="Deed PDF"></iframe>
+        <iframe src="${escHtml(pdfProxyUrl)}" class="pdf-preview-frame" title="Deed PDF"></iframe>
       </div>` : ''}
 
       <div class="deed-viewer-body hidden" id="deedTabAnalysis" style="padding:0;overflow-y:auto">
@@ -1651,18 +1586,18 @@ async function saveClientDeedAndGoToPlat() {
   const docNo = detail?.doc_no || state.selectedDoc?.doc_no;
   if (!docNo) { showToast('No deed selected', 'warn'); return; }
   await saveClientDeed(docNo);
-  // saveClientDeed already calls goToStep(3) after 800ms — we're done
+  // saveClientDeed now switches to Plat tab after 800ms
 }
 
 /**
  * Jump to plat search pre-targeted at a specific cabinet + doc from the deed.
  */
 function jumpToPlat(cabinet, doc) {
-  // Pre-set the cabinet override so Step 3 auto-targets it
+  // Pre-set the cabinet override so the plat tab auto-targets it
   const sel = document.getElementById('s3CabinetSelect');
   if (sel) sel.value = cabinet;
   showToast(`Opening plat search — targeting Cabinet ${cabinet} for ${doc}`, 'info');
-  goToStep(3);
+  switchDocTab('plat');
 }
 
 /**
@@ -1673,66 +1608,15 @@ function jumpToPlatByOwner(ownerName) {
   if (!state._platHint) state._platHint = {};
   state._platHint.activeOwnerSearch = ownerName;
   showToast(`Searching plat under prior owner: ${ownerName.split(',')[0]}`, 'info');
-  goToStep(3);
+  switchDocTab('plat');
 }
 
 // ── BLM GLO Records URL builders ──────────────────────────────────────────
 // Build a URL to the BLM General Land Office survey plat viewer.
 // Input: TRS object { trs, township, range, section } or string "T26N R13E S12"
 // Returns: URL to glorecords.blm.gov survey plat search, or null if unparseable.
-function buildGloUrl(trsInput) {
-  try {
-    let twp, tDir, rng, rDir, sec;
-    if (typeof trsInput === 'object' && trsInput !== null) {
-      const tm = (trsInput.township || '').match(/T\.?(\d+)([NS])/i);
-      const rm = (trsInput.range || '').match(/R\.?(\d+)([EW])/i);
-      if (!tm || !rm) return null;
-      twp = tm[1]; tDir = tm[2].toUpperCase();
-      rng = rm[1]; rDir = rm[2].toUpperCase();
-      sec = trsInput.section || '';
-    } else {
-      const m = String(trsInput).match(/T\.?\s*(\d+)\s*([NS])\s*R\.?\s*(\d+)\s*([EW])(?:\s*S(?:ec)?\s*(\d+))?/i);
-      if (!m) return null;
-      twp = m[1]; tDir = m[2].toUpperCase();
-      rng = m[3]; rDir = m[4].toUpperCase();
-      sec = m[5] || '';
-    }
-    // NM Principal Meridian
-    const params = new URLSearchParams({
-      state: 'NM', survey_type: 'RR',
-      township: twp, township_dir: tDir, range: rng, range_dir: rDir,
-    });
-    if (sec) params.set('section', sec);
-    return `https://glorecords.blm.gov/results/default.aspx?${params.toString()}#tabIndex=0&SurveyState=NM`;
-  } catch { return null; }
-}
 
 // Build a URL to search GLO land patents by TRS.
-function buildGloPatentUrl(trsInput) {
-  try {
-    let twp, tDir, rng, rDir, sec;
-    if (typeof trsInput === 'object' && trsInput !== null) {
-      const tm = (trsInput.township || '').match(/T\.?(\d+)([NS])/i);
-      const rm = (trsInput.range || '').match(/R\.?(\d+)([EW])/i);
-      if (!tm || !rm) return null;
-      twp = tm[1]; tDir = tm[2].toUpperCase();
-      rng = rm[1]; rDir = rm[2].toUpperCase();
-      sec = trsInput.section || '';
-    } else {
-      const m = String(trsInput).match(/T\.?\s*(\d+)\s*([NS])\s*R\.?\s*(\d+)\s*([EW])(?:\s*S(?:ec)?\s*(\d+))?/i);
-      if (!m) return null;
-      twp = m[1]; tDir = m[2].toUpperCase();
-      rng = m[3]; rDir = m[4].toUpperCase();
-      sec = m[5] || '';
-    }
-    const params = new URLSearchParams({
-      state: 'NM', searchType: 'Patent',
-      township: twp, township_dir: tDir, range: rng, range_dir: rDir,
-    });
-    if (sec) params.set('section', sec);
-    return `https://glorecords.blm.gov/results/default.aspx?${params.toString()}#tabIndex=1&SurveyState=NM`;
-  } catch { return null; }
-}
 
 function extractDeedData(d, docNo, searchRow) {
   const docNumbers = [{ label: 'Doc #', value: docNo, type: 'docnum' }];
@@ -1940,8 +1824,8 @@ async function saveClientDeed(docNo) {
       // ── Auto QA check in background ──
       _autoQaCheck();
 
-      // Automatically move to Step 3
-      setTimeout(() => goToStep(3), 800);
+      // Automatically switch to Plat tab (stay in Step 2)
+      setTimeout(() => switchDocTab('plat'), 800);
     } else {
       showToast("Save failed: " + res.error, "error");
     }
@@ -2792,9 +2676,6 @@ async function submitManualDeedDescription() {
 
 
 /** Skip deed download and jump directly to the plat step */
-function skipToStep3() {
-  goToStep(3);
-}
 
 // ── DEED ANALYSIS ─────────────────────────────────────────────────────────
 
@@ -3106,10 +2987,10 @@ async function onCabinetSelectChange(val) {
           '</div>' +
           '<div style="display:flex;gap:4px">' +
           (f.path ? '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:3px 7px" ' +
-            'onclick="event.stopPropagation(); showPlatPreview(\x27' + escHtml(f.path).replace(/'/g, "\\\\'") + '\x27,\x27' + escHtml(f.display_name || f.file).replace(/'/g, "\\\\'") + '\x27,\x27savePlatByIndex(' + fi + ')\x27)">\ud83d\udc41 Preview</button>' : '') +
+            'onclick="event.stopPropagation(); showPlatPreview(\'' + escHtml(f.path).replace(/'/g, "\\'") + '\',\'' + escHtml(f.display_name || f.file).replace(/'/g, "\\'") + '\',\'savePlatByIndex(' + fi + ')\')">👁 Preview</button>' : '') +
           '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
           '<button class="btn btn-sm" style="background:var(--accent2);color:#fff;font-size:10px" ' +
-          'onclick="downloadLocalFileToBrowser(\'' + escHtml(f.path).replace(/'/g, "\\\\'") + '\')" ' +
+          'onclick="downloadLocalFileToBrowser(\'' + escHtml(f.path).replace(/'/g, "\\'") + '\')" ' +
           'title="Download to your computer">⬇ My PC</button>' +
           '</div>' +
           '</div>';
@@ -3295,7 +3176,7 @@ async function doStep3Search() {
             previewBtn +
             '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
             '<button class="btn btn-sm" style="background:var(--accent2);color:#fff;font-size:10px" ' +
-            'onclick="downloadLocalFileToBrowser(\'' + escHtml(f.path).replace(/'/g, "\\\\'") + '\')" ' +
+            'onclick="downloadLocalFileToBrowser(\'' + escHtml(f.path).replace(/'/g, "\\'") + '\')" ' +
             'title="Download to your computer">⬇ My PC</button>' +
             '</div>' +
             '</div>';
@@ -3543,15 +3424,20 @@ async function _executeKmlCabinetSearch(pi) {
         const docNumBadge = f.doc_number
           ? ' <span style="font-family:monospace;font-size:10px;opacity:.7">Doc# ' + escHtml(f.doc_number) + '</span>'
           : '';
+        const kmlPreviewBtn = f.path
+          ? '<button class="btn btn-outline btn-sm" style="font-size:10px;padding:3px 7px" ' +
+            'onclick="event.stopPropagation(); showPlatPreview(\'' + escHtml(f.path).replace(/'/g, "\\'") + '\',\'' + escHtml(f.display_name || f.file).replace(/'/g, "\\'") + '\',\'savePlatByIndex(' + fi + ')\')">👁 Preview</button>'
+          : '';
         return '<div class="plat-item' + (isTop ? ' plat-item-client' : '') + '">' +
           '<div class="plat-info">' +
           '<span class="plat-name text-xs" title="' + escHtml(f.file) + '" style="font-size:13px;font-weight:600">' + escHtml(f.display_name || f.file) + '</span>' +
           '<span class="plat-meta">Cabinet ' + (f.cabinet || '') + ' \u00A0\u00B7\u00A0 ' + stratLabel + docNumBadge + '</span>' +
           '</div>' +
           '<div style="display:flex;gap:4px">' +
+          kmlPreviewBtn +
           '<button class="btn btn-success btn-sm" onclick="savePlatByIndex(' + fi + ')">\u2B07 Save</button>' +
           '<button class="btn btn-sm" style="background:var(--accent2);color:#fff;font-size:10px" ' +
-          'onclick="downloadLocalFileToBrowser(\'' + escHtml(f.path).replace(/'/g, "\\\\'") + '\')" ' +
+          'onclick="downloadLocalFileToBrowser(\'' + escHtml(f.path).replace(/'/g, "\\'") + '\')" ' +
           'title="Download to your computer">⬇ My PC</button>' +
           '</div>' +
           '</div>';
@@ -3593,46 +3479,12 @@ async function saveKmlLocalFile(kmlIdx, fileIdx) {
         await persistSession();
       }
       _prefetchAdjoinerDiscovery();  // Fire-and-forget: pre-scan adjoiners
-      setTimeout(() => goToStep(4), 800);
+      setTimeout(() => goToStep(3), 800);
     } else { showToast('Save failed: ' + res.error, 'error'); }
   } catch (e) { showToast('Error: ' + e.message, 'error'); }
 }
 
 // ── KML Index Status Modal ───────────────────────────────────────────────────
-async function showKmlIndexModal() {
-  document.getElementById('kmlIndexOverlay').classList.remove('hidden');
-  const body = document.getElementById('kmlIndexBody');
-  body.innerHTML = '<div class="loading-state">Loading index status...</div>';
-  try {
-    const res = await apiFetch('/xml/status');
-    if (!res.success) throw new Error(res.error);
-    const srcRows = (res.sources || []).map(s =>
-      '<tr><td class="text-xs">' + escHtml(s.file) + '</td>' +
-      '<td class="text-xs text-accent2 text-right">' + s.records.toLocaleString() + '</td></tr>'
-    ).join('');
-    const fileRows = (res.xml_files || []).map(f =>
-      '<tr><td class="text-xs">' + escHtml(f.name) + '</td>' +
-      '<td class="text-xs text-text3">' + f.format.toUpperCase() + '</td>' +
-      '<td class="text-xs text-right">' + f.size_mb + ' MB</td></tr>'
-    ).join('');
-    body.innerHTML =
-      '<div class="kml-status-block ' + (res.exists ? 'kml-ok' : 'kml-warn') + '">' +
-      (res.exists
-        ? '<strong style="color:var(--accent2)">\u2705 Index Ready</strong> &nbsp;\u2014&nbsp; ' + (res.total || 0).toLocaleString() + ' parcels<br>' +
-        '<span class="text-xs text-text3">Built: ' + (res.built_at || 'unknown') + ' &nbsp;\u00B7&nbsp; ' + (res.size_mb || '?') + ' MB</span>'
-        : '<strong style="color:#ff7b72">\u26A0 No Index Yet</strong> \u2014 Build it below to enable KML parcel search.') +
-      '</div>' +
-      (res.exists && srcRows
-        ? '<div class="mt-3"><div class="text-xs font-bold uppercase text-text3 mb-1">Indexed Sources</div>' +
-        '<table class="data-table"><tbody>' + srcRows + '</tbody></table></div>' : '') +
-      (fileRows
-        ? '<div class="mt-3"><div class="text-xs font-bold uppercase text-text3 mb-1">KML / KMZ Files Available</div>' +
-        '<table class="data-table"><tbody>' + fileRows + '</tbody></table></div>'
-        : '<div class="empty-state text-sm mt-3">No KML/KMZ files found in Survey Data\\XML folder.</div>');
-  } catch (e) {
-    body.innerHTML = '<div class="text-danger p-3">Error: ' + e.message + '</div>';
-  }
-}
 
 function closeKmlModal() {
   document.getElementById('kmlIndexOverlay').classList.add('hidden');
@@ -3678,7 +3530,7 @@ async function saveClientPlatLocal(filePath, filename) {
       if (clientSubj) { clientSubj.plat_saved = true; if (res.saved_to) clientSubj.plat_path = res.saved_to; }
       await persistSession();
       _prefetchAdjoinerDiscovery();  // Fire-and-forget: pre-scan adjoiners
-      goToStep(4);
+      goToStep(3);
     } else {
       showToast("Save failed: " + res.error, "error");
     }
@@ -3706,7 +3558,7 @@ async function saveClientPlatOnline(docNo, loc) {
       if (res.saved_to) clientSubj.plat_path = res.saved_to;
       await persistSession();
       _prefetchAdjoinerDiscovery();  // Fire-and-forget: pre-scan adjoiners
-      goToStep(4);
+      goToStep(3);
     } else {
       showToast("Download failed: " + res.error, "error");
     }
@@ -4057,22 +3909,68 @@ async function addAllAndContinue() {
     added > 0 ? `✓ Added ${added} adjoiners — opening Research Board` : `Going to Research Board (adjoiners already on board)`,
     "success"
   );
-  setTimeout(() => goToStep(5), 300);
+  setTimeout(() => goToStep(3), 300);
 }
 
-/**
- * Skip deed research and go directly to Client Plat step.
- */
+/** Switch to the Plat tab within Step 2 (replaces old skipToStep3). */
 function skipToStep3() {
-  const rs = state.researchSession;
-  if (!rs) { showToast("Start a session first", "warn"); return; }
-  // Ensure client subject exists even without a deed
-  const clientSubj = rs.subjects.find(s => s.type === "client");
-  if (clientSubj && !clientSubj.deed_saved) {
-    // Mark deed as skipped so Step 4 still functions
-    showToast("Skipping deed — going to Client Plat search", "info");
+  switchDocTab('plat');
+}
+
+/** Switch between Deed / Plat doc tabs within Step 2. */
+function switchDocTab(tab) {
+  const deed = document.getElementById('docPaneDeed');
+  const plat = document.getElementById('docPanePlat');
+  const btnDeed = document.getElementById('docTabDeed');
+  const btnPlat = document.getElementById('docTabPlat');
+  if (!deed || !plat) return;
+
+  if (tab === 'plat') {
+    deed.classList.add('hidden');
+    plat.classList.remove('hidden');
+    if (btnDeed) btnDeed.classList.remove('active');
+    if (btnPlat) btnPlat.classList.add('active');
+    // Trigger plat search if not already run
+    if (!state._step3Searched) {
+      state._step3Searched = true;
+      doStep3Search();
+    }
+  } else {
+    plat.classList.add('hidden');
+    deed.classList.remove('hidden');
+    if (btnPlat) btnPlat.classList.remove('active');
+    if (btnDeed) btnDeed.classList.add('active');
   }
-  goToStep(3);
+}
+
+/** Show the Resume Session modal (top-bar button). */
+function showResumeModal() {
+  // Re-use the existing recent jobs list from Step 1
+  const jobs = document.getElementById('setupRecentJobs');
+  const existingHtml = jobs ? jobs.innerHTML : '<div style="color:var(--text3);font-size:12px">No sessions available</div>';
+
+  const modal = document.createElement('div');
+  modal.id = 'resumeModalOverlay';
+  modal.className = 'modal-overlay';
+  modal.style.cssText = 'display:flex;z-index:9999';
+  modal.innerHTML = `
+    <div class="modal glass-card" style="max-width:480px;width:90%">
+      <div class="modal-header">
+        <h2>📂 Resume Session</h2>
+        <button class="close-btn" onclick="document.getElementById('resumeModalOverlay').remove()" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" style="padding:16px 20px">
+        <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Select a recent job to continue where you left off.</p>
+        <div style="max-height:340px;overflow-y:auto">${existingHtml}</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="document.getElementById('resumeModalOverlay').remove()">Cancel</button>
+        <button class="btn btn-outline" onclick="document.getElementById('resumeModalOverlay').remove(); goToStep(1);">New Session</button>
+      </div>
+    </div>`;
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+  loadRecentJobs();
 }
 
 async function manualAddAdjoiner() {
@@ -4167,7 +4065,7 @@ async function saveFromCabinetBrowser(filePath, filename) {
         await persistSession();
       }
       closeCabinetBrowser();
-      setTimeout(() => goToStep(4), 600);
+      setTimeout(() => goToStep(3), 600);
     } else {
       showToast('Save failed: ' + res.error, 'error');
     }
@@ -4286,10 +4184,10 @@ function buildSubjectCard(s, rs) {
 
   const deedChip = s.deed_saved
     ? `<span class="chip chip-done">✓ Deed</span>${s.deed_path ? `<button class="btn-icon-sm ml-1" title="View deed" onclick="viewSubjectFile('${s.id}','deed')">👁️</button><button class="btn-icon-sm ml-1" title="Download" onclick="downloadLocalFileToBrowser('${s.deed_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">⬇</button>` : ""}<button class="btn-icon-sm ml-1" title="Discard saved deed" style="color:#ff7b72;font-size:11px" onclick="clearSubjectDeed('${s.id}')">✕</button>`
-    : `<span class="chip chip-todo">Deed</span>`;
+    : `<span class="chip chip-todo">Deed</span><button class="btn-icon-sm ml-1" title="Direct Upload Deed" onclick="triggerDirectUpload('deed', '${s.id}')">📤</button>`;
   const platChip = s.plat_saved
     ? `<span class="chip chip-done">✓ Plat</span>${s.plat_path ? `<button class="btn-icon-sm ml-1" title="View plat" onclick="viewSubjectFile('${s.id}','plat')">👁️</button><button class="btn-icon-sm ml-1" title="Download" onclick="downloadLocalFileToBrowser('${s.plat_path.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')">⬇</button>` : ""}<button class="btn-icon-sm ml-1" title="Discard saved plat" style="color:#ff7b72;font-size:11px" onclick="clearSubjectPlat('${s.id}')">✕</button>`
-    : `<span class="chip chip-todo">Plat</span>`;
+    : `<span class="chip chip-todo">Plat</span><button class="btn-icon-sm ml-1" title="Direct Upload Plat" onclick="triggerDirectUpload('plat', '${s.id}')">📤</button>`;
 
   const statusColors = { done: "#1a3028;color:#56d3a0", na: "#281a1a;color:#888", pending: "var(--bg3);color:var(--text3)" };
   const statusLabel = { done: "✓ Done", na: "— N/A", pending: "⧗ Pending" }[st];
@@ -4300,9 +4198,12 @@ function buildSubjectCard(s, rs) {
     : '';
 
   // Search result count badge (persisted from bulk search)
+  // If records were found but deed not yet saved, make the badge clickable to open the pick modal
   const countBadge = s.search_count != null
     ? (s.search_count > 0
-      ? `<span style="font-size:10px;color:var(--accent2);margin-left:auto">🔍 ${s.search_count} record${s.search_count !== 1 ? 's' : ''} found</span>`
+      ? (s.deed_saved
+        ? `<span style="font-size:10px;color:var(--accent2);margin-left:auto">🔍 ${s.search_count} record${s.search_count !== 1 ? 's' : ''} found</span>`
+        : `<button class="link-btn" style="font-size:10px;color:var(--accent2);margin-left:auto;text-decoration:underline;cursor:pointer" onclick="saveAdjDeed('${s.id}')" title="Click to view found records and pick a deed">🔍 ${s.search_count} record${s.search_count !== 1 ? 's' : ''} found — click to view</button>`)
       : `<span style="font-size:10px;color:var(--text3);margin-left:auto">No records found</span>`)
     : '';
 
@@ -4313,7 +4214,9 @@ function buildSubjectCard(s, rs) {
     <div class="adjoiner-card status-${st}" id="card_${s.id}" style="border-top-color:${accentColor}">
       <div class="adjoiner-card-header">
         <div class="flex-col gap-1" style="flex:1;min-width:0">
-          <strong style="font-size:15px">${escHtml(s.name)}</strong>
+          <strong style="font-size:15px;cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.15)" id="name_${s.id}" title="Click to edit name"
+            onclick="_startEditSubjectName('${s.id}')"
+          >${escHtml(s.name)}</strong>
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <span style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:${isClient ? 'var(--accent2)' : '#b080e0'}">
               ${isClient ? "★ Client" : "⬡ Adjoiner"}
@@ -4336,6 +4239,7 @@ function buildSubjectCard(s, rs) {
           ${platChip}
           ${buildExceptionFlags(s)}
         </div>
+        ${(s.deed_saved || s.plat_saved) ? '<div style="font-size:10px;color:var(--text3);margin-top:2px;font-style:italic">Tap ✕ on a chip to remove it and pick a different one.</div>' : ''}
 
         <!-- Notes -->
         <input class="inp" style="padding:6px 10px;font-size:12px"
@@ -4359,13 +4263,47 @@ function buildSubjectCard(s, rs) {
           <button class="btn btn-outline btn-sm flex-1" onclick="goToStep(2)" title="Go to Client Deed search">
             🔍 Client Deed
           </button>
-          <button class="btn btn-outline btn-sm flex-1" onclick="goToStep(3)" title="Go to Client Plat search">
+          <button class="btn btn-outline btn-sm flex-1" onclick="switchDocTab('plat')" title="Go to Client Plat search">
             📐 Client Plat
           </button>
           `}
         </div>
       </div>
     </div>`;
+}
+
+
+/** Inline-edit an adjoiner name — replaces the <strong> with a text input on click */
+function _startEditSubjectName(subjId) {
+  const el = document.getElementById('name_' + subjId);
+  if (!el || el.tagName === 'INPUT') return;
+  const rs = state.researchSession;
+  const subj = rs && rs.subjects.find(s => s.id === subjId);
+  if (!subj) return;
+
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.value = subj.name;
+  inp.className = 'inp';
+  inp.style.cssText = 'font-size:14px;font-weight:700;padding:2px 6px;width:100%;max-width:220px';
+  inp.id = 'name_' + subjId;
+
+  const save = async () => {
+    const newName = inp.value.trim();
+    if (newName && newName !== subj.name) {
+      subj.name = newName;
+      await persistSession();
+    }
+    renderResearchBoard();
+  };
+  inp.addEventListener('blur', save);
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+    if (e.key === 'Escape') { renderResearchBoard(); }
+  });
+  el.replaceWith(inp);
+  inp.focus();
+  inp.select();
 }
 
 function buildExceptionFlags(s) {
@@ -5179,7 +5117,7 @@ async function openFolderForContext() {
   try {
     const drv = await apiFetch("/drive-status");
     const drive = (drv.drive_ok && drv.drive) ? drv.drive : "F";
-    const rstart = Math.floor(parseInt(rs.job_number) / 100) * 100;
+    const rstart = Math.floor(parseInt(String(rs.job_number).split('-')[0]) / 100) * 100;
     const last = rs.client_name.split(",")[0].trim();
     const path = `${drive}:\\AI DATA CENTER\\Survey Data\\${rstart}-${rstart + 99}\\${rs.job_number} ${rs.client_name}\\${rs.job_number}-01-${rs.job_type} ${last}\\E Research`;
     apiFetch("/open-folder", "POST", { path }).catch(() => { });
@@ -5738,7 +5676,44 @@ async function doGenerateDxf() {
   }
 }
 
-//  SVG Sketch 
+/** Generate Full Package: DXF + Reference Table + open project folder */
+async function doGenerateFullPackage() {
+  const rs = state.researchSession;
+  if (!rs) { showToast('Load a session first', 'warn'); return; }
+
+  const pkgBtn = document.getElementById('btnGeneratePackage');
+  if (pkgBtn) { pkgBtn.disabled = true; pkgBtn.textContent = '⏳ Building Package…'; }
+
+  try {
+    // 1. Generate DXF
+    await doGenerateDxf();
+
+    // 2. Refresh reference table
+    if (typeof refreshRefTable === 'function') {
+      switchS6Tab('references');
+      await refreshRefTable();
+      showToast('📑 Reference table refreshed', 'info');
+    }
+
+    // 3. Print / export reference table (optional — just open the tab)
+    switchS6Tab('references');
+
+    // 4. Open project folder
+    const folderPath = rs.project_folder || rs.output_folder || '';
+    if (folderPath) {
+      await apiFetch('/open-folder', 'POST', { path: folderPath }).catch(() => {});
+    }
+
+    showToast('📦 Full package ready — DXF saved, reference table updated, folder opened', 'success');
+  } catch (e) {
+    showToast('Package error: ' + e.message, 'error');
+  } finally {
+    if (pkgBtn) { pkgBtn.disabled = false; pkgBtn.innerHTML = '<span class="btn-icon">📦</span> Generate Full Package'; }
+  }
+}
+
+//  SVG Sketch
+
 function updateS6Sketch() {
   const calls = state.parsedCalls;
   const sketchWrap = document.getElementById("s6SketchWrap");
@@ -6392,6 +6367,7 @@ function _initPropPickerMap() {
   const plssSections = _createPlssDynamicLayer('2', 0.50, 11);
   // Layer 3: PLSS Quarter Sections / Intersected (visible zoom ≥ 14)
   const plssQuarters = _createPlssDynamicLayer('3', 0.45, 14);
+  _propPicker.plssLayers = [plssTownships, plssSections, plssQuarters];
 
   // ── ArcGIS Parcel Boundaries via Esri Leaflet (authoritative, pixel-perfect) ──
   // L.esri.dynamicMapLayer handles all the complexity of MapServer /export:
@@ -6906,6 +6882,86 @@ function _onPropParcelClick(feature, layer) {
 
   // ── Async document cross-reference (deeds & plats for this owner) ──────
   _pickerDocXref(p.owner || '', p.upc || '', p.book || '', p.page || '', p.cab_refs_str || '');
+
+  // ── "Auto-add Neighbors" button — uses /api/adjacent-parcels ────────────
+  if (upc) {
+    setTimeout(() => {
+      const xrefEl = document.getElementById('propPickerDocXref');
+      if (!xrefEl) return;
+      const btnId = 'btnAutoNeighbors_' + upc.replace(/\W/g, '');
+      if (!document.getElementById(btnId)) {
+        const btn = document.createElement('button');
+        btn.id = btnId;
+        btn.className = 'btn btn-outline btn-sm';
+        btn.style.cssText = 'margin-top:8px;font-size:10px;padding:3px 10px;width:100%;border-color:rgba(86,211,160,.25);color:#56d3a0';
+        btn.title = 'Find all parcels geometrically adjacent to this one and add as adjoiners';
+        btn.textContent = '⬡ Auto-add Neighboring Parcels';
+        btn.onclick = () => loadAdjacentParcels(upc, btn);
+        xrefEl.appendChild(btn);
+      }
+    }, 200);
+  }
+}
+
+/** Fetch adjacent parcels and add them as adjoiners to the research board. */
+async function loadAdjacentParcels(upc, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Finding neighbors…'; }
+  try {
+    const res = await apiFetch('/adjacent-parcels', {
+      method: 'POST',
+      body: JSON.stringify({ upc, max_results: 20 }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Failed');
+
+    const parcels = data.parcels || [];
+    if (!parcels.length) {
+      showToast('No adjacent parcels found', 'warn');
+      if (btn) { btn.disabled = false; btn.textContent = '⬡ No Neighbors Found'; }
+      return;
+    }
+
+    // Ensure session exists
+    if (!state.researchSession) {
+      showToast('Start a research session first', 'warn');
+      if (btn) { btn.disabled = false; btn.textContent = '⬡ Auto-add Neighboring Parcels'; }
+      return;
+    }
+
+    let added = 0;
+    for (const p of parcels) {
+      if (!p.owner || p.owner === '(No Name)') continue;
+      const already = state.researchSession.subjects.some(
+        s => s.upc === p.upc || s.name.toLowerCase() === p.owner.toLowerCase()
+      );
+      if (already) continue;
+      state.researchSession.subjects.push({
+        id: 'adj_' + (p.upc || Date.now() + Math.random()),
+        name: p.owner,
+        upc: p.upc || '',
+        type: 'adjoiner',
+        status: 'pending',
+        deed_saved: false,
+        plat_saved: false,
+        notes: p.trs ? 'TRS: ' + p.trs : '',
+        detail: {},
+      });
+      added++;
+    }
+
+    if (added) {
+      persistSession();
+      if (state.currentStep === 5) renderResearchBoard();
+      showToast(`Added ${added} neighboring parcel${added > 1 ? 's' : ''} to research board`, 'success');
+      if (btn) { btn.disabled = false; btn.textContent = `✓ ${added} Neighbors Added`; }
+    } else {
+      showToast('All neighbors already on the research board', 'info');
+      if (btn) { btn.disabled = false; btn.textContent = '✓ All Already Added'; }
+    }
+  } catch (e) {
+    showToast('❌ ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '⬡ Auto-add Neighboring Parcels'; }
+  }
 }
 
 /**
@@ -7842,14 +7898,6 @@ function getTypeClass(type) {
   return "badge-other";
 }
 
-async function apiFetch(path, method = "GET", body = null, { signal } = {}) {
-  const opts = { method, headers: { "Content-Type": "application/json" } };
-  if (body) opts.body = JSON.stringify(body);
-  if (signal) opts.signal = signal;
-  const res = await fetch(API + path, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
 
 // ── Browser Download Helpers ─────────────────────────────────────────────────
 // These stream files to the user's own computer via the browser's download
@@ -7986,6 +8034,8 @@ function _buildOnlineHitRows(hits) {
     const loc = escHtml(r.location || '');
     const itype = escHtml(r.instrument_type || '');
     const date = escHtml(r.recorded_date || r.date || '');
+    const safeLoc = (r.location || '').replace(/'/g, "\\'");
+    const safeGrantor = (r.grantor || '').replace(/'/g, "\\'");
 
     return '<div class="plat-item">' +
       '<div class="plat-info">' +
@@ -7996,15 +8046,16 @@ function _buildOnlineHitRows(hits) {
       '</div>' +
       '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
       '<button class="btn btn-outline btn-sm" ' +
-      'onclick="saveClientPlatOnline(\'' + r.doc_no + '\',\'' + escHtml(r.location || '').replace(/'/g, "\\\\'") + '\')">' +
+      'onclick="saveClientPlatOnline(\'' + r.doc_no + '\',\'' + escHtml(r.location || '').replace(/'/g, "\\'") + '\')">' +
       '\u2B07 Save</button>' +
       '<button class="btn btn-sm" style="background:var(--accent2);color:#fff;font-size:10px" ' +
-      'onclick="downloadDeedToBrowser(\'' + r.doc_no + '\', {grantor:\'' + escHtml((r.grantor||'').replace(/'/g, "\\\\'")) + '\',location:\'' + escHtml((r.location||'').replace(/'/g, "\\\\'")) + '\'})" ' +
-      'title="Download to your computer">\u2B07 Download</button>' +
+      'onclick="downloadDeedToBrowser(\'' + r.doc_no + '\', {grantor:\'' + safeGrantor + '\',location:\'' + safeLoc + '\'})" ' +
+      'title="Download this plat to your computer">\u2B07 My PC</button>' +
       '</div>' +
       '</div>';
   }).join('');
 }
+
 
 /** Client-side filter for online survey results */
 function filterOnlineSurveyHits() {
@@ -8045,85 +8096,213 @@ function filterOnlineSurveyHits() {
 // STEP 5: RESEARCH EXPORT (Sticky Note: "View what it's found & Save it")
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Export the current research session as a printable HTML report.
- * Opens in a new tab with all findings formatted for printing.
- */
 function exportResearchReport() {
   const rs = state.researchSession;
   if (!rs) { showToast('No active session', 'warn'); return; }
 
-  const subjects = rs.subjects || [];
-  const client = subjects.find(s => s.type === 'client');
+  const subjects  = rs.subjects || [];
+  const client    = subjects.find(s => s.type === 'client');
   const adjoiners = subjects.filter(s => s.type === 'adjoiner');
+  const now       = new Date();
+  const dateStr   = now.toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
 
-  let html = '<!DOCTYPE html><html><head>';
-  html += '<title>Research Report — Job #' + rs.job_number + ' ' + escHtml(rs.client_name) + '</title>';
-  html += '<style>';
-  html += 'body{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:auto;padding:30px;color:#222}';
-  html += 'h1{border-bottom:3px solid #2d8a6e;padding-bottom:8px;color:#1a3028}';
-  html += 'h2{color:#2d8a6e;margin-top:24px}';
-  html += 'table{width:100%;border-collapse:collapse;margin:12px 0}';
-  html += 'th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:13px}';
-  html += 'th{background:#f5f5f5;font-weight:700;text-transform:uppercase;font-size:11px;letter-spacing:.3px}';
-  html += '.status-done{color:#2d8a6e;font-weight:700} .status-pending{color:#999}';
-  html += '.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}';
-  html += '.badge-ok{background:#e6f7f1;color:#2d8a6e} .badge-todo{background:#f5f5f5;color:#999}';
-  html += '@media print{body{padding:10px}h1{font-size:20px}}';
-  html += '</style></head><body>';
-
-  html += '<h1>\ud83d\udcc1 Research Report</h1>';
-  html += '<table>';
-  html += '<tr><th>Job Number</th><td>#' + rs.job_number + '</td></tr>';
-  html += '<tr><th>Client</th><td>' + escHtml(rs.client_name) + '</td></tr>';
-  html += '<tr><th>Job Type</th><td>' + escHtml(rs.job_type || 'BDY') + '</td></tr>';
-  html += '<tr><th>Date</th><td>' + new Date().toLocaleDateString() + '</td></tr>';
-  html += '<tr><th>Total Subjects</th><td>' + subjects.length + ' (' + adjoiners.length + ' adjoiners)</td></tr>';
-  html += '</table>';
-
-  // Client section
-  if (client) {
-    html += '<h2>\u2605 Client: ' + escHtml(client.name) + '</h2>';
-    html += '<table>';
-    html += '<tr><th>Deed</th><td>' + (client.deed_saved ? '<span class="badge badge-ok">\u2713 Saved</span>' : '<span class="badge badge-todo">Pending</span>');
-    if (client.deed_path) html += ' <br><small>' + escHtml(client.deed_path.split(/[/\\]/).pop()) + '</small>';
-    html += '</td></tr>';
-    html += '<tr><th>Plat</th><td>' + (client.plat_saved ? '<span class="badge badge-ok">\u2713 Saved</span>' : '<span class="badge badge-todo">Pending</span>');
-    if (client.plat_path) html += ' <br><small>' + escHtml(client.plat_path.split(/[/\\]/).pop()) + '</small>';
-    html += '</td></tr>';
-    if (client.property_description) html += '<tr><th>Description</th><td style="font-size:11px;font-family:monospace;white-space:pre-wrap">' + escHtml(client.property_description.substring(0, 500)) + '</td></tr>';
-    if (client.doc_no) html += '<tr><th>Doc#</th><td>' + escHtml(client.doc_no) + '</td></tr>';
-    html += '</table>';
+  // ── Build reference table rows (same logic as refreshRefTable) ─────────────
+  const refs = [];
+  for (const subj of subjects) {
+    const rel = subj.type === 'client' ? '★ Client' : 'Adjoiner';
+    if (subj.deed_saved) {
+      const d = subj.detail || {};
+      refs.push({
+        seq: refs.length + 1,
+        type: 'Deed',
+        owner: subj.name,
+        doc_no: subj.doc_no || d['DocumentNumber'] || '',
+        book_page: _extractBookPage(d['Location'] || d['Reference'] || ''),
+        cabinet: _extractCabRefsFromDetail(d),
+        date: d['RecordingDate'] || d['Date'] || '',
+        rel,
+      });
+    }
+    if (subj.plat_saved) {
+      const platRef = _extractPlatRef(subj.plat_path || '', subj);
+      refs.push({
+        seq: refs.length + 1,
+        type: 'Plat',
+        owner: subj.name,
+        doc_no: platRef.doc_no,
+        book_page: platRef.book_page,
+        cabinet: platRef.cabinet,
+        date: '',
+        rel,
+      });
+    }
+    for (const pr of (subj.plat_refs || [])) {
+      const prName = typeof pr === 'string' ? pr : (pr.ref || pr.name || '');
+      if (prName && !refs.some(r => r.type === 'Plat' && r.cabinet === prName && r.owner === subj.name)) {
+        refs.push({ seq: refs.length + 1, type: 'Plat (Ref)', owner: subj.name,
+          doc_no: '', book_page: '', cabinet: prName, date: '', rel: rel + ' (deed ref)' });
+      }
+    }
   }
 
-  // Adjoiners table
-  if (adjoiners.length) {
-    html += '<h2>\u2B21 Adjoiners (' + adjoiners.length + ')</h2>';
-    html += '<table><tr><th>#</th><th>Name</th><th>Deed</th><th>Plat</th><th>Status</th><th>Notes</th></tr>';
-    adjoiners.forEach((s, i) => {
+  // Client deed detail for header info
+  const cd = rs.client_detail || (client?.detail) || {};
+  const trs = cd['Township/Range'] || cd['TRS'] || cd['trs'] || '';
+  const legalDesc = cd['LegalDescription'] || cd['legal'] || client?.property_description || '';
+  const deedDeeds = refs.filter(r => r.type === 'Deed' && r.rel.includes('Client'));
+  const clientDocNo = deedDeeds[0]?.doc_no || state.selectedDoc?.doc_no || '';
+  const clientBookPage = deedDeeds[0]?.book_page || '';
+
+  const doneCount = subjects.filter(s => s.deed_saved || s.plat_saved).length;
+  const pendCount = subjects.length - doneCount;
+
+  // ── HTML ──────────────────────────────────────────────────────────────────
+  const H = escHtml;
+  let html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Research Report — Job #${H(String(rs.job_number))} ${H(rs.client_name)}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',system-ui,sans-serif;font-size:13px;color:#1a2030;background:#fff;padding:32px}
+  /* Header */
+  .report-header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:16px;border-bottom:3px solid #2d8a6e;margin-bottom:20px}
+  .co-name{font-size:18px;font-weight:700;color:#1a3028;letter-spacing:.3px}
+  .co-sub{font-size:11px;color:#5a7a6a;margin-top:2px}
+  .report-title{text-align:right}
+  .report-title h1{font-size:20px;font-weight:700;color:#2d8a6e}
+  .report-title .date{font-size:11px;color:#888;margin-top:2px}
+  /* Job summary card */
+  .job-card{background:#f7faf9;border:1px solid #c8ddd7;border-radius:8px;padding:14px 18px;margin-bottom:18px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .job-field label{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#6a8a7a;display:block;margin-bottom:2px}
+  .job-field .val{font-weight:600;color:#1a2030}
+  /* Section headers */
+  h2{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#2d8a6e;margin:20px 0 8px;padding-bottom:4px;border-bottom:1px solid #c8ddd7}
+  /* Tables */
+  table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px}
+  th{background:#2d8a6e;color:#fff;text-align:left;padding:6px 10px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+  td{padding:6px 10px;border-bottom:1px solid #eef0ed;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  tr:nth-child(even) td{background:#f9fbf9}
+  .badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700}
+  .ok{background:#e6f4ee;color:#1a7a4a}
+  .pending{background:#f5f5f5;color:#999}
+  .badge-deed{background:#e8f0fd;color:#2563eb}
+  .badge-plat{background:#fef3e2;color:#c07c00}
+  .badge-platref{background:#f3f0fd;color:#7c3aed}
+  /* Legal description */
+  .legal-block{font-family:monospace;font-size:11px;background:#f9f9f9;border:1px solid #ddd;border-radius:4px;padding:10px 12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:hidden}
+  /* Status summary */
+  .stat-row{display:flex;gap:16px;margin-bottom:14px}
+  .stat-box{flex:1;background:#f7faf9;border:1px solid #c8ddd7;border-radius:6px;padding:10px;text-align:center}
+  .stat-box .num{font-size:22px;font-weight:700;color:#2d8a6e}
+  .stat-box .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#6a8a7a;margin-top:2px}
+  /* Footer */
+  .footer{margin-top:32px;padding-top:12px;border-top:1px solid #ddd;font-size:10px;color:#aaa;display:flex;justify-content:space-between}
+  @media print {
+    body{padding:12px;font-size:11px}
+    .report-header{padding-bottom:10px;margin-bottom:12px}
+    h2{margin:14px 0 6px}
+    .legal-block{max-height:none}
+    .no-print{display:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="report-header">
+  <div>
+    <div class="co-name">Red Tail Surveying, Inc.</div>
+    <div class="co-sub">Taos County, New Mexico · Licensed Professional Surveyors</div>
+  </div>
+  <div class="report-title">
+    <h1>📁 Deed &amp; Plat Research Report</h1>
+    <div class="date">${dateStr}</div>
+  </div>
+</div>
+
+<!-- Job Summary -->
+<div class="job-card">
+  <div class="job-field"><label>Job Number</label><span class="val">#${H(String(rs.job_number))}</span></div>
+  <div class="job-field"><label>Client</label><span class="val">${H(rs.client_name)}</span></div>
+  <div class="job-field"><label>Job Type</label><span class="val">${H(rs.job_type || 'BDY')}</span></div>
+  <div class="job-field"><label>Document #</label><span class="val">${H(clientDocNo || '—')}</span></div>
+  <div class="job-field"><label>Book / Page</label><span class="val">${H(clientBookPage || '—')}</span></div>
+  <div class="job-field"><label>Township / Range</label><span class="val">${H(trs || '—')}</span></div>
+</div>
+
+<!-- Progress Stats -->
+<div class="stat-row">
+  <div class="stat-box"><div class="num">${subjects.length}</div><div class="lbl">Total Subjects</div></div>
+  <div class="stat-box"><div class="num">${adjoiners.length}</div><div class="lbl">Adjoiners</div></div>
+  <div class="stat-box"><div class="num">${subjects.filter(s=>s.deed_saved).length}</div><div class="lbl">Deeds Saved</div></div>
+  <div class="stat-box"><div class="num">${subjects.filter(s=>s.plat_saved).length}</div><div class="lbl">Plats Saved</div></div>
+  <div class="stat-box"><div class="num" style="color:${pendCount?'#c07c00':'#1a7a4a'}">${pendCount}</div><div class="lbl">Pending</div></div>
+</div>
+
+${legalDesc ? `
+<h2>Legal Description — Client Property</h2>
+<div class="legal-block">${H(legalDesc.substring(0, 800))}${legalDesc.length > 800 ? '\n[… truncated — see deed for full description]' : ''}</div>
+` : ''}
+
+<!-- Reference Table -->
+<h2>📑 Document Reference Table</h2>
+${refs.length ? `
+<table>
+  <thead><tr><th>#</th><th>Type</th><th>Owner / Subject</th><th>Document #</th><th>Book / Page</th><th>Cabinet Ref</th><th>Date</th><th>Relationship</th></tr></thead>
+  <tbody>
+    ${refs.map((r,i) => `<tr>
+      <td>${i+1}</td>
+      <td><span class="badge ${r.type==='Deed'?'badge-deed':r.type==='Plat'?'badge-plat':'badge-platref'}">${H(r.type)}</span></td>
+      <td><strong>${H(r.owner)}</strong></td>
+      <td style="font-family:monospace">${H(r.doc_no || '—')}</td>
+      <td style="font-family:monospace">${H(r.book_page || '—')}</td>
+      <td style="font-size:11px">${H(r.cabinet || '—')}</td>
+      <td style="font-size:11px">${H(r.date || '—')}</td>
+      <td style="font-size:11px">${H(r.rel)}</td>
+    </tr>`).join('')}
+  </tbody>
+</table>` : '<p style="color:#999;font-size:12px">No documents saved yet.</p>'}
+
+<!-- Adjoiners Table -->
+${adjoiners.length ? `
+<h2>⬡ Adjoiner Summary (${adjoiners.length})</h2>
+<table>
+  <thead><tr><th>#</th><th>Name</th><th>UPC</th><th>Deed</th><th>Plat</th><th>Status</th><th>Notes</th></tr></thead>
+  <tbody>
+    ${adjoiners.map((s,i) => {
       const st = s.status || 'pending';
-      const stClass = st === 'done' ? 'status-done' : 'status-pending';
-      html += '<tr>';
-      html += '<td>' + (i + 1) + '</td>';
-      html += '<td><strong>' + escHtml(s.name) + '</strong>' + (s.upc ? '<br><small>UPC ' + escHtml(s.upc) + '</small>' : '') + '</td>';
-      html += '<td>' + (s.deed_saved ? '\u2713' : '\u2014') + '</td>';
-      html += '<td>' + (s.plat_saved ? '\u2713' : '\u2014') + '</td>';
-      html += '<td class="' + stClass + '">' + st.charAt(0).toUpperCase() + st.slice(1) + '</td>';
-      html += '<td style="font-size:11px">' + escHtml(s.notes || '') + '</td>';
-      html += '</tr>';
-    });
-    html += '</table>';
-  }
+      return `<tr>
+        <td>${i+1}</td>
+        <td><strong>${H(s.name)}</strong></td>
+        <td style="font-family:monospace;font-size:11px">${H(s.upc || '—')}</td>
+        <td>${s.deed_saved ? '<span class="badge ok">✓ Saved</span>' : '<span class="badge pending">—</span>'}</td>
+        <td>${s.plat_saved ? '<span class="badge ok">✓ Saved</span>' : '<span class="badge pending">—</span>'}</td>
+        <td><span class="badge ${st==='done'?'ok':'pending'}">${H(st.charAt(0).toUpperCase()+st.slice(1))}</span></td>
+        <td style="font-size:11px">${H(s.notes || '')}</td>
+      </tr>`;
+    }).join('')}
+  </tbody>
+</table>` : ''}
 
-  html += '<div style="margin-top:40px;padding-top:12px;border-top:1px solid #ddd;font-size:11px;color:#999">';
-  html += 'Generated by Deed & Plat Helper \u2014 ' + new Date().toLocaleString();
-  html += '</div>';
-  html += '</body></html>';
+<div class="footer">
+  <span>Red Tail Surveying, Inc. — Deed &amp; Plat Helper</span>
+  <span>Generated: ${now.toLocaleString()}</span>
+</div>
+
+<div class="no-print" style="margin-top:20px;text-align:center">
+  <button onclick="window.print()" style="padding:8px 20px;background:#2d8a6e;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;font-family:inherit">🖨️ Print / Save as PDF</button>
+</div>
+
+</body></html>`;
 
   const blob = new Blob([html], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
   window.open(url, '_blank');
-  showToast('\ud83d\udcca Research report opened in new tab \u2014 use Ctrl+P to print', 'success');
+  showToast('📊 Research report opened — use Ctrl+P to save as PDF', 'success');
 }
 
 /**
@@ -8205,73 +8384,6 @@ document.head.appendChild(_toastStyle);
  * Load all AI insight data and populate the dashboard.
  * Called on page load (after DOMContentLoaded) and on manual refresh.
  */
-async function refreshAiInsights() {
-  // Fetch all three endpoints in parallel
-  const [healthRes, conflictsRes, analyticsRes] = await Promise.allSettled([
-    apiFetch('/index-health'),
-    apiFetch('/data-conflicts'),
-    apiFetch('/research-analytics'),
-  ]);
-
-  // ── Index Health Metrics ───────────────────────────────────────────────
-  if (healthRes.status === 'fulfilled' && healthRes.value.success) {
-    const h = healthRes.value;
-    const totalEl = document.getElementById('aiTotalParcels');
-    const arcEl = document.getElementById('aiArcgisPct');
-    const staleRow = document.getElementById('aiStaleWarning');
-    const staleText = document.getElementById('aiStaleText');
-
-    if (totalEl) {
-      totalEl.textContent = h.total_parcels ? h.total_parcels.toLocaleString() : '0';
-      // Animate the counter
-      totalEl.style.transition = 'color 0.3s';
-      totalEl.style.color = h.total_parcels > 0 ? '#56d3a0' : '#ff7b72';
-    }
-    if (arcEl) {
-      arcEl.textContent = h.total_parcels ? h.pct_with_arcgis + '%' : '—';
-      arcEl.style.color = h.pct_with_arcgis >= 50 ? '#56d3a0' : h.pct_with_arcgis >= 20 ? '#e3c55a' : '#ff7b72';
-    }
-
-    // Stale warning
-    if (staleRow && staleText) {
-      if (h.stale_warning) {
-        staleRow.classList.remove('hidden');
-        staleText.textContent = `Index is ${h.index_age_days} days old — consider rebuilding`;
-      } else if (h.newer_xml_files && h.newer_xml_files.length > 0) {
-        staleRow.classList.remove('hidden');
-        staleText.textContent = `${h.newer_xml_files.length} KML file(s) are newer than the index`;
-      } else {
-        staleRow.classList.add('hidden');
-      }
-    }
-  }
-
-  // ── Data Conflicts Count ───────────────────────────────────────────────
-  if (conflictsRes.status === 'fulfilled' && conflictsRes.value.success) {
-    const c = conflictsRes.value;
-    const el = document.getElementById('aiConflictCount');
-    if (el) {
-      const total = c.conflict_count || 0;
-      el.textContent = total;
-      el.style.color = total === 0 ? '#56d3a0' : total <= 10 ? '#e3c55a' : '#ff7b72';
-    }
-  }
-
-  // ── Research Analytics ─────────────────────────────────────────────────
-  if (analyticsRes.status === 'fulfilled' && analyticsRes.value.success) {
-    const a = analyticsRes.value;
-    const jobsEl = document.getElementById('aiJobsScanned');
-    if (jobsEl) {
-      jobsEl.textContent = a.scanned_jobs || 0;
-      jobsEl.style.color = a.scanned_jobs > 0 ? '#79a8e0' : 'var(--text3)';
-    }
-
-    // Show prediction if we have data
-    if (a.predictions) {
-      _showPrediction(a.predictions);
-    }
-  }
-}
 
 /** Show/update the complexity prediction row */
 function _showPrediction(pred) {
@@ -8671,16 +8783,6 @@ function _hasPro() {
 }
 
 /** Call this when an API returns upgrade_required: true */
-function handleUpgradeRequired(res, featureName) {
-  if (_isLocalMode()) return;   // No paywall on LAN
-  const msg = res.error || 'This feature requires a Pro subscription.';
-  if (!_saasUser) {
-    showAuthModal('login');
-    showToast('Please sign in to use this feature.', 'warn');
-  } else {
-    handleUpgradeClick();
-  }
-}
 
 // ── Stripe Checkout & Billing Portal ─────────────────────────────────────
 
@@ -9809,34 +9911,8 @@ async function _initAiChat() {
 }
 
 /** Toggle the chat panel open/closed */
-function toggleAiChat() {
-  const panel  = document.getElementById('aiChatPanel');
-  const bubble = document.getElementById('aiChatBubble');
-  if (!panel) return;
-
-  _aiChatOpen = !_aiChatOpen;
-  panel.classList.toggle('hidden', !_aiChatOpen);
-  if (bubble) bubble.style.display = _aiChatOpen ? 'none' : 'flex';
-
-  if (_aiChatOpen) {
-    setTimeout(() => document.getElementById('aiChatInput')?.focus(), 100);
-    // Hide notification badge
-    const badge = document.getElementById('aiBubbleBadge');
-    if (badge) badge.classList.add('hidden');
-  }
-}
 
 /** Clear chat history */
-function clearAiChat() {
-  _aiHistory = [];
-  const msgs = document.getElementById('aiChatMessages');
-  if (msgs) msgs.innerHTML = `
-    <div class="ai-message ai-message-ai">
-      <div class="ai-msg-content">
-        👋 Chat cleared. Ask me anything about your surveys!
-      </div>
-    </div>`;
-}
 
 /** Add a message to the chat UI */
 function _addAiMessage(role, text) {
@@ -9872,66 +9948,8 @@ function _setAiTyping(show) {
   if (el) el.classList.toggle('hidden', !show);
 }
 
-/** Send user message to AI */
-async function sendAiMessage() {
-  const input = document.getElementById('aiChatInput');
-  if (!input) return;
-  const text = input.value.trim();
-  if (!text) return;
-
-  input.value = '';
-  _addAiMessage('user', text);
-  _setAiTyping(true);
-
-  try {
-    // Try LLM first, fall back to simpler endpoints
-    const res = await fetch(API + '/ai/ask', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        question: text,
-        context: _buildAiContext()
-      })
-    });
-    const data = await res.json();
-    _setAiTyping(false);
-
-    if (data.available === false) {
-      _addAiMessage('ai', '⚠️ Ollama is offline — LLM chat requires `ollama serve` running on this machine. Try the quick action buttons above for ML features that work without Ollama.');
-    } else if (data.answer) {
-      _addAiMessage('ai', data.answer);
-    } else if (data.error) {
-      _addAiMessage('ai', '❌ ' + data.error);
-    } else {
-      _addAiMessage('ai', '🤔 I didn\'t get a response. Try rephrasing your question.');
-    }
-  } catch (e) {
-    _setAiTyping(false);
-    _addAiMessage('ai', '❌ Connection error: ' + e.message);
-  }
-}
-
-/** Build context string from current session state */
-function _buildAiContext() {
-  const parts = [];
-  if (typeof state !== 'undefined' && state.researchSession) {
-    const s = state.researchSession;
-    if (s.clientName) parts.push('Client: ' + s.clientName);
-    if (s.jobType)    parts.push('Job type: ' + s.jobType);
-    if (s.jobNumber)  parts.push('Job #' + s.jobNumber);
-  }
-  return parts.join(', ') || 'General surveying question';
-}
 
 /** Quick action buttons */
-async function aiQuickAction(action) {
-  switch (action) {
-    case 'predict': await _aiPredictJob(); break;
-    case 'graph':   await _aiGraphStats(); break;
-    case 'anomaly': await _aiAnomalyCheck(); break;
-  }
-}
 
 async function _aiPredictJob() {
   const s = typeof state !== 'undefined' ? state.researchSession : null;
@@ -10420,15 +10438,15 @@ let _kgSuggestions = [];    // Current KG adjoiner suggestions
 async function refreshAiInsights(force = false) {
   try {
     // 1. Fetch AI subsystem status
-    const statusRes = await fetch(API + '/api/ai/status', { credentials: 'include' });
+    const statusRes = await fetch(API + '/ai/status', { credentials: 'include' });
     if (statusRes.ok) {
       _aiStatus = await statusRes.json();
     }
 
     // 2. Populate index health metrics from existing endpoints
     const [healthRes, analyticsRes] = await Promise.all([
-      fetch(API + '/api/index-health', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(API + '/api/research-analytics', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(API + '/index-health', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(API + '/research-analytics', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
 
     // Index health
@@ -10481,7 +10499,7 @@ async function fetchAiPredictions(jobType = 'BDY', clientName = '') {
   }
 
   try {
-    const res = await fetch(API + '/api/ai/predict', {
+    const res = await fetch(API + '/ai/predict', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -10540,7 +10558,7 @@ async function fetchKgSuggestions() {
   if (!clientName) return;
 
   try {
-    const res = await fetch(API + '/api/ai/graph/adjoiners/' + encodeURIComponent(clientName), {
+    const res = await fetch(API + '/ai/graph/adjoiners/' + encodeURIComponent(clientName), {
       credentials: 'include',
     });
     if (!res.ok) return;
@@ -10553,42 +10571,6 @@ async function fetchKgSuggestions() {
   }
 }
 
-function _renderKgSuggestions() {
-  const panel = document.getElementById('s4KgSuggestions');
-  const grid = document.getElementById('s4KgGrid');
-  if (!panel || !grid) return;
-
-  if (!_kgSuggestions.length) {
-    panel.classList.add('hidden');
-    return;
-  }
-
-  // Filter out names already on the research board
-  const existing = new Set(
-    (state.researchSession?.subjects || []).map(s => s.name?.toLowerCase())
-  );
-  const novel = _kgSuggestions.filter(a => !existing.has(a.name?.toLowerCase()));
-
-  if (!novel.length) {
-    panel.classList.add('hidden');
-    return;
-  }
-
-  panel.classList.remove('hidden');
-  grid.innerHTML = novel.map((a, i) => `
-    <button class="kg-suggestion-chip" id="kgChip${i}"
-      onclick="kgAddSuggestion(${i})"
-      title="From job #${a.job_discovered || '?'}"
-      style="background:rgba(121,168,224,.1);border:1px solid rgba(121,168,224,.25);
-             color:#a8c8ec;border-radius:20px;padding:5px 14px;font-size:12px;
-             cursor:pointer;font-weight:500;transition:all .15s;
-             display:inline-flex;align-items:center;gap:6px">
-      <span style="font-size:10px;opacity:.6">+</span>
-      ${_escHtml(a.name)}
-      <span style="font-size:9px;opacity:.5">#${a.job_discovered || '?'}</span>
-    </button>
-  `).join('');
-}
 
 function kgAddSuggestion(idx) {
   const adj = _kgSuggestions[idx];
@@ -10629,11 +10611,6 @@ function kgAddSuggestion(idx) {
   showToast(`Added ${adj.name} from knowledge graph`, 'success');
 }
 
-function kgAddAllSuggestions() {
-  for (let i = 0; i < _kgSuggestions.length; i++) {
-    kgAddSuggestion(i);
-  }
-}
 
 // ── Nova AI Chat Panel ───────────────────────────────────────────────────────
 
@@ -10676,7 +10653,7 @@ async function sendNovaMessage() {
   const typingId = _addNovaMessage('assistant', '⋯ thinking...');
 
   try {
-    const res = await fetch(API + '/api/ai/ask', {
+    const res = await fetch(API + '/ai/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -10763,6 +10740,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => refreshAiInsights(), 2000);
 });
 
+
 // ── CSS keyframe for message animation (inject once) ─────────────────────────
 (function() {
   if (document.getElementById('aiAnimStyles')) return;
@@ -10816,7 +10794,7 @@ async function sendAiMessage() {
   }
 
   try {
-    const res = await fetch(API + '/api/ai/ask', {
+    const res = await fetch(API + '/ai/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -10861,7 +10839,7 @@ async function aiQuickAction(action) {
     _appendChatMsg('user', `📊 Predict complexity for ${jt} job${cn ? ' — ' + cn : ''}`);
     if (typing) typing.classList.remove('hidden');
     try {
-      const res = await fetch(API + '/api/ai/predict', {
+      const res = await fetch(API + '/ai/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -10888,7 +10866,7 @@ async function aiQuickAction(action) {
     _appendChatMsg('user', '🕸️ Show knowledge graph stats');
     if (typing) typing.classList.remove('hidden');
     try {
-      const res = await fetch(API + '/api/ai/graph/stats', { credentials: 'include' });
+      const res = await fetch(API + '/ai/graph/stats', { credentials: 'include' });
       const data = await res.json();
       if (typing) typing.classList.add('hidden');
       if (data.available === false) {
@@ -10917,7 +10895,7 @@ async function aiQuickAction(action) {
     try {
       const subjects = state.researchSession?.subjects || [];
       const adjCount = subjects.filter(s => s.type === 'adjoiner').length;
-      const res = await fetch(API + '/api/ai/analyze', {
+      const res = await fetch(API + '/ai/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -10939,6 +10917,106 @@ async function aiQuickAction(action) {
       } else {
         const flags = data.flags.map(f => `${f.level === 'error' ? '🔴' : '⚠️'} ${f.message}`).join('\n');
         _appendChatMsg('ai', `Found ${data.count} issue(s):\n${flags}`);
+      }
+    } catch (e) {
+      if (typing) typing.classList.add('hidden');
+      _appendChatMsg('ai', '❌ ' + e.message);
+    }
+  } else if (action === 'adjoiners') {
+    const rs = state.researchSession;
+    const cn = rs?.client_name || '';
+    const jt = rs?.job_type || document.getElementById('setupJobType')?.value || 'BDY';
+    _appendChatMsg('user', `🔢 Predict adjoiner count for ${jt}${cn ? ' — ' + cn : ''}`);
+    if (typing) typing.classList.remove('hidden');
+    try {
+      const res = await fetch(API + '/ai/predict/adjoiners', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ job_type: jt, client_name: cn }),
+      });
+      const data = await res.json();
+      if (typing) typing.classList.add('hidden');
+      if (data.available === false) {
+        _appendChatMsg('ai', '❌ ML predictor not available — train first in Admin > AI Training');
+      } else {
+        _appendChatMsg('ai',
+          `Predicted adjoiner count: **${data.predicted_adjoiners ?? '?'}**\n` +
+          `Confidence: ${data.confidence || 'low'}\n` +
+          `Based on ${data.training_samples || '?'} similar ${jt} jobs`);
+      }
+    } catch (e) {
+      if (typing) typing.classList.add('hidden');
+      _appendChatMsg('ai', '❌ ' + e.message);
+    }
+
+  } else if (action === 'cabinet') {
+    const rs = state.researchSession;
+    const cn = rs?.client_name || '';
+    const jt = rs?.job_type || document.getElementById('setupJobType')?.value || 'BDY';
+    _appendChatMsg('user', `🗄️ Predict likely cabinet for ${cn || jt}`);
+    if (typing) typing.classList.remove('hidden');
+    try {
+      const res = await fetch(API + '/ai/predict/cabinet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ job_type: jt, client_name: cn }),
+      });
+      const data = await res.json();
+      if (typing) typing.classList.add('hidden');
+      if (data.available === false) {
+        _appendChatMsg('ai', '❌ ML predictor not available');
+      } else {
+        const cabs = Array.isArray(data.predicted_cabinets)
+          ? data.predicted_cabinets.join(', ')
+          : (data.predicted_cabinet || '?');
+        _appendChatMsg('ai',
+          `Likely cabinets: **${cabs}**\n` +
+          `Confidence: ${data.confidence || 'low'}\n` +
+          `Top cabinet: ${data.top_cabinet || cabs}`);
+      }
+    } catch (e) {
+      if (typing) typing.classList.add('hidden');
+      _appendChatMsg('ai', '❌ ' + e.message);
+    }
+
+  } else if (action === 'chain') {
+    const cn = state.researchSession?.client_name || '';
+    if (!cn) { _appendChatMsg('ai', '⚠️ Start a research session first to look up adjacency chain.'); return; }
+    _appendChatMsg('user', `🔗 Who adjoins ${cn}? (2-hop chain)`);
+    if (typing) typing.classList.remove('hidden');
+    try {
+      const res = await fetch(`${API}/ai/graph/chain/${encodeURIComponent(cn)}?depth=2`, { credentials: 'include' });
+      const data = await res.json();
+      if (typing) typing.classList.add('hidden');
+      if (!data.chain?.length) {
+        _appendChatMsg('ai', `No adjacency chain found for "${cn}" in the knowledge graph.`);
+      } else {
+        const lines = data.chain.slice(0, 12).map(c =>
+          `${'  '.repeat(c.depth - 1)}• ${c.name} (via ${c.connected_to}, depth ${c.depth})`);
+        _appendChatMsg('ai', `Adjacency chain for ${cn} (${data.total_in_chain} total):\n${lines.join('\n')}`);
+      }
+    } catch (e) {
+      if (typing) typing.classList.add('hidden');
+      _appendChatMsg('ai', '❌ ' + e.message);
+    }
+
+  } else if (action === 'jobs') {
+    const cn = state.researchSession?.client_name || '';
+    if (!cn) { _appendChatMsg('ai', '⚠️ Start a research session first to look up past jobs.'); return; }
+    _appendChatMsg('user', `📋 Past survey jobs involving ${cn}`);
+    if (typing) typing.classList.remove('hidden');
+    try {
+      const res = await fetch(`${API}/ai/graph/jobs/${encodeURIComponent(cn)}`, { credentials: 'include' });
+      const data = await res.json();
+      if (typing) typing.classList.add('hidden');
+      if (!data.jobs?.length) {
+        _appendChatMsg('ai', `No past jobs found for "${cn}" in the knowledge graph.`);
+      } else {
+        const lines = data.jobs.slice(0, 10).map(j =>
+          `#${j.job_number} — ${j.client_name || cn} (${j.job_type || 'BDY'}) as ${j.role}`);
+        _appendChatMsg('ai', `Found ${data.count} job(s) for ${cn}:\n${lines.join('\n')}`);
       }
     } catch (e) {
       if (typing) typing.classList.add('hidden');
@@ -11256,12 +11334,13 @@ async function showDataQualityPanel() {
   const b = document.getElementById('dqBody');
   if (b) b.innerHTML = '<div class="loading-state">Loading metrics…</div>';
   try {
-    const [h, a, c] = await Promise.all([
-      fetch(API + '/api/index-health',       { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
-      fetch(API + '/api/research-analytics', { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
-      fetch(API + '/api/data-conflicts',     { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+    const [h, a, c, g] = await Promise.all([
+      fetch(API + '/index-health',       { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+      fetch(API + '/research-analytics', { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+      fetch(API + '/data-conflicts',     { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+      fetch(API + '/ai/graph/stats',     { credentials: 'include' }).then(r => r.ok ? r.json() : {}).catch(() => ({})),
     ]);
-    _renderDqBody(b, h, a, c);
+    _renderDqBody(b, h, a, c, g);
   } catch (e) {
     if (b) b.innerHTML = '<div style="color:var(--danger);padding:20px">Failed to load: ' + e.message + '</div>';
   }
@@ -11279,9 +11358,31 @@ function _dqM(v, l, c) {
   </div>`;
 }
 
-function _renderDqBody(el, h, a, c) {
+function _renderDqBody(el, h, a, c, g) {
   if (!el) return;
-  h = h || {}; a = a || {}; c = c || {};
+  h = h || {}; a = a || {}; c = c || {}; g = g || {};
+
+  // ── KG stats ───────────────────────────────────────────────────────────
+  const kgNodes  = g.total_nodes  ?? g.nodes  ?? 0;
+  const kgEdges  = g.total_edges  ?? g.edges  ?? 0;
+  const embCount = g.embedding_count ?? g.embeddings ?? '—';
+  const kgAvail  = g.available !== false;
+  const nodeTypes = g.node_types || {};
+  const nodeBreakdown = Object.entries(nodeTypes).length
+    ? (() => {
+        const maxT = Math.max(...Object.values(nodeTypes), 1);
+        const colors = { person:'#56d3a0', job:'#79a8e0', parcel:'#b080e0',
+                         plat:'#e3c55a', surveyor:'#40c29f', subdivision:'#f0a830' };
+        return Object.entries(nodeTypes).sort((a,b)=>b[1]-a[1]).map(([t,n]) =>
+          `<div style="display:flex;align-items:center;gap:8px;padding:3px 0">
+             <span style="font-size:11px;min-width:80px;color:${colors[t]||'var(--text2)'}">${t}</span>
+             <div style="flex:1;height:5px;background:rgba(255,255,255,.06);border-radius:3px">
+               <div style="height:100%;width:${Math.round(n/maxT*100)}%;background:${colors[t]||'#79a8e0'};border-radius:3px"></div>
+             </div>
+             <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text2);min-width:72px;text-align:right">${n.toLocaleString()}</span>
+           </div>`).join('');
+      })()
+    : '<div style="font-size:11px;color:var(--text3)">No node breakdown available</div>';
 
   // ── Normalize research-analytics response shape ──────────────────────────
   // Endpoint returns: { stats: {...}, predictions: {...}, scanned_jobs: N }
@@ -11349,15 +11450,23 @@ function _renderDqBody(el, h, a, c) {
   const predComp   = preds.predicted_complexity ?? '—';
 
   el.innerHTML = `
-    <!-- Top metrics -->
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
-      ${_dqM(totalCab,   'Cabinet Files', '#79a8e0')}
-      ${_dqM(totalParc,  'KML Parcels',   '#b080e0')}
-      ${_dqM(totalJobs,  'Jobs Scanned',  '#56d3a0')}
-      ${_dqM(predAdj,    'Pred. Adjoiners','#e3c55a')}
+    <!-- Top KG metrics -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">
+      ${_dqM(kgNodes ? kgNodes.toLocaleString() : 0, 'KG Nodes',    '#79a8e0')}
+      ${_dqM(kgEdges ? kgEdges.toLocaleString() : 0, 'KG Edges',    '#b080e0')}
+      ${_dqM(typeof embCount==='number' ? embCount.toLocaleString() : embCount, 'Embeddings', '#40c29f')}
+      ${_dqM(totalJobs, 'Jobs Scanned', '#56d3a0')}
     </div>
 
-    <!-- Cabinet breakdown -->
+    <!-- Knowledge Graph node breakdown -->
+    <div style="background:rgba(0,0,0,.2);border:1px solid rgba(121,168,224,.15);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3)">🕸️ Knowledge Graph</div>
+        <div style="font-size:10px;color:${kgAvail ? '#56d3a0' : 'var(--danger)'}">● ${kgAvail ? 'Online' : 'Offline'}</div>
+      </div>
+      ${nodeBreakdown}
+    </div>
+
     <div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:14px 16px;margin-bottom:12px">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:10px">🗄️ Cabinet Breakdown</div>
       ${cabR}
@@ -11416,26 +11525,26 @@ async function dqAction(action) {
 
   if (action === 'scan-conflicts') {
     toast('Scanning for conflicts…', 'info');
-    const r = await fetch(API + '/api/data-conflicts?max_conflicts=500', { credentials: 'include' }).then(r => r.json()).catch(() => ({}));
+    const r = await fetch(API + '/data-conflicts?max_conflicts=500', { credentials: 'include' }).then(r => r.json()).catch(() => ({}));
     toast(`Found ${r.total || 0} conflict(s) across ${r.jobs_scanned || 0} sessions`, r.total ? 'warn' : 'success');
     showDataQualityPanel();  // refresh
 
   } else if (action === 'rebuild-index') {
     toast('Rebuilding KML index…', 'info');
-    const r = await fetch(API + '/api/rebuild-index', { method: 'POST', credentials: 'include' }).then(r => r.json()).catch(() => ({}));
+    const r = await fetch(API + '/rebuild-index', { method: 'POST', credentials: 'include' }).then(r => r.json()).catch(() => ({}));
     toast(r.success ? `Index rebuilt: ${r.count || 0} parcels` : ('Error: ' + r.error), r.success ? 'success' : 'error');
     showDataQualityPanel();  // refresh
 
   } else if (action === 'kg-sessions') {
     toast('Learning from research sessions…', 'info');
-    const r = await fetch(API + '/api/ai/graph/populate', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' } }).then(r => r.json()).catch(() => ({}));
+    const r = await fetch(API + '/ai/graph/populate', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' } }).then(r => r.json()).catch(() => ({}));
     if (r.available === false) { toast('Knowledge graph offline', 'warn'); return; }
     toast(r.success ? `KG updated: ${(r.total_nodes||0).toLocaleString()} nodes, ${(r.total_edges||0).toLocaleString()} edges` : 'KG update failed', r.success ? 'success' : 'error');
     showDataQualityPanel();
 
   } else if (action === 'ml-retrain') {
     toast('Retraining ML models from archive…', 'info');
-    const r = await fetch(API + '/api/train-models', { method: 'POST', credentials: 'include' }).then(r => r.json()).catch(() => ({}));
+    const r = await fetch(API + '/train-models', { method: 'POST', credentials: 'include' }).then(r => r.json()).catch(() => ({}));
     toast(r.success ? `ML retrained on ${r.jobs_used || 0} jobs` : ('ML: ' + (r.error || 'offline')), r.success ? 'success' : 'warn');
     showDataQualityPanel();
   }
@@ -11611,7 +11720,7 @@ async function refreshPipelinePanel() {
   if (!listEl) return;
 
   try {
-    const res = await fetch(API + '/api/inquiry/list', { credentials: 'include' });
+    const res = await fetch(API + '/inquiry/list', { credentials: 'include' });
     const data = await res.json();
     if (!data.success) { listEl.innerHTML = '<div style="font-size:11px;color:var(--text3);text-align:center;padding:12px">No inquiries yet</div>'; return; }
 
@@ -11684,7 +11793,7 @@ async function triggerAutoResearch() {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Starting...'; }
 
   try {
-    const res = await fetch(API + '/api/auto-research', {
+    const res = await fetch(API + '/auto-research', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -11718,7 +11827,7 @@ const _PIPE_STEP_LABELS = ['Setup', 'Deed', 'Plat', 'Adjoiners', 'Research', 'Pa
 async function _updatePipelineActivePanel() {
   if (!_pipelineActiveId) return;
   try {
-    const res = await fetch(API + '/api/inquiry/status/' + _pipelineActiveId, { credentials: 'include' });
+    const res = await fetch(API + '/inquiry/status/' + _pipelineActiveId, { credentials: 'include' });
     const d = await res.json();
     if (!d.success) return;
 
@@ -11793,3 +11902,97 @@ async function _updatePipelineActivePanel() {
   setTimeout(() => { refreshPipelinePanel(); }, 2000);
 })();
 
+
+
+
+// ── Direct Upload Module ──────────────────────────────────────────────────────
+
+let _pendingUploadConfig = null;
+
+function triggerDirectUpload(docType, subjectId = null) {
+  if (!state.researchSession) {
+    showToast("Must start a session first.", "warning");
+    return;
+  }
+  _pendingUploadConfig = { docType, subjectId };
+  const fileInput = document.getElementById("sysDirectUpload");
+  if (fileInput) fileInput.click();
+}
+
+async function handleDirectUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  e.target.value = ""; // reset for future changes
+  if (!_pendingUploadConfig || !state.researchSession) return;
+
+  const rs = state.researchSession;
+  const { docType, subjectId } = _pendingUploadConfig;
+
+  let adjoinerName = "";
+  if (subjectId) {
+     const subj = rs.subjects.find(s => s.id === subjectId);
+     if (subj && subj.type === "adjoiner") {
+       adjoinerName = subj.name;
+     }
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("job_number", rs.job_number);
+  formData.append("client_name", rs.client_name);
+  formData.append("job_type", rs.job_type);
+  formData.append("doc_type", docType);
+  if (adjoinerName) formData.append("adjoiner_name", adjoinerName);
+  if (subjectId) formData.append("subject_id", subjectId);
+
+  showToast("⏳ Uploading...", "info");
+  try {
+    const res = await fetch("/api/upload-document", {
+      method: "POST",
+      body: formData
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast("Uploaded successfully", "success");
+      if (subjectId) {
+        const subj = rs.subjects.find(s => s.id === subjectId);
+        if (subj) {
+           if (docType === "plat") {
+              subj.plat_saved = true;
+              subj.plat_path = data.saved_to;
+           } else {
+              subj.deed_saved = true;
+              subj.deed_path = data.saved_to;
+           }
+
+        }
+        persistSession();
+        if (state.currentStep === 5) renderResearchBoard();
+      } else if (docType === "plat") {
+        doStep3Search();
+      }
+    } else {
+      showToast("Upload failed: " + data.error, "error");
+    }
+  } catch (err) {
+    console.error(err);
+    showToast("Error uploading file", "error");
+  }
+  _pendingUploadConfig = null;
+}
+function togglePlssLayer() {
+  const btn = document.getElementById("btnTogglePlss");
+  if (!btn || !_propPicker.map || !_propPicker.plssLayers) return;
+
+  const isActive = _propPicker.map.hasLayer(_propPicker.plssLayers[0]);
+  
+  if (isActive) {
+    _propPicker.plssLayers.forEach(l => _propPicker.map.removeLayer(l));
+    btn.style.background = "rgba(26,26,46,0.9)";
+    btn.style.color = "#56d3a0";
+  } else {
+    _propPicker.plssLayers.forEach(l => _propPicker.map.addLayer(l));
+    btn.style.background = "rgba(86,211,160,0.2)";
+    btn.style.color = "#ffffff";
+  }
+}

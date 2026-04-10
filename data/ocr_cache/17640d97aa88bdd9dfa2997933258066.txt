@@ -1,0 +1,96 @@
+: | 3rd FLOOR 7
+- GL# GENERAL COMMON ELEMENT DEFINITION LINE rf | O O R Pp AN D h J ' Al | |
+AL# RESIDENTIAL LIMITED COMMON ELEMENT DEFINITIONLINE a ELEMENT
+GENER E
+COMMON ELEMENT DEFINITION LINE LYING AND BEING SITUATED WITHIN COMWON
+| CLe COMMERCIAL LIMITED CO SECTION 9 T. 27 N., A. 14 E., N.M.P.M.,
+R.L.C.E. | RESIDENTIAL LIMITED COMMON ELEMENT COUNTY OF TAOS, NEW MEXICO TT
+. C.L.C.E. COMMERCIAL LIMITED COMMON ELEMENT x :
+; 4th FLOOR
+G.C.E. GENERAL COMMON ELEMENT FUTURE RESERVED DEVELOPMENT RIGHTS
+| RUL# | RESIDENTIAL UNIT DEFINITION LINE
+f A __§_—srraarcamen eT
+CUL# COMMERCIAL UNIT DEFINITION LINE AY [: TEINS WAN. ELEY.” Pract =|
+Ny LE 3rd FLOOR Le 3rd |FLOOR— zt :
+BY Ee UNIT | UNIT =
+\ ie = ge ALE, ( (INTERIOR DEFINITION) a
+j . ty 1e OP_OF CONCRETE #, f Fy. cue _ TOP_OF CONCAY MIN, £1
+| > yA : FLOOR < oe er ond FLOGA =<
+—_ 0 tae & = 3 ee a ee Bic ‘ UNIT ==
+\ fo an Y ( CINTERIOR DEFINITION LAGE BORLGE. |, QNTERIOR DEFINITION) i
+{ . per Fe § 70P OF CONCRETE NIN. 3 ; 1OP OF CONCRETE WIN. fy
+: . EAS | ~ Cf, NG i Rees . eae + | a an a :
+\ oh = ' i | MAX. ELEV, 7 3
+re iu ist FLOOR— ite ist |FLOOA ee
+| ~\ vi AT: /curenron ceriartion “CE GE BALEE. i (awrenron QEFINITION r
+. HN : | OP _OF CONCRETE i) g : 4OP OF Doc E MIN £7 | 4
+| . , } he. cemins max. BEV.
+Nouv - , ié ° i acc, EAS
+ne Vio db SS Le GARAGE << WL.C.E., 6.C.E. 6 C.L.C.E.
+: marsss Le oF . a | {INTERIOR DEFINITION)
+: oe oe Graphic Seales" = 5! ee ——
+ioe * el
+5 wal =] o #25 6 40 6
+| | q @ i | ___ NOTE:
+ae: 4 “oo. ALL AREAS NOT DESIGNATED AS UNIT, RESIDENTIAL LIMITED COMMON ELEMENT, OR
+bassmsmasest | \ COMMERCIAL LIMITED COMMON ELEMENT ARE GENERAL COMMON ELEMENTS.
+|| N, RESIDENTIAL RESIDENTIAL RESIDENTIAL LIMITED
+| _}! | UNIT 303 UNIT 302 COMMON ELEMENT
+— ‘aN ' 1100 SQ.feet+ 1711 SQ.feet+ RLCE.)
+| a DATA CHART DATA CHART FOR UNIT 302
+= l LN BEARING | DISTANCE BEARING [DISTANCE 48 SQ.feet.
+— — — ' N90 "00'00"W| 20.96" S 45°00'00" E| 6.04" | DATA CHART
+i | | NOO"00'OO"h| 5.00 "| S 00°00'00" E| 35.05'|
+NGO 00 '00°E| 1.29" AUL29| S12 22 52h] 1.46" LINE | __BEARING __{ DISTANCE
+| aan | , NOO°00°00"K) 35.00 | N 77°37'08" W| 5.001 N30 *00'00"E| 10.50
+| | a7 | AULSS|_N9O"00"00"E| — 27-67" nigv22"2"E| 1.297 tO ae ee Oo ae
+| SS vIn, ELEY: RULSS| NGO “00 "00" 67" ‘22 '52" | AL14|_N77°37°08"W| 1, 93''|
+MIN, ELEY. L / 1 3436 80 © S 00°00'00" E| 11.89 N77 °37 oa*h| 6.14") ALiel Ni2 ‘22 '52°E| 1.21]
+: = mae Bey _~ 9444.60. ae | AULS7| NSO “00 00" wn] 1.00 [| RUL 33, N00 *00'00"W| 6. 10° AL13| N77 °37 OB"Wl 1.2271
+: 9445.20" i? . AULS8| S 00°00'00" E| 5.97 RUL34| N 90°00'00" W| 11.50 ALi4| S12 "22 S2"W) 4-71
+| RULS9| S89°59°46"E| 1.00') RUL35| S00 °00 ‘00"E| 3.58" AL15|_N77°37'0B"W| _7.50'|
+— : RUL6O| S 00°00'00" E| 8.75" RUL36| N77°37‘08"W 1.93" | AL16| NOO‘00'00"W| 3. 70'|
+i in . oN : AULG1|_N 90°00'00" W| __1.00'| RUL37| S12 ‘22'52°W| 1.00" 3.70
+eres, iar, ie S aulS7> | RULG2| S00 °00'00"E| 6.89" RUL36| N 77°37'08" W 7. 32'|
+| t un \ttl al _— . RUL63|_N90‘00'00"E| 1.00] NOO°00'O0°W| 7. 22'|
+R.L.C.E. = aaa yr | RULG4| S00 °00'00°E| _ 5. 50°] N90 °00'00-E| _1.00°|
+FOR NY \ all, NOO*00°00"W| _44.77"|
+UNIT 303 fi \§ N90 *00*00"W 1.29"
+| a wOO*00"007H| 6.00"
+Ps LOPESIDE CENTRAL | . N90 °00'00"E| 28.96"
+a SLOP 303 =— oy Lh. 600 °00'00°E| 6. 50°| |
+(ace cio] aulso |] “<> ; N90 "00"00"W| 1.00"|
+\ MIN, ELEY. pie —_— . S 00°00'00°E| 6.25} I
+9436, 60" i | RESIDENTIAL LIMITED maTAA™ i
+. MAX. ELEV. min tig | N90 *00'00"E| 1.00 .
+9445.90 oe rg COMMON ELEMENT 500 °00°00°E| 9.41 ‘| RESIDENTIAL
+BALCONY |p Fit | 2 ; (R.L.C.E.) [RUL5O, S 44°59°59"h| ‘1.80 UNIT 301
+- all o a LIF | FOR UNIT 303 1623 SQ.feet.+
+=i in
+| S\ | oor, 51 SQ.feet + DATA CHART
+ane f a a as —— oat ci —— ee cote soe oe FACS OF aie ie {-—--— siete aE tes DATA CHART Se gee oo teal LINE | BEARING DISTANCE
+~ La \ — I efi & AL17| N90 °00'00"E| 4. 20° “ ETT : a
+’ | __\ / a: oo fot S 00°00°00"n| 0.54 "|
+= = wea \ é \ aly & | AL18| 50000 00"W| 12.20'| % RUL3| _N90°00°00°E| 15.23"
+- ed \ wo oO, ALig| N 90°00'00" W| 4.20°| % aa 7
+—ALigj} a al}. Noo 700007 42.2071 ‘ S 00°00"00"W| 0. 17'|
+en) er — ay | ‘ N90"00'00%E| 129°]
+= ee ' . a | AUL6| S0000°00-E| 4. 83°|
+2 © ® 7. | | . RUL7|_N90°0O"O0"W| 1.29"
+MIN, ELEV. WIN, ELEY AULS| S00 °00'00"E| 49.18"
+: "he wax eiey. | 8436 ,80 | \ RULES“ feet N90 *00°00°E| 1.007]
+MIN, ELEV AULS3 9445.30" PN qy44.80°° 3 | AUL10| S 00 °00'00"E| __7.27'|
+vax elev. 9B EE FS AULA 4|_N77“37-08"W| 7.27"
+we aes See
+a pt RUL13|_N77°37'08°W
+. je . AUL14|_NOO°00'00"W| 7.68" |
+ar ~RUL44 | ge re | AUL15| N90 °00'OO"W| 11. 50'|
+Ao | | C3 . ‘ail . RUL16| S00°00'00°E| 5.16
+HS Li ——l Win | RULI7|_N77°37 08'W| _G.21'|
+MIN, ELEY Ue | ever 3 { RUL1e| S12 "22 52°W| _1.29"|
+Max. ELEY. py PULA? —_ 9436.60" « en nn eee ee AUL19| N77°37°08"W| __5.00"|
+9444.70° | Mai FapY RULAG ; ON f hale y RUL2O| Ni2*22'52"E| 1.46"
+MIN. ELEY. oF \ TAIR ea RUL24| _NOO “00"00"W| 35.47"
+3436.80' | @ a eceslrcl mre bess wipe ancl AUL22| _N 90°00'00" E| 3. 72'|
+MAX. ELEY: as S —— S 45 °00'00"E| 0. 50'|
+. —— Pa AU 1 5 Pam RUL24| N45°00'OO*E| 5

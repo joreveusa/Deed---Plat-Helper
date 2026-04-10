@@ -1,0 +1,101 @@
+| LEGEND | Oo al d FE] O OR (INTERIOR DEFINITION) | See poe
+GL# GENERAL COMMON ELEMENT DEFINITION LINE
+AL# RESIDENTIAL LIMITED COMMON ELEMENT OEFINITIONL INE h | Q QO R Pp | \ N D— H , | Al |
+cL# COMMERCIAL LIMITED COMMON ELEMENT DEFINITION LINE sna Gonoin susie
+R.L.C.E. RESIDENTIAL LIMITED COMMON ELEMENT secTean'y AND BEING sf Tus ED Wire, M
+C.L.C.E. COMMERCIAL LIMITED COMMON ELEMENT COUNTY OF TAOS, NEW MEXICO ST
+G.C.E. | GENERAL COMMON ELEMENT N
+4th FLOOR
+RUL# | RESIDENTIAL UNIT DEFINITION LINE FUTURE RESERVED DEVELOPMENT RIGHTS
+CUL# | COMMERCIAL UNIT DEFINITION LINE
+\ ‘|
+AS
+: : AEA: 3rd FLOOR
+—_ Us FUTURE RESERVED DEVELOPMENT RIGHTS
+Te & A
+\ vi) Ue 6 E — < | 4 ' ; Paes |
+i . pel PS Les and FLOOR end : 2nd FLOOR xt
+: \. CFS [ {INTERIOR DEFINITION) C.LfE. ALE. i (INTERIOR DEFINITION i
+4 N ES x . GENERAL COMMON ELEMENT -
+: . BAY TET ING WAX. ELEV. Leng : Hine Ja
+| : a Ke ist_FLOOA h Ate WN ie 1st: FLOOR— BL
+a , vis Se UNIT ee Bee UNIT &
+\ Py |: (INTERIOR DEFINITION) = BE | (INTERIOR DEFINITION) E|
+. ES Sf 70 OF CONCRETE MIN, ELEVIL Wh eop bn f0P.0F CONCHETE MIN a EILEV el
+CEILING MAX. ELEV. :
+_— ~ : : , JY GARAGE
+-—-=a={=+RIVER SLOPESIDE ie & B= GARAGE——-<_ | A.L.C.E., G.C.E. & C.L.C.E.
+Ll 204 BEAN i MBerinrrzo |
+awe y. LN ; [: (INTERIOR DEFINITION) — |
+— We “. — II. g Ri S. "7 a” = 3’ FE TOP OF CONCRETE MIN OE cc a
+| LS —) SI @, [Sv aN 0 25 6 10 45
+| Sea ee 7 | |
+ql pt ve i i \
+SL A L | \ , ALL AREAS NOT DESIGNATED AS UNIT, RESIDENTIAL LIMITED COMMON ELEMENT, OR
+i Sul ee eS j | COMMERCIAL LIMITED COMMON ELEMENT ARE GENERAL COMMON ELEMENTS.
+/ rap] oa | RESIDENTIAL RESIDENTIAL
+een 2a Pie. uy UNIT 203
+| mee ra Pil ke, UNIT 202
+| i is ie | 1107 SQFT / 1709 SQ.feet.+
+— —_— . HAR DATA CHART
+PULLIN || | end [LINE [BEARING [DISTANCE]
+Bea! | | “ay | LINE | BEARING {DISTANCE BEARING [DISTANCE
+|} XK |. bo NSO °00'00"E| 27.67" | smaTaaT ;
+NN & 0 00" AUL11| N 90°00'00" E| 28.95
+! Ls eee S00 O0'O9"E] 14.89"| rAUL 42, S00°00'°00"E| 6.50"
+| PF PS ane euev. || | N90 *00"00"W) 4.00") RULi31 N50*00°00"hW] 4.007)
+MIN, ELEY. | “gab 80°" . S00 ‘00"00"E| 5.97" | RESIDENTIAL 790° 00"
+A 9425.80' | | Nae BEV] | as 08 a ; UNIT 210 AUL14| S00°00'O00*E| 6.25'|
+=) MAX ELEY. ; Fe 9499. 80" i al | = 00007 723 SQ.feet.+ RUL15| N90 °00'00°E| 1.00" |
+@ a aa" DATA CHART S 00°00°00"E| 9. 40"|
+| ett NK 4 AULS! N9O“00"00"E| 1.29" N90700'OO"W] 12.74" AUL1a| S 45 °00'00"E| _ 6.04"
+| en or. nei | SS TRUE ; AUL10| NOO*00°00"W| 35.00 | [RULS3| NOO*00OO"W, —0.57''| RULIS] So0*O0'00"E| 35.03
+i LL ns ™ i | N9O*00°00"W| 10.44" RUL20| Si2°22'S2e"w, 1. 46"|
+De ceeeeeeeerceseeerrenl Tr ' BULSBI NOO*00°00"Wl 10.79" AUL21| N77°37'°08"W| «5.00 |
+R.L.C.E. . | NSO 70000" W] 1.30" RUL@2| Ni2‘22'Se"eE| 1. 29°
+FOR ; oo | | RULS7| NOO*00 O0"W| 5.50" RUL23/_N77 "37° 08"W 6. 14"
+UNIT 203 | MIN, ELEV. EL RULSa} NSO*0000"W! 3.52" | RULZ4[NOO*00"00"W 5. 40°)
+Ho 9425. 80° : NOO °00'00"E {2.15° RUL25| NSO °00'OO"W 44.50°
+a MAX ELEV. pk san 00" 5° RUL2s; S 00°00'00" E] 3.58'|
+iB ta FEY. ee col AULSO| N9O*00'00"E| 16.16 ees os waa"
+[— @ co AULB1) $0000 00°E | RuLa7| N77*37"08"W] 1.93°|
+frre SLOPESIDE CENTRAL|| | ULE RESIDENTIAL LIMITED S 00 ‘00"00"e| 9.80] mULee| si2"22"62"W| 1.007
+| 203 icant Hd COMMON ELEMENT ~ AUL29|_N77‘37'08°W] 7.34" |
+| oy Le RLCE S 00°00°00°E| 0.17 |
+! to a fs. an * 7 .
+| at cet, ry . FOR UNIT 203 N90 °00 OO°E| 1.29°| AUL30} NOO‘O0O'OO°W| 7.21°|
+| saccony|; ck | 5 50 SQ.feet+ 300*00°00"E| 4.83 RUL31| N9O*00'OO"E| _1.00°|
+lea % ct feet DATA CHART PULBE| No0-09"00"W{ 2.281 Se eee Toe soo 00 WA
+je at P T™OOr | [LINE [BEARING [DISTANCE RULS7| S 00 °00'00°W, 23.54" —RuLaat Noo "00°00" pea Ht S007
+: a= oy OO ALi; N90*00'OO"E| 4. 10'|
+| SES SS a RESIDENTIAL LIMITED
+= SH BA : Pe AL3|_ N90 °00'00"W . oe Of petty 3 ae ere
+ee een, lees olin. om eS coe | Atal NOSSOS OO EL 12.20 7 “ vs COMM CEMENT
+i dee me c oy a OS
+fa | Dare MIN. ELEV. | FOR UNIT 202
+PE a 9425.80" : 48 SQ.feet
+| MIN, ELEV —__ '3astao" _ DATA CHART
+9425. 80" SSS | LINE | BEARING [DISTANCE
+430° ; — N77°37'08"H| 1.93"
+Claus ae _ | Nie22'62"E| 1.21")
+9427.30" : i ee A o | S12 722 set tT
+MAX ELEV. sol ® @ oo sesh i N 77°37'08" W, 7. 49°
+_ 945380" i AUL7 | Ne Ni St ma . RL10| Noo *00'00°W| 3.70" |
+ee | AL11{ N 90°00'00" E| 10. 50°
+MIN. ELEV. ne a eee : AL42| §00°00'00"W] 5. 49°]
+max ELEV mee wo |
+RUL33 poof | 9425. 80"! =] _
+a4 oe MAXELEV.' |
+Le | 9439.80 puLt3 RESIDENTIAL
+| 9425.80 | a See cep po 921 SQ.feet+
+MAX FEY L@ | all | eS DATA CHART
+a ont | ———T ——— i is LINE BEARING [DISTANCE
+| / \ / z | | (CP racer | RULB2 ag / RUL35| N77 “37'08"W] 7.27’)
+ee Le ‘a eo VL MIN, ELEV-\RUL64~| SE RUL36] Ni2*22"52"e] 1.00°|
+: i ESS ——— | ne ae 9427, 30' RUL37| N77 °37'11°W| 2. 42 |
+inn All j QUL15 || MIN, ELEV. NN MAX ELEV. RULEE RUL38} NOO*00'00°W| _3.56'|
+IN vA || 9425. 80 \AY 9433.70 NE waa Ae
+Se yaad ah ma 1 / OB 9425. 80" | RUL4{| N77*37'08°W] 8.27]
+i MAX! ELEV. s | | OD | re) | MAX ELEV. RULAY N77 °37708"W, _8.27-
+— 9434.30 = mine, a 9434.30° - RUL42| Si2°22'S2"W] 1.29" |
+} fai =| TT iTS | [ AUL43} N 77°37

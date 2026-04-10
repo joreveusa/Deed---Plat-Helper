@@ -1,0 +1,116 @@
+4] EDELWEISS LODGE AND SPA CONDCMINIUM
+FLOOR PLAN DETAIL a :
+| co LYING AND BEING SITUATED WITHIN
+SECTION 9, T. 27 N., RR. 14 E., N.M.PLM., a
+; COUNTY OF TAOS, NEW MEXICO , ‘
+yes
+AS? LEGEND 4th FLOOR
+‘td FUTURE RESERVED DEVELOPMENT RIGHTS
+a q GL GENERAL COMMON ELEMENT DOTINITION LINE
+@ ets & RL RESIDENTIAL LIMITED COMMON ELEMENT DEFINITIONLINE
+Or ae ) ; eT MT i, TT ey a
+is cL# COMMERCIAL LIMITED COMMON ELEMENT DEFINITION LINE \E ard FLOOR ae | L ar ee |
+raat 4 : ! : Hi : ="
+| NS 2: Woe UNIT =
+aan { 4.L.C.E. RESIDENTIAL LIMITED COMMON ELEMENT a Ceurenron ee barra) A ALE. i canrenson DEFINITION |
+Vi €.L.C.€. COMMERCIAL LIMITED COMMON ELEMENT EE Top oF conenene I vey, | AN pO CTE MN, 8
+4 G.C.E. | GENERAL COMMON ELEMENT [: TILING WAX. LEV.” Yar ' _—— ean =| ;
+KW) AUL# = RESIDENTIAL UNIT DEFINITION LINE if and FLOM K | Ba ; 2nd FLOOR .
+CUL# COMMERCIAL UNIT DEFINITION LINE LE omar aon E ee Be eee |
+3d . GENERAL COMMON ELERENT — "
+g toe De W —— g! i fst FLOOR y at. 4st \FLOOR 4 |
+naphic cola t = 6 7 UNIT , faleell | venron per TEOHo 7
+. NOTE: L, / (INTERIOR DEFINITION oe al i b |
+oe ee ALL AREAS NOT DESIGNATED AS UNIT, RESIDENTIAL LIMITED COMMON ELEMENT, OR [ Top of CONCRETE HN ELEY HL 1 mpl TOPE CONCRETE MIM ELEY,
+eo 25 6 10 48 COMMERCIAL LIMITED COMMON ELEMENT ARE GENERAL COMMON ELEMENTS. mene EEL _GOMMON CEMENT
+CEILING MAX. ELEV.
+[: ° GARAGE
+Le GARAGE R.L.C.E., 6.C.E. & C.L.C.E.
+“os, . +ENTERIOR DEFINITION) a
+R.L.C.E.
+FOR
+UNIT 306
+\ . a 2 SF
+\ 5 Ne PUL?
+. AUL3 RUL4
+\ IN, ELEV is BUY € BUL3 a RESIDENTIAL
+9438.40" : > RUL2 oe UN 06 :
+: MAX, . 2
+AX, ELEY = c zt 1153 SQ.feet+
+. a —_ 35 Sa RUL DATA CHART
+=) |e \ se ee A LINE | BEARING [DISTANCE
+: rA A \ ieee RULI| N77 ‘22'01°E| 10.78"
+Lt—"AUL2 - \ =
+: Nauta: 6 ‘\ RUL2| N12°37'59°W| 2. 45"
+MIN, ELEV. } RUL3| N77‘22'01"E| 0. 37°]
+\\YRuL20 MIN, LEV. Or “Oo He a
+V4 \ 9436.80~-—L- LOWER MAX ELEV. = RUL4| N 12°37'59" W| 1.00"!
+_-\ \ MAX. ELEY. a“ 9445.80" a= RULS|_N77‘22'01°E| 7.25"
+a a , EL) UPPER BAX, LEV. \ RUL6| S 12°37 59°E| 7.25"
+\. \ 2 Liki = ‘ (SLOPED) 7 RUL7|_ S77‘22'01°W| _1.00'|
+© \ 2 MAX, ELEY. — an RUL40| S 12°37'50°E| 5.00"
+\= ier RIVER EAST eo AUL14| S 77 ‘22 01°W| 29.75"
+an Ve 306 , 3 7 AUL12| N 57°37'59" W| -5.57°|
+yh _ a \ . AUL13| N32"22'01°E| 1.15"
+a \e _ wA\ MIN. ELE. \ } es v RUL14| S 77°22'01" Wl 7.21"
+c\V lox | A L= vane TeV. a AUL15|_Ni2-37'S9"M| 3-721
+\E Ke gi 4 \ \ ee 9445.80 \- Nee tao 0 AULI6| S77°22'01°W| 0.21"
+h% (he ty A WAX ELEY. RUL17| N12°37'59°W) 8. 27° |
+| Wee 8 \ ——, . a, | RUL16| N77‘22'01°E| 0.25"
+| mol \ eo ee <== @ SMIN, ELEV. RUL19| Ni2*37'59°W| 13.93"
+: \o Nei MIN ELEY, |) Te Y— min, ecey. PULOV aN ax Petey, RUL20|_N 77°22'01" E| 0. 17"|
+. “a VW / wirehey y \ Gwin, eev/ Mae ELEY. | 444.80 AUL21| Ni2‘37'59°W| 4.25"
+1a AGE p9444.80: \ \ 9436.80 | 9445.30 " RUL22| N 77°22'01" E| 4.83" |
+\ Ne iM \ & \ MN 1a 55 ‘ RUL23] S 12°37'59" E| 4. 25''|
+ANG a _. —— " | RUL24| N77 ‘22'01°E| 16.38
+yy ce) a A woe " RUL25| S 12°37'59" E| 2. 45"
+\ oe pub tae “RULI3 i \\ wo part q
+ee A c = ef IY VN \\ ee 26 -OMIN, ELEY.
+~ ee or | Ee NSo J \ ee Ye ee RULE nd my PF 08 Oo mre cee ige ee ee
+: . a Z , < / \ MIN. ELEV. 9444,50' .
+, “, van aia ada6. 70" RESIDENTIAL
+; \ IN. ELEV.
+-- 7 RLCE. hk Agee iN 19334 SQ.feet +
+RESIDENTIAL LIMITED \ ce | / A EEE |. MIN, ELEY 4 SQ.feet.
+COMMON ELEMENT SS / 4. \ MAX. ELEV. | = DATA CHART
+. DSxoyv e @ 9444.60'
+(R.L.C.E.) marae CR UL Se ~ Wah OS LINE | BEARING [DISTANCE
+FOR UNIT 306 \t \ ce a \ AUL26| N77 "22'O1"E| 29.91"
+—4 vai } a \ ry . ”
+56 sQ feet+ S , ia evev\ / “ RUL27| S$12°37'59 Ei -4.89'|
+feet. ies aay WIN, ELEY. MIN. ELEV \ \ \ yl AUL26| §77°22'01"W| (1.25
+DATA CHART ~~ | MAX, ELEV. \ 9436.80" \ a RUL29| S12°37'59°E| 19. 42'|
+ma ar 9445.30'" \ WAX. ELEV. ‘ Of"
+LINE |_ BEARING [DISTANCE S / 12) a on \\ % \——94ae-20"* \ RUL30|_N77*22'01°E| 1.00"
+saa AT ; “ \ <s \ =a RUL31| S 12°37°59"E] 7. 25''|
+| AUL4| N77 °22'01°E| 9. 70'| m~ \ wry \ . BUL St, 912 "37 5g" __7.20°
+RUL2| S 12°37'59" E| 3. 45'| ZL $436.40" v | AUL32| S 77 *22'01"W| 7.25"
+RUL3|_S77 ‘22'01°W| 0.29" ~ Ee) max: zev. \ a a te SUNRISE RUL33| Ni2°37'59°W| 4.00
+aa TESF ; 9444.80 > MAX. ELEY. 307 i RULS4| S77 ‘22'01°W| 38. 47°
+RUL4| S 12°37°59°E| 2.45" ee aX ELEY aa 22'01"
+RULB| S77 22> Or ee a | Q, ai ; 5 Wey . AULS5|_Ni2"37°59"N| 27.66"
+RUL6| Ni2°37'59"W| 2. 45''| ae \\ EL ry , MIN. ELEV. ~ \¥~ \C RUL36|_N 77°22'01" E| 6. 64"j
+toa AT ; _ , ad os 9436. 80' RUL37|_ S 12°37'59" E| «1. 00''|
+RUL?| S77 *22'01"W| 0.29" oe ee / ee NN LOWER MAX, ELEV SaaT
+N12 °37'59"W| 3. 45''| (ee | / \ et 9444.50' RuL30~ \\ RUL38| N77‘22'01"E| 5. 12'|
+aan \ er + \ UPPER MAX. ELEV. 2 RUL39| N 32°22'01" E| 5. 65'|
+\\ Ye as ci 9447.80 c
+\ \ o, , \ ‘ Cy \ (SLOPED) tl
+Lu MIN. ELEV. ap MIN, ELE ely .
+9436. 80° Nowe Rei eeD RUL33
+. LOWER MAX. ELEV. AP Quad. BO. yr a2
+23445 . 30 | O Ueber make evkv. \\ pL seers
+\ UPPER MAX, ELEV. Or eme zo
+. (SLOPED) y_ (SLOPED) Ww = \ _—_
+\ io et | a
+. . TO << _" _"
+a git aaa —
+‘ uA —
+er
+: . ple —
+=
+—
+SHEET 16 -OF 19
+6: SOUTHWEST
+, MOUNTAIN .
+ix 2 SU

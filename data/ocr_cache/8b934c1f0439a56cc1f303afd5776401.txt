@@ -1,0 +1,30 @@
+“ a . Rio Grande Surveying Service .
+: ‘ Box 6351, Taos, New Mexico 87571
+; (505) 758-2901
+: : os Supplement to
+: RGSS plat no.: L2067-6B-7A :
+Plat title: Brad Larson
+Plat date: 03/13/2007
+PROPERTY DESCRIPTION
+TRACT “A” :
+A certain tract of land in the Colonias area, near Taos, Taos County, New Mexico; |
+: within the Antonio Martinez and Antonie Leroux Grants; located within projected
+Sections 12 and 13, Township 26 North, Range 11 East, NMPM and within projected
+Sections 7 and 18, Township 26 North, Range 12 East, NMPM; described as part of
+Tract 16, Map 9, and part of Tract 7, Map 10, all within Survey 3 of the 1941 Taos
+County Reassessment Survey and more particularly described by metes and bounds :
+as follows; -
+BEGINNING at the SE corner of this tract, a point from whence a 1/2 in. rebar set as
+a witness corner bears S 46°59'44" W, 25.00 feet. distant, and from whence :
+triangulation station “Dunn,” a 1973 State Engineer's Office brass cap monument
+: found bears N 54°37'57" E, 15,009.52 feet. distant, thence; /
+S 46°59'44" W, 349.03 feet. to a 1/2 in. rebar set, thence: : /
+N 43°10'59" W, 37.41 feet. to a 1/2 in. rebar set, thence;
+S 47°07'54" W, 301.85 feet. to the SW corner, a 1/2 in. rebar set, thence; :
+N 42°52'06” W, 651.25 feet. to the NW corner, a 1/2 in. rebar found, thence; :
+N 47°05'30" E, 649.45 feet. to the NE corner, a 1/2 in. rebar found, thence; :
+S 43°00'16" E, 688.28 feet. to the POINT AND PLACE OF BEGINNING. :
+This tract contains 10.021 acres, more or less; all as shown on a survey plat entitled :
+"Brad Larson," RGSS survey no. L2067-6B-7A, by Scott B. Crowl, NMLS no. 12441,
+dated 03/13/2007. /
+

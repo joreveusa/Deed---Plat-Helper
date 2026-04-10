@@ -1,0 +1,36 @@
+is: Ce | | : S ee AEs LEGEND | | | |
+ee Pi ee aso ae a APL EL. DENOTES FINISH FLOOR ELEVATION . oe
+. — . a , GEL DENOTES CEILING ELEVATION _ . es
+ce . atom = DENOTES CHANGE IN CEILING ELEVATION ;
+: . @ DENOTES EXISTING 5/8" REBAR, W/TAG NO. 5213 : : :
+oO | oS oes ay 24.90" oN NX KAA DENOTES LIMITED COMMON ELEMENT - - oe . oe
+a : oe \ NO Np NX 7 ELEVATIONS SHOWN ARE ASSUMED AND RELATIVE ae ; | a
+- cay ye porta XN \8 No | TO ONE ANOTHER. oo : ae a
+ce 7 EN \ \ XX BE Bete pee ae
+. . ; 360 —_— = oN oe wee a a oe . ee ae
+we ee ee ; | Me : R= 7.35 \\ OE ge ae Se oo
+eee on : . La. RF. EL. = 7199.1". te ae Teg ye ala a :
+a oe | C. EL. = 7209.4" en ss es : : a
+/ . : _ mo . I 26x 26° pe od ae = . Ak .
+os / oe . ee fo. Gf = 721106 | S : & Ee ae .
+- nee zo 305 MORGAN ROAD = 7 gg ie |
+oe oe rae Yo UNIT 1 : | | | ee cree q | :
+. 8 oe 1989 SQ.feet. oo . . : = : - .
+: 2 [_] FF. EL. = 7199.1! [] —§ 3 : ze 7
+ee . oe » CEL = 7207.1 Serer oR 6S . Sh .
+18° X 18° 1.8" Xe 2g
+, / SKYLIGHT : SKYLIGHT. 11.70" we Seas z
+CEL. = 7209.9" . C. EL: = 7209.9" ——- : Ba ole 4 . ; : :
+- | | | ue we oe | woe, GRAPHIC SCALE | a
+SORELY os oe — . 7 . - 25 9 25 5 10 boas :
+. Ze : . Le, oie Zz ESR TINH = SFT TRON
+ee ee ee ee ae ENS SN SN
+foo Eee Oo mabye ages ee] \ mm, ERLING MONTE VISTA
+. . — — ——e —— —— as tn} EY: A CONDIMINIUM a
+“s e ee oO oe on ee es 20.00’ . : Geng RV: s . UNIT 1 .
+. : ; gt 6 , Ee = : = ae
+WA . =, ° . a os . ) L Sterling, RPS No. 11010 [Baler an
+° : } ; : cae Larry L, ‘Sterling, lo. 1101 | ; “
+; W/TAG 5213 oy, ae : oe, = a ea Espofiola, New Mexico 87532-8915 Drawn By: Plat No.
+if _-RLEVATION 7086.3" gf | : . ee oS ep et oie _ Rhone: (505) 753-4174 ermuio [BSN |
+

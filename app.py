@@ -300,7 +300,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, encoding="utf-8") as f:
+        with open(CONFIG_FILE, encoding="utf-8-sig") as f:
             return json.load(f)
     return {}
 
@@ -604,9 +604,21 @@ def next_job_info():
     rstart = (next_num // 100) * 100
     return next_num, f"{rstart}-{rstart + 99}"
 
+def _job_num_base(job_number) -> int:
+    """Return the numeric base of a job number for folder range calculations.
+
+    Handles both plain integers (2932) and hyphenated formats (2932-01).
+    Always returns the first numeric segment as an int.
+    """
+    s = str(job_number).split('-')[0].strip()
+    try:
+        return int(s)
+    except ValueError:
+        return 0
+
 def create_project_folders(job_number, client_name, job_type):
     """Create the full folder tree and return the deeds path."""
-    rstart = (int(job_number) // 100) * 100
+    rstart = (_job_num_base(job_number) // 100) * 100
     range_folder = f"{rstart}-{rstart + 99}"
     last_name = client_name.split(",")[0].strip()
 
@@ -632,7 +644,7 @@ def _job_base_path(job_number, client_name: str, job_type: str) -> Path:
     Pattern: SurveyData / {range} / {job_number} {client_name} /
              {job_number}-01-{job_type} {last_name}
     """
-    rstart    = (int(job_number) // 100) * 100
+    rstart    = (_job_num_base(job_number) // 100) * 100
     last_name = client_name.split(",")[0].strip()
     return (
         Path(get_survey_data_path())
@@ -2986,6 +2998,76 @@ def api_save_plat():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
 
+@app.route("/api/upload-document", methods=["POST"])
+def api_upload_document():
+    """Upload a deed or plat directly to the client tree."""
+    try:
+        job_number  = request.form.get("job_number")
+        client_name = request.form.get("client_name")
+        job_type    = request.form.get("job_type", "BDY")
+        doc_type    = request.form.get("doc_type", "deed") # deed or plat
+        adjoiner_name = request.form.get("adjoiner_name", "")
+
+        if not job_number or not client_name:
+            return jsonify({"success": False, "error": "job_number and client_name required"}), 400
+
+        file = request.files.get("file")
+        if not file or file.filename == '':
+            return jsonify({"success": False, "error": "No file uploaded"}), 400
+
+        # Construct path
+        if doc_type == "plat":
+            target_folder = _job_base_path(job_number, client_name, job_type) / "E Research" / "B Plats"
+            prefix = "P"
+        else:
+            target_folder = _job_base_path(job_number, client_name, job_type) / "E Research" / "A Deeds"
+            prefix = "D"
+            
+        if adjoiner_name:
+            target_folder = target_folder / "Adjoiners"
+            
+        target_folder.mkdir(parents=True, exist_ok=True)
+        
+        # Get reference number
+        ref_num = _next_ref_number(target_folder, prefix=prefix)
+        clean_upload_name = file.filename
+        
+        if adjoiner_name:
+            clean_adj = "".join(c for c in adjoiner_name if c.isalnum() or c in " ").strip()
+            final_filename = f"{prefix}{ref_num} {clean_adj} {clean_upload_name}"
+        else:
+            final_filename = f"{prefix}{ref_num} Client {clean_upload_name}"
+            
+        dest = target_folder / final_filename
+        file.save(dest)
+        
+        # Try to mark it saved in research session if subject_id is provided
+        subject_id = request.form.get("subject_id")
+        if subject_id:
+            try:
+                rs = load_research(job_number, client_name, job_type)
+                for subj in rs.get("subjects", []):
+                    if subj["id"] == subject_id:
+                        if doc_type == "plat":
+                            subj["plat_saved"] = True
+                            subj["plat_path"] = str(dest)
+                        else:
+                            subj["deed_saved"] = True
+                            subj["deed_path"] = str(dest)
+                        break
+                save_research(job_number, client_name, job_type, rs)
+            except Exception:
+                pass
+
+        return jsonify({
+            "success": True, 
+            "saved_to": str(dest),
+            "filename": final_filename
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 # ── PDF preview for plats ──────────────────────────────────────────────────────
 
@@ -3184,6 +3266,43 @@ def api_download():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
+
+
+# ── inline PDF proxy → iframe viewer ──────────────────────────────────────────
+
+@app.route("/api/proxy-pdf", methods=["GET"])
+def api_proxy_pdf():
+    """Proxy a county portal PDF for inline browser display (iframe).
+
+    The county portal requires an authenticated session. The browser iframe
+    cannot share the server's session cookies, so this route fetches the PDF
+    server-side and streams it back with Content-Disposition: inline so the
+    browser displays it directly instead of downloading.
+
+    Query params: doc_no=<document number>
+    """
+    try:
+        doc_no = request.args.get("doc_no", "").strip()
+        if not doc_no:
+            return jsonify({"error": "doc_no is required"}), 400
+
+        pdf_url = f"{_get_portal_url()}/WebTemp/{doc_no}.pdf"
+        pdf_resp, pdf_err = _fetch_portal_pdf(doc_no, pdf_url)
+        if pdf_err:
+            return jsonify({"error": pdf_err}), 502
+
+        def generate():
+            for chunk in pdf_resp.iter_content(8192):
+                yield chunk
+
+        response = Response(generate(), content_type="application/pdf")
+        response.headers["Content-Disposition"] = f'inline; filename="{doc_no}.pdf"'
+        response.headers["Cache-Control"] = "private, max-age=300"
+        return response
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 # ── download deed PDF → user's browser ────────────────────────────────────────
@@ -4013,7 +4132,7 @@ def api_generate_dxf():
 
     Body:
     {
-      job_number:  int,
+      job_number:  str,    // e.g. "2932" or "2932-01"
       client_name: str,
       job_type:    str,
       parcels: [
@@ -5413,7 +5532,6 @@ def api_adjacent_parcels():
 # LEGAL DESCRIPTION SIMILARITY SEARCH
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.route("/api/similar-descriptions", methods=["POST"])
 @app.route("/api/legal-similarity", methods=["POST"])
 def api_legal_similarity():
     """Search for parcels with similar legal descriptions.
@@ -6314,22 +6432,7 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
 # ── AUTO-RESEARCH HELPER FUNCTIONS ────────────────────────────────────────────
 
 
-@app.route("/api/workflows", methods=["GET"])
-def api_workflows():
-    """Return all available job type workflows with their configs.
-    Used by the website inquiry form to show job type descriptions."""
-    result = []
-    for code, wf in _JOB_WORKFLOWS.items():
-        result.append({
-            "code": code,
-            "name": wf["name"],
-            "research_depth": wf["research_depth"],
-            "needs_adjoiners": wf["needs_adjoiners"],
-            "needs_chain": wf.get("needs_chain", False),
-            "deliverables": wf.get("deliverables", []),
-            "notes": wf.get("notes", ""),
-        })
-    return jsonify({"success": True, "workflows": result})
+# /api/workflows is defined at line ~6008 — duplicate removed
 
 def _auto_search_deed(name: str, job_type: str = "BDY") -> dict | None:
     """Search 1stNMTitle for deeds matching `name`, return scored results.

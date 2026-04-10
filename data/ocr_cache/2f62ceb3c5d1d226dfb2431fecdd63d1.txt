@@ -1,0 +1,47 @@
+| : LEGEND |
+. . : F.F. EL. = FINISHED FLOOR ELEVATION
+; : ; C. EL. = CEILING ELEVATION
+——+-+-—— = DENOTES CHANGE IN CEILING ELEVATION .
+. . L.C.E. = DENOTES LIMITED COMMON ELEMENT
+oo 5/4" RON PPE . a = DENOTES FENCE
+SW_PROPERTY CORNER . = DENOTES LIMITED COMMON ELEMENT AS INDICATED .
+| a . : . : = DENOTES COMMON ELEMENT a a
+; UNIT 9 \ . - UNIT 6
+S6,.2e N N . . ELEVATIONS SHOWN HEREON ARE SCALED FROM USGS TOPOGRAPHICAL _
+. 5, Sony ° n31"37°00"« MAP ENTITLED "TAOS NEW MEXICO”. ALL ELEVATIONS SHOWN ARE .
+8a SSS SSS SSE RELATIVE TO ESTABLISHED BENCHMARK. |
+‘ : 41.20" .
+. SKYLIGHT ;
+= mo G
+T mi | cel 6958.1": / | :
+. O | , ,
+. . C.EL. = 6956.9" a ——
+| 7 SN C&L = 89547" | Ge. = 6955.7" | "h
+= Shik bu
+Co & RN i | 3.80" | NS |
+Co - & N - SS 9.70 21.90" N i)
+2 N UNIT 8 ESSN SS SESS SSS D
+N SQFT. = 738_ Or 22.40" Oo | .
+N FFEL. = 6947.7' - N o. . a N & Sule .
+| . . N . Sh of CEL = 6955.17 . e52 7 4 ; ,
+N ent N 300 C.EL. =, 6955.0" BN Be ,
+SESS 5.80 <] ce = sesso LSS pm .
+; WA SS aN 2.90° [ :
+AWNING 3.30 .
+. _ Z
+i , = 5 oF .GL. a . VE, . MAG
+; N «ag N CEL = 6956.1" N . | GRAPHIC SCALE !
+—————— ON -.—___ |
+| Wr . : . y | | (N FEET) ,
+. | , N | N & | 1 INCH = 5 FEET
+: . oe AN 18.60" N @
+, , Tease S31°37'00°W N°
+sit z 4 YZ ONT? Vip
+LZ £ |
+| 3/4" IRON PIPE , | Ni a F = ; .
+an Meee’ Sis | | ON SEN EPLING =| ose aicartann |
+; | SSN Qn, URVEYS
+| 5 iE UNIT 7 & UNIT 8
+. , o> ey Larry L. Sterling, RPS No. 11010 Date:
+a : ; Espafiola, New Mexico 87532-8915 Drawn By: Plat No
+

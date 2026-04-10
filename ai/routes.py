@@ -114,7 +114,8 @@ def ai_ask():
         return jsonify({"error": "No question provided"}), 400
 
     answer = client.ask_about_research(question, context=context)
-    return jsonify({"answer": answer, "model": "mistral:7b"})
+    from ai.client import _MODEL
+    return jsonify({"answer": answer, "model": _MODEL})
 
 
 @ai_bp.route('/summarize', methods=['POST'])
@@ -413,7 +414,21 @@ def ai_graph_stats():
     if not kg:
         return jsonify({"available": False}), 503
 
-    return jsonify(kg.graph_stats())
+    stats = kg.graph_stats()
+
+    # Add embedding index count
+    try:
+        from ai import get_embeddings
+        emb = get_embeddings()
+        if emb and hasattr(emb, "_collection"):
+            stats["embedding_count"] = emb._collection.count()
+        else:
+            stats["embedding_count"] = 0
+    except Exception:
+        stats["embedding_count"] = 0
+
+    stats["available"] = True
+    return jsonify(stats)
 
 
 @ai_bp.route('/graph/adjoiners/<path:name>', methods=['GET'])

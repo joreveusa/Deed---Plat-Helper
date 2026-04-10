@@ -1,0 +1,87 @@
+oo gees 8nd FLOOR = wm reenter
+, LF GENERAL COMMON ELEMENT DEFINITION LINE
+, H @) QO kR Pp A N D H | Al | AL# RESIDENTIAL LIMITED COMMON ELEMENT DEFINITIONLINE
+UA CL#¥ COMMERCIAL LIMITED COMMON ELEMENT DEFINITION LINE
+by SECT EYING AND Bete Si TUATED wi TRIN, M R.L.C.E. . RESIDENTIAL LIMITED COMMON ELEMENT
+a | COUNTY OF TAOS. NEW MEXICO €.L.C.E. | COMMERCIAL LIMITED COMMON ELEMENT ;
+fe G.C.E. GENERAL COMMON ELEMENT
+cee RESIDENTIAL LIMITED RUL# RESIDENTIAL UNIT DEFINITION LINE
+O reeee COMMON ELEMENT
+ee CUL# COMMERCIAL UNIT DEFINITION LINE
+Eso aD R.L.CE.
+ae "So SQTa RESIDENTIAL Nore:
+Fr . DATA CHART 679 SQ.feet.+ ALL AREAS NOT DESIGNATED AS UNIT, RESIDENTIAL LIMITED COMMON ELEMENT, OR
+i CINE | — BEARING DISTANCE DATA CHART COMMERCIAL LIMITED COMMON ELEMENT ARE GENERAL COMMON ELEMENTS.
+ie N77 *22'00"E| 12. 20°] LINE | BEARING [DISTANCE RESIDENTIAL LIMITED
+Ni2"38°00"W) 4-107] RUL45| S 47 °56 "40" Foe UME 208 RESIDENTIAL LIMITED
+RUL46; N9O‘OO'OO"E) 10.54" |
+AAS 7 50 SQ.feet.+ COMMON ELEMENT
+5S §$00'00'00"E| 16.78 DATA CHART R.LCE.):
+RUL48} NQO‘OO'OO"E! = 4. 29°] ros UNIT 204
+00°00" LINE | BEARING [DISTANCE
+" ’ RUL49} S 00°00'00" E| 4.83") aaa 50 SQ.feet+
+G.aphie Seale 1 = 65 RESIDENTIAL RULSO[ N 90°00'00" W] 1.29" N77 Se oom pe a DATA CHART
+= "AUL54] S00°00'40°E| 0.17" S12 *38'00"E
+LS aS” UNIT 205 300 "00 40" 597-2200" WT a2 20" LINE | BEARING [DISTANCE
+o 2s «66 40 46 DATA CHART RULS3/ S 00°00'00" E] 3.09" | RL410| S00 °00'00"W| 12.201
+BEARING —TDISTAN RUL54] NGO"00'00"W] 8.90" | ALii| NSO°00'00"N| 4. 10°|
+RULS5| NOO“00"00"W] 1.25" | AL 42} NOO"00"00"
+877*22'00°W| 7.31"| 0000" oo 00 "EL _12.20
+RESIDENTIAL Ni9"3800"W) 007 RULS6/ NGO‘OO'OO"W] 2. 94"
+UNIT 204 —s RUL5S7/ NOO‘OO'O3"E| 12.45'|
+1103 SQ.FT4 877*22'00"W] 8.44") RUL5S| S89°59°55°E| 1.00") \
+DATA CHART 212 38 core 4.00" RUL5@! NOO"00"22"E| 5.60"
+LINE | BEARING [DISTANCE : ee 35°00" WL 00 RULGO| N90 *60"OO"W|4.00°] \ RESIDENTIAL
+RULAS| S77 *22'00"Wl 4. 45'| setingeagy ee RULTT S77 "22°01" W] 6.00" | NO0.°00'00 E] _-8.65'| whey UNIT 208
+| RUL20] N5i*19°00"W] 2.62°| $i2*3a°00"E] 1.00] oS ‘ ror SQ.feet.+
+| RUL21] S3a°41'00"W] 6.00'| S57 aq* ; Pa \ DATA CHART
+aa ane S 77°22'09" W) 12.08
+S 51°49'00" E| 2.62") NiD*a800"NL 2767 . . BEARING | DISTANCE
+N77°32"00°E| 34-71 \ S 12°38'00" E] 27.67'|
+N90 *00"0O"W[ 27.67" Ni2"38°00°W) 1-25] = REGE _—\" RUL33|_§77°22°00"W| 22.48"
+RUL25| NOO‘OO'OO"W! = 24.55'| RUL13| N77 °2200"E| 4.83" . OR . a \ AULS4[ NGO *OO'0O"W] 9. 74°]
+RUL26] N90 *OO'OO"W] —_4.00"| gi2°38°00°E| 1.25] F MIN. &, en \ar RUL35| N51°19°00"W] 2.88)
+RUL27/ NOO*0O"O0"W] 7.62°] NIT *32"00°ED Of UNIT 205 | MEMS FEY | =e VA RUL36[ N38°44°O0"E| 11.73°|
+RUL28[ N77*22°00°E] 7.62" RULibB err ee OE 0.7 —_- ‘\Y MAX ELEV. Jj - \ AUL37/ N51‘19'OO"W] 44.76"
+RUL29| S 12°38'00" E] _£.00°| AUL17| N77"22"00°E| 2-29" et a\ 9433.70" [ ss AL an ee AUL3B! N38°41'00°E| 10.84"
+AUL30| N77 "22"00"E| 23.63] AUL16} Si2°3a°00"E| 11.80°| v wh _ | m RUL39|_N 77°21'25" E] 5.85" |
+RULS4] S$12°38'00"E] 27.67'| : \o BALCONY Tt qe | \ RUL40| S12°39°14"E| 1.00 |
+R.L.C.E ‘> 13 rucia? PAS VF AUL4i| N77 "22°44°E| 5.75
+-L.C.B. \ \ | an oa \ RUL42{ Ni2‘*3e'oo"w] 1.00" |
+FOR <—S \ \ \ ae LA: | RUL43] N77°22'09°E] 14.89'|
+UNIT 204 \_ es , =e) | eo AN \
+AS a a a een \ € \ an \ \
+‘5 oN BALCON 1 , \ MIN, JELEV. oy | ee
+P| \ aul —= : =I i MAX ELEV. 7) ne \ -\
+Lar : eat 6 RIVER CENTRAL \ 9424.30 NV Rice be
+_—— aon A | . \ ie 208 : \ criss av7o\\ \
+fh e AULA = \ MIN, ELEV. \ MIN, ELEV. Goa Veo _ Ae <_..
+| Ea \ 9425. 80' | 9425. 80 \ MIN. ELEV. Pan ms, eT 2.
+ro : \ MAX ELEV. _ MAX ELEV. 9425. 80" fo | ; SAUL 47, Nef |
+is \ 9434, 30 9434. 30 \ MAX ELEV. f \ ee" OE s/f \
+ipo! ao oe tt oe \ : errr \ Al 4 7 / .
+ul 7 RUL26 ee en WE -| | ee Vii eb ao ee \ \ oo. \9425.80% rh lo / WN ee oy ae
+i i - ? en *t\"\—~. ihe een \ eee tT <7, MAX ELEV. a f 4 ¥ x ff
+oe x | STN aan Ce | A 9499.89 (Meer KR
+OS 204 Se vA Lan \e—\ a Vay AAT NN OD ;
+R.L.C.E ba=-===-= 0 Kr 1A ; \ i — j ele nn ian a) \ \ LaT2 ais “ANN
+LUE. ’ &), A\ MIN. ELEW a IN. ELEV QO"—"\W ose Rue \ — :
+FOR | MIN. ELEV. A NO yn ecey 9425. 80S 9425. 60' MAL vo ALL et ms
+UNIT 204 [50 pase — Va re 1 Medes 60" MAX EL EV ON MAX ELEY. /\ LAV pub ———— Koff k
+pce (IO) Nee Ne We hee eet LN 2) ts Sc, CRLES ats. a
+JeaccowHes ON 8! iN om™ —\W 2 BU Dee ALT a ee | aL. ee. | a a :
+eee pee Se “yr womens Sg an PSS onan | oe nn play M19 —“AULAS ne altar
+Tou 0 a rd IK ws BLSe “eu 30 ee My .
+ie * SLE CGO 3 aL? a ea \ We roa ;
+fe MIN. ELEV. © aXe, / aaa Wy on pt Se 9425. 80°" FS ;
+MAX ELEV, | \ “Qiesfeo” “SDS , PHONE Taw) MIN, ELEY _ 9433.80“ Loe OY
+jae 9434-30" A MAXTELEW OA 9425,80" . eNO
+| Serene po bt "9439. 80° m “7 Wi Ne MAX ELEV. dy “ \. SoS
+| pp eee REO eg | SY 9434.30" ee &) vai \ eal
+reswenriaenarep “SY O awaN QO \ ee “
+| COMMON ELEMENT NY . SY PAL ONE SPA oh \
+. UU of Va A 9425. 60' ( —-_<
+BEARING [DISTANCE _. hess . Ji fy, ac oe ee, |
+ALi3] N 32°22'00" E, —1.54'| fe= ; a MS yy, L MIN, ELEY. Ne 9434.50' ra ae
+S 57°38'00" E| 6.86) : a “SS KE 7, Y MAX ELEY, 0 UNA (tae
+AL15| 

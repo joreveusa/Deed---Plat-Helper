@@ -36,11 +36,37 @@ _SYSTEM_PROMPT = (
 # LOW-LEVEL OLLAMA FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _resolve_model(preferred: str) -> str:
+    """Resolve the model name — if 'preferred' isn't available, find the closest match."""
+    try:
+        resp = httpx.get(f"{_OLLAMA_URL}/api/tags", timeout=5)
+        if resp.status_code == 200:
+            available = [m.get("name", "") for m in resp.json().get("models", [])]
+            if preferred in available:
+                return preferred
+            # Try prefix match (e.g. "mistral:7b" → "mistral:7b-instruct-q4_K_M")
+            base = preferred.split(":")[0]
+            for name in available:
+                if name.startswith(base + ":"):
+                    logger.info(f"[AI] Model '{preferred}' not found — using '{name}' instead")
+                    return name
+    except Exception:
+        pass
+    return preferred
+
+
 def ollama_chat(prompt: str, system: str = "", model: str = "",
                 timeout: float = 120.0) -> str:
-    """Send a chat completion request to Ollama. Returns response text."""
+    """Send a chat completion request to Ollama.
+
+    Tries /api/chat first (Ollama ≥ 0.1.14). Falls back to /api/generate
+    for older or alternative Ollama binaries that don't expose /api/chat.
+    """
     model = model or _MODEL
-    payload = {
+    model = _resolve_model(model)
+
+    # ── Try /api/chat (modern Ollama) ─────────────────────────────────────
+    chat_payload = {
         "model": model,
         "messages": [
             *([{"role": "system", "content": system}] if system else []),
@@ -49,9 +75,32 @@ def ollama_chat(prompt: str, system: str = "", model: str = "",
         "stream": False,
     }
     try:
-        resp = httpx.post(f"{_OLLAMA_URL}/api/chat", json=payload, timeout=timeout)
+        resp = httpx.post(f"{_OLLAMA_URL}/api/chat", json=chat_payload, timeout=timeout)
+        if resp.status_code != 404:
+            resp.raise_for_status()
+            return resp.json()["message"]["content"].strip()
+        # 404 → fall through to /api/generate
+        logger.warning("[AI] /api/chat returned 404 — falling back to /api/generate")
+    except httpx.ConnectError:
+        return "[Ollama not running — start it with `ollama serve`]"
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code != 404:
+            return f"[Ollama error: {e}]"
+        logger.warning("[AI] /api/chat returned 404 — falling back to /api/generate")
+    except Exception as e:
+        return f"[Ollama error: {e}]"
+
+    # ── Fallback: /api/generate (older Ollama / AI Surveyor instance) ─────
+    system_prefix = f"{system}\n\n" if system else ""
+    generate_payload = {
+        "model": model,
+        "prompt": f"{system_prefix}{prompt}",
+        "stream": False,
+    }
+    try:
+        resp = httpx.post(f"{_OLLAMA_URL}/api/generate", json=generate_payload, timeout=timeout)
         resp.raise_for_status()
-        return resp.json()["message"]["content"].strip()
+        return resp.json().get("response", "").strip()
     except httpx.ConnectError:
         return "[Ollama not running — start it with `ollama serve`]"
     except Exception as e:
