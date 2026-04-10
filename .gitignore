@@ -49,3 +49,9 @@ server.log
 server_err.log
 data/cabinet_index.json
 client_config.json
+
+# PII / user data — never commit these
+users.json
+backups/
+data/analytics_snapshot.json
+client_config.json
