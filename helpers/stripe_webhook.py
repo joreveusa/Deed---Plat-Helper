@@ -11,9 +11,38 @@ Handles:
 import os
 import json
 import logging
+import threading
+import time
 from typing import Optional
 
 log = logging.getLogger(__name__)
+
+# ── Idempotency cache ─────────────────────────────────────────────────────────
+# Stripe retries failed webhooks up to ~87 hours with exponential backoff.
+# We cache processed event IDs in memory to silently skip duplicates.
+# TTL of 24 hours covers Stripe's retry window without unbounded growth.
+# For multi-process deployments, swap this for Redis SET NX with TTL.
+
+_PROCESSED_EVENTS: dict[str, float] = {}   # event_id → timestamp
+_PROCESSED_LOCK   = threading.Lock()
+_EVENT_TTL_SECS   = 24 * 60 * 60           # 24 hours
+
+
+def _is_duplicate_event(event_id: str) -> bool:
+    """Return True if this event has already been processed. Registers it if not."""
+    now = time.time()
+    with _PROCESSED_LOCK:
+        # Purge expired entries to keep memory bounded
+        expired = [eid for eid, ts in _PROCESSED_EVENTS.items()
+                   if now - ts > _EVENT_TTL_SECS]
+        for eid in expired:
+            del _PROCESSED_EVENTS[eid]
+
+        if event_id in _PROCESSED_EVENTS:
+            return True  # Already handled
+
+        _PROCESSED_EVENTS[event_id] = now
+        return False
 
 # ── Stripe price → tier mapping ───────────────────────────────────────────────
 # Add Team price ID when you create it in Stripe
@@ -167,9 +196,18 @@ def dispatch_event(event: dict) -> tuple[int, str]:
     """
     Dispatch a verified Stripe event dict to the right handler.
     Returns (http_status, message).
+
+    Idempotent: duplicate event IDs (Stripe retries) are silently skipped
+    with a 200 so Stripe stops retrying.
     """
-    ev_type = event.get("type", "")
-    data    = event.get("data", {})
+    ev_type  = event.get("type", "")
+    event_id = event.get("id", "")
+    data     = event.get("data", {})
+
+    # Dedup check — return 200 immediately so Stripe stops retrying
+    if event_id and _is_duplicate_event(event_id):
+        log.info(f"[Stripe] Duplicate event skipped: {ev_type} id={event_id}")
+        return 200, f"Duplicate event ignored: {event_id}"
 
     handlers = {
         "checkout.session.completed":       handle_checkout_completed,
