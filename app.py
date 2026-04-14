@@ -753,6 +753,14 @@ def index():
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
 
+
+@app.route("/ai-brain")
+def ai_brain_dashboard():
+    """AI Brain Pipeline Dashboard — autonomous pipeline monitor."""
+    resp = make_response(send_from_directory(".", "ai_brain.html"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
 @app.route("/app.js")
 def serve_appjs():
     # No-cache headers are applied by the @after_request hook below
@@ -1219,10 +1227,19 @@ def api_test_connection():
 @app.route("/api/login", methods=["POST"])
 def api_login():
     try:
-        data = request.get_json()
-        username = data.get("username", "")
-        password = data.get("password", "")
-        remember = data.get("remember", False)
+        data      = request.get_json()
+        username  = data.get("username", "")
+        password  = data.get("password", "")
+        remember  = data.get("remember", False)
+        use_saved = data.get("use_saved", False)
+
+        # If no credentials provided, fall back to saved config credentials
+        if use_saved or (not username and not password):
+            cfg = load_config()
+            username = username or cfg.get("firstnm_user", "")
+            password = password or cfg.get("firstnm_pass", "")
+            if not username:
+                return jsonify({"success": False, "error": "No saved credentials"})
 
         # Fetch login page to discover form
         sess = _session()
@@ -1297,6 +1314,42 @@ def api_logout():
     _session().cookies.clear()
     return jsonify({"success": True})
 
+
+# ── portal-status ───────────────────────────────────────────────────────────────
+
+@app.route("/api/portal-status")
+def api_portal_status():
+    """
+    Check if the NM Clerk portal session is currently active.
+    Checks both the __auto__ (startup) session and the per-user session.
+    Returns: { connected: bool, user: str, portal_url: str }
+    """
+    try:
+        cfg  = load_config()
+        user = cfg.get("firstnm_user", "")
+        probe_url = _get_portal_url() + "/scripts/hfweb.asp?Application=FNM&Database=TP"
+
+        def _check(sess):
+            try:
+                resp = sess.get(probe_url, timeout=5, allow_redirects=True)
+                return ("CROSSNAMEFIELD" in resp.text or
+                        "FIELD14" in resp.text or
+                        "New Search" in resp.text)
+            except Exception:
+                return False
+
+        # Check __auto__ session first (startup login), then per-user session
+        connected = _check(_get_web_session("__auto__")) or _check(_session())
+
+        return jsonify({
+            "connected":  connected,
+            "user":       user,
+            "portal_url": _get_portal_url(),
+        })
+    except Exception as e:
+        return jsonify({"connected": False, "user": "", "error": str(e)})
+
+
 # extract_trs — imported from helpers.metes_bounds
 
 
@@ -1325,17 +1378,22 @@ def api_search():
         operator = op_map.get(data.get("operator", "contains"), "contains")
 
         search_url = f"{_get_portal_url()}/scripts/hfweb.asp?Application=FNM&Database=TP"
+
+        # Use per-user session first; fall back to __auto__ (startup login) if expired
         sess = _session()
         resp = sess.get(search_url, timeout=15)
+        if 'CROSSNAMEFIELD' not in resp.text and 'FIELD14' not in resp.text:
+            # Try the auto-login session
+            auto_sess = _get_web_session("__auto__")
+            resp = auto_sess.get(search_url, timeout=15)
+            if 'CROSSNAMEFIELD' in resp.text or 'FIELD14' in resp.text:
+                sess = auto_sess   # switch to auto session for the rest of this request
+            else:
+                return jsonify({"success": False, "error": "Session expired — please log in again."})
 
         # Detect redirect back to login page
         landed = resp.url.lower().rstrip('/')
         if landed == _get_portal_url().lower().rstrip('/') or 'login' in landed:
-            return jsonify({"success": False, "error": "Session expired — please log in again."})
-
-        # The site has malformed HTML (form appears after </html>),
-        # so use html.parser which tolerates this. Also detect auth via raw text.
-        if 'CROSSNAMEFIELD' not in resp.text and 'FIELD14' not in resp.text:
             return jsonify({"success": False, "error": "Session expired — please log in again."})
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -3874,6 +3932,130 @@ def api_open_folder():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route("/api/browse-job", methods=["POST"])
+@require_auth
+def api_browse_job():
+    """
+    List all files in the current job's survey folder, organized by subfolder.
+    Body: { job_number, client_name, job_type }
+    Returns: { success, job_path, folders: [ { name, path, files: [...] } ] }
+    """
+    try:
+        body        = request.get_json() or {}
+        job_number  = str(body.get("job_number", "")).strip()
+        client_name = str(body.get("client_name", "")).strip()
+        job_type    = str(body.get("job_type", "")).strip()
+
+        survey_data = get_survey_data_path()
+        if not survey_data or not Path(survey_data).exists():
+            return jsonify({"success": False, "error": "Survey data path not configured"})
+
+        survey = Path(survey_data)
+
+        # Infer range band from job number (e.g. 3001 → 3000-3099)
+        try:
+            jn = int(str(job_number).split("-")[0])
+            rstart = (jn // 100) * 100
+            r_dir = survey / f"{rstart}-{rstart + 99}"
+        except ValueError:
+            return jsonify({"success": False, "error": f"Cannot parse job number: {job_number}"})
+
+        if not r_dir.exists():
+            return jsonify({"success": False, "error": f"Range folder not found: {r_dir.name}"})
+
+        # Find the job directory (fuzzy — match job_number prefix)
+        job_dir = None
+        for d in r_dir.iterdir():
+            if d.is_dir() and d.name.startswith(str(job_number) + " "):
+                job_dir = d
+                break
+
+        if not job_dir:
+            return jsonify({"success": False, "error": f"Job folder not found for {job_number}"})
+
+        # Find the survey type sub-folder
+        last = client_name.split(",")[0].strip() if client_name else ""
+        sub_dir = None
+        for d in job_dir.iterdir():
+            if d.is_dir() and str(job_number) in d.name:
+                if not job_type or job_type.upper() in d.name.upper() or not sub_dir:
+                    sub_dir = d
+                    if job_type and job_type.upper() in d.name.upper():
+                        break
+
+        root = sub_dir or job_dir
+
+        # Build file tree (max depth 3, skip hidden)
+        OPEN_EXTS = {".pdf", ".dwg", ".dxf", ".xlsx", ".xls", ".docx", ".doc",
+                     ".txt", ".json", ".png", ".jpg", ".html", ".csv"}
+        EXT_ICONS = {
+            ".pdf": "📄", ".dwg": "📐", ".dxf": "📐",
+            ".xlsx": "📊", ".xls": "📊", ".csv": "📊",
+            ".docx": "📝", ".doc": "📝", ".txt": "📝",
+            ".png": "🖼️", ".jpg": "🖼️",
+            ".html": "🌐", ".json": "🗂️",
+        }
+
+        folders = []
+        try:
+            for sub in sorted(root.iterdir()):
+                if not sub.is_dir() or sub.name.startswith("."):
+                    continue
+                files = []
+                for f in sorted(sub.iterdir()):
+                    if not f.is_file() or f.name.startswith("."):
+                        continue
+                    ext = f.suffix.lower()
+                    size_kb = round(f.stat().st_size / 1024, 1)
+                    files.append({
+                        "name":     f.name,
+                        "path":     str(f),
+                        "ext":      ext,
+                        "icon":     EXT_ICONS.get(ext, "📎"),
+                        "size_kb":  size_kb,
+                        "openable": ext in OPEN_EXTS,
+                    })
+                if files:
+                    folders.append({
+                        "name":  sub.name,
+                        "path":  str(sub),
+                        "files": files,
+                    })
+
+            # Also list root-level files
+            root_files = []
+            for f in sorted(root.iterdir()):
+                if f.is_file() and not f.name.startswith("."):
+                    ext = f.suffix.lower()
+                    root_files.append({
+                        "name":     f.name,
+                        "path":     str(f),
+                        "ext":      ext,
+                        "icon":     EXT_ICONS.get(ext, "📎"),
+                        "size_kb":  round(f.stat().st_size / 1024, 1),
+                        "openable": ext in OPEN_EXTS,
+                    })
+            if root_files:
+                folders.insert(0, {"name": "📂 Root", "path": str(root), "files": root_files})
+
+        except PermissionError as pe:
+            return jsonify({"success": False, "error": f"Access denied: {pe}"})
+
+        return jsonify({
+            "success":  True,
+            "job_path": str(root),
+            "job_dir":  str(job_dir),
+            "folders":  folders,
+            "total_files": sum(len(f["files"]) for f in folders),
+        })
+
+    except Exception as e:
+        from loguru import logger as _log
+        _log.error(f"[browse-job] {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+
 @app.route("/api/open-file", methods=["POST"])
 def api_open_file():
     """Open a specific file with the default Windows application."""
@@ -3972,7 +4154,514 @@ def api_export_session():
         return jsonify({"success": False, "error": str(e)})
 
 
+
 # (api_chain_search removed — callers now do `grantor.split(',')[0].strip()` locally)
+
+
+# ── /api/curve-table ───────────────────────────────────────────────────────────
+
+@app.route("/api/curve-table", methods=["POST"])
+@require_auth
+def api_curve_table():
+    """
+    Extract and compute curve table from session's legal description calls.
+    Body: { session_id: str } or { calls: [...] } or { text: str }
+    Returns: { success, curves: [...], html: str, count: int }
+    """
+    try:
+        from loguru import logger as _log
+        from helpers.metes_bounds import parse_metes_bounds, build_curve_table, format_curve_table_html
+
+        body = request.get_json() or {}
+
+        # Accept raw calls list, raw text, or session_id
+        calls = body.get("calls")
+        text  = body.get("text", "")
+
+        if not calls:
+            # Try to load from active session
+            session_id = body.get("session_id") or body.get("job_number", "")
+            if session_id and not text:
+                # Gather all saved deed text from session subjects
+                survey_data = get_survey_data_path()
+                if survey_data:
+                    import glob
+                    matches = glob.glob(
+                        str(Path(survey_data) / "**" / "E Research" / "research.json"),
+                        recursive=True,
+                    )
+                    for rj in matches:
+                        try:
+                            rdata = json.loads(Path(rj).read_text(encoding="utf-8"))
+                            if str(rdata.get("job_number", "")) == str(session_id) or \
+                               rdata.get("session", {}).get("job_number") == str(session_id):
+                                for s in rdata.get("subjects", []):
+                                    for key in ("legal_description", "description", "full_text"):
+                                        if s.get(key):
+                                            text += " " + s[key]
+                                break
+                        except Exception:
+                            continue
+
+            if text:
+                calls = parse_metes_bounds(text)
+
+        if not calls:
+            return jsonify({"success": True, "curves": [], "html": "", "count": 0,
+                            "message": "No metes and bounds calls found."})
+
+        curves = build_curve_table(calls)
+        html   = format_curve_table_html(curves)
+
+        _log.info(f"[curve-table] {len(curves)} curves extracted from {len(calls)} calls")
+
+        return jsonify({
+            "success": True,
+            "curves":  curves,
+            "html":    html,
+            "count":   len(curves),
+        })
+
+    except Exception as e:
+        from loguru import logger as _log
+        _log.error(f"[curve-table] {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── /api/export-report ─────────────────────────────────────────────────────────
+
+@app.route("/api/export-report", methods=["POST"])
+@require_auth
+def api_export_report():
+    """
+    Server-render a full HTML research package from the current session,
+    save it to the job's B Drafting folder, and return its path + inline HTML.
+    Body: { session: {...researchSession} }
+    Returns: { success, saved_to, filename, html }
+    """
+    try:
+        body = request.get_json()
+        rs   = body.get("session", {})
+        if not rs:
+            return jsonify({"success": False, "error": "No session provided"})
+
+        job_number  = rs.get("job_number", "")
+        client_name = rs.get("client_name", "Unknown")
+        job_type    = rs.get("job_type", "BDY")
+        subjects    = rs.get("subjects", [])
+        now_str     = __import__("datetime").date.today().strftime("%B %d, %Y")
+
+        client_subj = next((s for s in subjects if s.get("type") == "client"), {})
+        parcel      = rs.get("client_parcel", {})
+        upc         = rs.get("client_upc", "")
+        book        = parcel.get("book", "")
+        page        = parcel.get("page", "")
+        plat_ref    = parcel.get("plat", "")
+        legal_desc  = client_subj.get("property_description", "").strip()
+
+        # Reference table rows
+        ref_rows = ""
+        seq = 1
+        for s in subjects:
+            rel = "★ Client" if s.get("type") == "client" else "Adjoiner"
+            if s.get("deed_saved"):
+                d  = s.get("detail", {})
+                bp = f"{book}-{page}" if s.get("type") == "client" else (d.get("Location", "") or "")
+                ref_rows += (
+                    f'<tr><td>{seq}</td><td>Deed</td><td>{s["name"]}</td>'
+                    f'<td>{s.get("doc_no","")}</td><td>{bp}</td><td>—</td>'
+                    f'<td>{rel}</td><td style="color:#40c29f">✓ Saved</td></tr>\n'
+                )
+                seq += 1
+            if s.get("plat_saved"):
+                cab = s.get("plat", "") or plat_ref
+                ref_rows += (
+                    f'<tr><td>{seq}</td><td>Plat</td><td>{s["name"]}</td>'
+                    f'<td></td><td></td><td>{cab}</td>'
+                    f'<td>{rel}</td><td style="color:#40c29f">✓ Saved</td></tr>\n'
+                )
+                seq += 1
+
+        # Adjoiner summary rows
+        adj_rows = ""
+        for s in subjects:
+            if s.get("type") != "adjoiner":
+                continue
+            dk = "✓" if s.get("deed_saved") else "⬜"
+            pk = "✓" if s.get("plat_saved") else "⬜"
+            adj_rows += (
+                f'<tr><td>{s["name"]}</td><td>{s.get("upc","")}</td>'
+                f'<td style="color:{"#40c29f" if s.get("deed_saved") else "#e07070"}">{dk}</td>'
+                f'<td style="color:{"#40c29f" if s.get("plat_saved") else "#e07070"}">{pk}</td>'
+                f'<td style="font-size:9pt">{s.get("plat","")}</td></tr>\n'
+            )
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Research Package — Job #{job_number} — {client_name}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font-family:'Inter',sans-serif;font-size:11pt;color:#1a2030;padding:32px;background:#fff}}
+  .hdr{{display:flex;justify-content:space-between;border-bottom:3px solid #2d6e4e;padding-bottom:12px;margin-bottom:20px}}
+  .co h1{{font-size:18pt;color:#1a3028}}.co p{{font-size:9pt;color:#4a6a5a}}
+  .rt{{text-align:right}}.rt h2{{font-size:16pt;color:#2d6e4e}}.rt p{{font-size:9pt;color:#888}}
+  .jcard{{background:#f4f9f6;border:1px solid #b8d4c8;border-radius:6px;padding:12px 16px;
+          margin-bottom:18px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px}}
+  .jf label{{font-size:8pt;text-transform:uppercase;letter-spacing:.5px;color:#5a8a6a;display:block}}
+  .jf span{{font-weight:600}}
+  h2{{font-size:10pt;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#2d6e4e;
+      margin:18px 0 6px;padding-bottom:3px;border-bottom:1px solid #c8ddd7}}
+  .legal{{background:#f9faf9;border-left:3px solid #2d6e4e;padding:12px 16px;
+          font-family:'Courier New',monospace;font-size:9pt;line-height:1.7;
+          white-space:pre-wrap;margin-bottom:12px}}
+  table{{width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:14px}}
+  th{{background:#2d6e4e;color:white;padding:5px 8px;text-align:left;font-size:8.5pt}}
+  td{{border-bottom:1px solid #dde8e3;padding:5px 8px}}
+  tr:nth-child(even){{background:#f4f9f6}}
+  .cert{{background:#f0f8f4;border:1px solid #b8d4c8;border-radius:6px;
+         padding:14px 18px;font-size:9.5pt;line-height:1.7;margin-top:20px}}
+  .cert strong{{display:block;margin-top:12px}}
+  @media print{{body{{padding:16px}}}}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <div class="co">
+    <h1>Red Tail Surveying, LLC</h1>
+    <p>PO Box 1847 &bull; Taos, NM 87571<br>New Mexico PLS #6204</p>
+  </div>
+  <div class="rt">
+    <h2>Deed Research Package</h2>
+    <p>Job #{job_number} &bull; {job_type}<br>
+    {client_name} &bull; Taos County, NM<br>
+    Prepared: {now_str}</p>
+  </div>
+</div>
+
+<div class="jcard">
+  <div class="jf"><label>Client</label><span>{client_name}</span></div>
+  <div class="jf"><label>Job Number</label><span>{job_number}</span></div>
+  <div class="jf"><label>Job Type</label><span>{job_type}</span></div>
+  <div class="jf"><label>UPC</label><span>{upc}</span></div>
+  <div class="jf"><label>Client Deed</label><span>Book {book}, Page {page}</span></div>
+  <div class="jf"><label>Plat Reference</label><span>{plat_ref}</span></div>
+  <div class="jf"><label>Subjects</label><span>{len(subjects)}</span></div>
+  <div class="jf"><label>Adjoiners</label><span>{sum(1 for s in subjects if s.get("type")=="adjoiner")}</span></div>
+</div>
+
+{'<h2>Legal Description</h2><div class="legal">' + legal_desc + '</div>' if legal_desc else ''}
+
+<h2>Reference Table</h2>
+<table>
+<thead><tr><th>#</th><th>Type</th><th>Owner</th><th>Doc #</th><th>Book/Page</th><th>Cabinet</th><th>Relation</th><th>Status</th></tr></thead>
+<tbody>{ref_rows or '<tr><td colspan="8" style="color:#aaa;font-style:italic">No documents saved yet.</td></tr>'}</tbody>
+</table>
+
+<h2>Adjoiner Summary</h2>
+<table>
+<thead><tr><th>Name</th><th>UPC</th><th>Deed</th><th>Plat</th><th>Plat Reference</th></tr></thead>
+<tbody>{adj_rows or '<tr><td colspan="5" style="color:#aaa;font-style:italic">No adjoiners discovered yet.</td></tr>'}</tbody>
+</table>
+
+<div class="cert">
+  <em>I hereby certify that the information in this deed research package was compiled from
+  recorded documents in the Taos County Clerk&apos;s Office and related public records, and is
+  correct to the best of my knowledge and belief as of the date shown.</em>
+  <strong>Jordan Everhart, PLS #6204 &bull; Red Tail Surveying, LLC &bull; {now_str}</strong>
+</div>
+
+<p style="margin-top:24px;font-size:8pt;color:#999;text-align:center">
+  Generated by Deed &amp; Plat Helper &bull; Red Tail Surveying &bull; Job #{job_number} &bull; {now_str}
+</p>
+</body></html>"""
+
+        # Save to B Drafting/
+        try:
+            base = _job_base_path(job_number, client_name, job_type) / "B Drafting"
+            base.mkdir(parents=True, exist_ok=True)
+            last = client_name.split(",")[0].strip().title()
+            import re as _re
+            fname = _re.sub(r'[<>:"/\\|?*]', '', f"{job_number}-{job_type}_{last}_ResearchPackage.html")
+            fpath = base / fname
+            fpath.write_text(html, encoding="utf-8")
+            saved_to = str(fpath)
+        except Exception as save_err:
+            logger.warning(f"[export-report] Could not save to disk: {save_err}")
+            saved_to = ""
+            fname    = "ResearchPackage.html"
+
+        return jsonify({"success": True, "saved_to": saved_to, "filename": fname, "html": html})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ── /api/send-to-c3d ──────────────────────────────────────────────────────────
+
+@app.route("/api/send-to-c3d", methods=["POST"])
+@require_auth
+def api_send_to_c3d():
+    """
+    Open a DXF file in Civil 3D and run the boundary LISP scripts.
+    Body: { dxf_path: str, session: {...} }
+    Returns: { success, status, dwg_path, message }
+    Delegates to the AI Surveyor's civil3d bridge if available.
+    """
+    try:
+        body     = request.get_json()
+        dxf_path = body.get("dxf_path", "")
+        rs       = body.get("session", {})
+
+        if not dxf_path or not Path(dxf_path).exists():
+            return jsonify({"success": False, "error": f"DXF not found: {dxf_path}"})
+
+        # Try to import AI Surveyor's Civil 3D bridge
+        ai_surveyor_path = Path("J:/Under Development/AI Surveyor")
+        if ai_surveyor_path.exists():
+            import sys as _sys
+            if str(ai_surveyor_path) not in _sys.path:
+                _sys.path.insert(0, str(ai_surveyor_path))
+            try:
+                from civil3d.com_client import Civil3DClient
+                from loguru import logger as _log
+                c3d = Civil3DClient()
+                if not c3d.connect():
+                    raise RuntimeError("Civil 3D not running or not responding")
+                # Open the DXF/DWG
+                c3d.open_drawing(dxf_path)
+                dwg_path = dxf_path
+                # Silence dialogs via SendCommand
+                c3d.send_command("(setvar \"SECURELOAD\" 0)\n")
+                c3d.send_command("(setvar \"FILEDIA\" 0)\n")
+                # Run boundary + adjoiner LISP scripts
+                lisp_dir = ai_surveyor_path / "civil3d" / "lisp"
+                for lsp_name in ["boundary_draw.lsp", "adjoiner_labels.lsp"]:
+                    lsp_path = lisp_dir / lsp_name
+                    if lsp_path.exists():
+                        lsp_fwd = str(lsp_path).replace("\\", "/")
+                        c3d.send_command(f'(load "{lsp_fwd}")\n')
+                        _log.info(f"[send-to-c3d] Loaded: {lsp_name}")
+                # Zoom to extents
+                c3d.send_command("_ZOOM E\n")
+                return jsonify({
+                    "success": True,
+                    "status": "opened",
+                    "dwg_path": dwg_path,
+                    "message": "DXF opened in Civil 3D — boundary and adjoiner LISP scripts loaded."
+                })
+            except Exception as c3d_err:
+                from loguru import logger as _log
+                _log.warning(f"[send-to-c3d] C3D bridge error: {c3d_err}")
+                # Fallback: just open the file with the system default app
+                import subprocess
+                subprocess.Popen(["start", "", dxf_path], shell=True)
+                return jsonify({
+                    "success": True,
+                    "status": "fallback_open",
+                    "dwg_path": dxf_path,
+                    "message": f"Civil 3D bridge unavailable ({c3d_err}). Opened with default application."
+                })
+        else:
+            # No AI Surveyor — open with system default
+            import subprocess
+            subprocess.Popen(["start", "", dxf_path], shell=True)
+            return jsonify({
+                "success": True,
+                "status": "fallback_open",
+                "dwg_path": dxf_path,
+                "message": "AI Surveyor not found. Opened DXF with default application."
+            })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ── /api/complete-job ──────────────────────────────────────────────────────────
+
+@app.route("/api/complete-job", methods=["POST"])
+@require_auth
+def api_complete_job():
+    """
+    Mark a research session as complete, append its data to the ML training set,
+    and flag a model retrain for overnight processing.
+    Body: { session: {...researchSession} }
+    Returns: { success, training_record, retrain_pending }
+    """
+    try:
+        import json as _json
+        from datetime import datetime as _dt
+        body = request.get_json()
+        rs   = body.get("session", {})
+        if not rs:
+            return jsonify({"success": False, "error": "No session provided"})
+
+        subjects    = rs.get("subjects", [])
+        adjoiners   = [s for s in subjects if s.get("type") == "adjoiner"]
+        client_subj = next((s for s in subjects if s.get("type") == "client"), {})
+        parcel      = rs.get("client_parcel", {})
+
+        # ── GAP 1: ENRICHED training record ─────────────────────────────────
+        # Capture every signal available at completion time so ML has rich data
+        adj_deed_ct   = sum(1 for a in adjoiners if a.get("deed_saved"))
+        adj_plat_ct   = sum(1 for a in adjoiners if a.get("plat_saved"))
+        adj_both_ct   = sum(1 for a in adjoiners if a.get("deed_saved") and a.get("plat_saved"))
+        cab_refs_str  = parcel.get("cab_refs_str", "")
+        cabinet_letters = sorted(set(
+            c.strip().upper() for c in cab_refs_str.replace(",", " ").split()
+            if c.strip() and len(c.strip()) == 1
+        )) if cab_refs_str else []
+
+        # Timing: check session start_time if recorded
+        start_iso = rs.get("started_at") or rs.get("created_at", "")
+        elapsed_min = 0
+        if start_iso:
+            try:
+                start_dt = _dt.fromisoformat(start_iso)
+                elapsed_min = round((_dt.now() - start_dt).total_seconds() / 60, 1)
+            except Exception:
+                pass
+
+        training_record = {
+            # ── Identity ──
+            "job_number":       rs.get("job_number"),
+            "job_type":         rs.get("job_type", "BDY"),
+            "client_name":      rs.get("client_name", ""),
+            "upc":              rs.get("client_upc", parcel.get("upc", "")),
+            "trs":              rs.get("client_trs", parcel.get("trs", "")),
+            "land_grant":       parcel.get("land_grant", ""),
+            # ── Client outcome ──
+            "deed_saved":       client_subj.get("deed_saved", False),
+            "plat_saved":       client_subj.get("plat_saved", False),
+            "doc_no":           client_subj.get("doc_no", ""),
+            "book":             parcel.get("book", ""),
+            "page":             parcel.get("page", ""),
+            # ── Legal description ──
+            "calls_count":      client_subj.get("calls_count", 0),
+            "area_acres":       client_subj.get("area_acres", 0),
+            "closure_error":    client_subj.get("closure_error", 0.0),
+            "desc_type":        client_subj.get("desc_type", ""),
+            # ── Adjoiners ──
+            "adjoiner_count":   len(adjoiners),
+            "adj_deed_found":   adj_deed_ct,
+            "adj_plat_found":   adj_plat_ct,
+            "adj_both_found":   adj_both_ct,
+            "adj_completion_pct": round(adj_both_ct / len(adjoiners) * 100) if adjoiners else 0,
+            # ── Cabinet ──
+            "cab_refs":         cab_refs_str,
+            "primary_cabinet":  cabinet_letters[0] if cabinet_letters else "",
+            "cabinet_count":    len(cabinet_letters),
+            # ── Workflow timing ──
+            "elapsed_minutes":  elapsed_min,
+            # ── Meta ──
+            "completed_at":     _dt.now().isoformat(),
+            "source":           "deed_helper_complete",
+        }
+
+        # Append to training data file
+        training_file = Path("data/ai/full_archive_training_data.json")
+        training_file.parent.mkdir(parents=True, exist_ok=True)
+        existing = []
+        if training_file.exists():
+            try:
+                existing = _json.loads(training_file.read_text(encoding="utf-8"))
+                if not isinstance(existing, list):
+                    existing = []
+            except Exception:
+                existing = []
+        # Deduplicate by job_number
+        existing = [r for r in existing if str(r.get("job_number")) != str(training_record["job_number"])]
+        existing.append(training_record)
+        try:
+            training_file.write_text(_json.dumps(existing, indent=2), encoding="utf-8")
+            logger.info(f"[complete-job] Saved enriched training record for job {training_record['job_number']} "
+                        f"({len(existing)} total records)")
+        except Exception as te:
+            logger.warning(f"[complete-job] Could not write training data: {te}")
+
+        # ── GAP 3: Log prediction accuracy ────────────────────────────────
+        # Compare ML-predicted adjoiner count vs actual for drift tracking
+        try:
+            from ai import get_predictor
+            predictor = get_predictor()
+            if predictor:
+                pred = predictor.predict_adjoiners(
+                    training_record["job_type"],
+                    client_name=training_record["client_name"],
+                )
+                predicted_adj = pred.get("predicted_adjoiners", None)
+                if predicted_adj is not None:
+                    acc_entry = {
+                        "ts":               training_record["completed_at"],
+                        "job_number":       training_record["job_number"],
+                        "job_type":         training_record["job_type"],
+                        "predicted_adj":    predicted_adj,
+                        "actual_adj":       len(adjoiners),
+                        "error":            round(abs(predicted_adj - len(adjoiners)), 3),
+                        "model":            pred.get("model", "?"),
+                    }
+                    acc_file = Path("data/ai/prediction_accuracy.jsonl")
+                    acc_file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(acc_file, "a", encoding="utf-8") as _af:
+                        _af.write(_json.dumps(acc_entry) + "\n")
+                    logger.info(f"[complete-job] Accuracy logged: predicted {predicted_adj:.1f} adj, "
+                                f"actual {len(adjoiners)} (error {acc_entry['error']})")
+        except Exception as acc_err:
+            logger.debug(f"[complete-job] Accuracy log skipped: {acc_err}")
+
+        # ── GAP 4: Feed knowledge graph ────────────────────────────────────
+        try:
+            from ai import get_knowledge_graph
+            kg = get_knowledge_graph()
+            if kg and rs.get("client_name"):
+                # Add client + all adjoiners and their adjacency edges
+                client_id = kg.add_person(
+                    rs["client_name"],
+                    upc=training_record["upc"],
+                    job_number=training_record["job_number"],
+                    job_type=training_record["job_type"],
+                )
+                job_id = kg.add_job(
+                    training_record["job_number"],
+                    rs["client_name"],
+                    training_record["job_type"],
+                )
+                for adj in adjoiners:
+                    adj_name = (adj.get("name") or "").strip()
+                    if not adj_name:
+                        continue
+                    kg.add_person(adj_name, job_number=training_record["job_number"])
+                    kg.add_adjacency(rs["client_name"], adj_name, training_record["job_number"])
+                kg.save()
+                logger.info(f"[complete-job] KG updated: {rs['client_name']} + "
+                            f"{len(adjoiners)} adjoiners")
+        except Exception as kg_err:
+            logger.debug(f"[complete-job] KG update skipped: {kg_err}")
+
+        # Set retrain_pending flag in config
+        try:
+            cfg = load_config()
+            cfg["retrain_pending"] = True
+            cfg["retrain_reason"]  = f"Job {training_record['job_number']} completed {training_record['completed_at']}"
+            save_config(cfg)
+        except Exception as ce:
+            logger.warning(f"[complete-job] Could not set retrain flag: {ce}")
+
+        return jsonify({
+            "success":          True,
+            "training_record":  training_record,
+            "retrain_pending":  True,
+            "message":          "Job marked complete. Training data updated — model will retrain overnight."
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)})
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -5695,11 +6384,66 @@ def api_inquiry():
 
         print(f"[inquiry] Created {inquiry_id} for {client_name} ({job_type})", flush=True)
 
+        # ── GAP 2: Auto-trigger research immediately ────────────────────────
+        # Fire background auto-research thread so the surveyor doesn't have to
+        # click manually. Gated by config (default: enabled for all job types).
+        cfg = load_config()
+        if cfg.get("auto_research_on_inquiry", True):
+            import threading as _thr
+
+            def _bg_research(inq_id, c_name, j_type, j_upc):
+                import time as _time
+                _time.sleep(0.5)  # tiny delay so response returns first
+                try:
+                    import httpx as _httpx
+                    resp = _httpx.post(
+                        "http://localhost:5000/api/auto-research",
+                        json={
+                            "inquiry_id":  inq_id,
+                            "client_name": c_name,
+                            "job_type":    j_type,
+                            "upc":         j_upc,
+                        },
+                        timeout=300,
+                    )
+                    print(f"[inquiry] auto-research {inq_id}: HTTP {resp.status_code}",
+                          flush=True)
+                except Exception as _bg_e:
+                    print(f"[inquiry] auto-research bg error: {_bg_e}", flush=True)
+
+            t = _thr.Thread(
+                target=_bg_research,
+                args=(inquiry_id, client_name, job_type, upc),
+                daemon=True,
+                name=f"auto-research-{inquiry_id}",
+            )
+            t.start()
+            print(f"[inquiry] auto-research triggered in background for {inquiry_id}",
+                  flush=True)
+
+        # ── BRAIN: Register inquiry with autonomous pipeline orchestrator ────────
+        try:
+            import sys as _sys
+            if 'J:/Under Development/AI Surveyor' not in _sys.path:
+                _sys.path.insert(0, 'J:/Under Development/AI Surveyor')
+            from brain.pipeline import register_inquiry as _reg_inquiry
+            _reg_inquiry(
+                job_number   = str(seq),
+                client_name  = client_name,
+                job_type     = job_type,
+                inquiry_text = f"{notes} {address}".strip(),
+                inquiry_id   = inquiry_id,
+                upc          = upc,
+            )
+        except Exception as _pe:
+            print(f"[inquiry] pipeline register skipped: {_pe}", flush=True)
+
         return jsonify({
             "success":              True,
             "inquiry_id":           inquiry_id,
             "estimated_complexity": complexity,
             "kg_info":              kg_info,
+            "auto_research":        cfg.get("auto_research_on_inquiry", True),
         })
 
     except Exception as e:
@@ -6140,7 +6884,73 @@ def _auto_research_worker(inquiry_id: str, client_name: str, job_type: str, upc:
             else:
                 _log("  Skipped — not required for this job type")
 
+            # ── STEP 3b: Chain of Title (BDY-N, SE only) ────────────────────
+            if wf.get('needs_chain'):
+                _log("Step 3b: Tracing chain of title...")
+                session_data = load_research(job_number, client_name, job_type)
+                client_subj = next((s for s in session_data["subjects"] if s["type"] == "client"), None)
+
+                # Get the grantor from the deed we just saved
+                start_grantor = ""
+                if client_subj:
+                    start_grantor = (
+                        client_subj.get("detail", {}).get("grantor", "") or
+                        client_subj.get("detail", {}).get("grantee", "")  # fallback
+                    )
+
+                if start_grantor:
+                    chain = []
+                    seen_docs = set()
+                    current_name = start_grantor.split(",")[0].strip()  # last name for search
+
+                    for hop in range(8):  # max 8 hops
+                        deed_r = _auto_search_deed(current_name, job_type)
+                        if not deed_r or not deed_r.get("best"):
+                            _log(f"  Chain: hop {hop+1} — no result for '{current_name}'")
+                            break
+                        best = deed_r["best"]
+                        doc_no = best.get("doc_no", "")
+                        if doc_no in seen_docs:
+                            _log(f"  Chain: cycle detected at {doc_no} — stopping")
+                            break
+                        seen_docs.add(doc_no)
+                        entry = {
+                            "hop":     hop + 1,
+                            "doc_no":  doc_no,
+                            "grantor": best.get("grantor", ""),
+                            "grantee": best.get("grantee", ""),
+                            "date":    best.get("date", ""),
+                            "location": best.get("location", ""),
+                        }
+                        chain.append(entry)
+                        _log(f"  Chain hop {hop+1}: {doc_no} | {entry['grantor']} → {entry['grantee']}")
+
+                        # Check for plat reference in description (stop — we hit source)
+                        if any(kw in best.get("description", "").lower()
+                               for kw in ("plat", "cabinet", "subdivision", "lot ", "block ")):
+                            _log(f"  Chain: plat reference found — stopping at hop {hop+1}")
+                            break
+
+                        # Next grantor is the current deed's grantor
+                        next_grantor = best.get("grantor", "")
+                        if not next_grantor:
+                            break
+                        current_name = next_grantor.split(",")[0].strip()
+                        import time as _time
+                        _time.sleep(0.4)
+
+                    session_data["chain_of_title"] = {
+                        "start_grantor": start_grantor,
+                        "hops": chain,
+                        "complete": len(chain) > 0,
+                    }
+                    save_research(job_number, client_name, job_type, session_data)
+                    _log(f"  ✓ Chain of title: {len(chain)} hop(s) recorded")
+                else:
+                    _log("  Chain: no grantor found in client deed — skipping")
+
             # ── STEP 4: Adjoiner Discovery ──────────────────────────────────
+
             _update_inquiry(inquiry_id, {"step": 4})
 
             adj_mode = wf['needs_adjoiners']
@@ -6679,6 +7489,43 @@ if __name__ == "__main__":
     print("  Local:   http://localhost:5000")
     print(f"  Network: http://{_lan}:5000")
     print("=" * 60)
+
+    # ── Background auto-login to NM Clerk portal ──────────────────────────────
+    # Runs in a daemon thread so it doesn't delay server startup.
+    # Uses firstnm_user / firstnm_pass from config.json (saved on "Remember me").
+    def _startup_login():
+        import time as _t
+        _t.sleep(2)          # let Flask fully bind before hitting the network
+        cfg = load_config()
+        user = cfg.get("firstnm_user", "")
+        if not user:
+            print("[portal] No saved credentials — skipping auto-login", flush=True)
+            return
+        print(f"[portal] Auto-logging in as {user}...", flush=True)
+        ok = _auto_login()
+        if ok:
+            print(f"[portal] ✓ Portal session established ({user})", flush=True)
+        else:
+            print(f"[portal] ✗ Auto-login failed — manual login required", flush=True)
+
+    import threading as _thr
+    _thr.Thread(target=_startup_login, daemon=True).start()
+
+    # ── BRAIN: Start autonomous pipeline orchestrator ──────────────────────
+    def _start_pipeline():
+        import time as _t; _t.sleep(3)
+        try:
+            import sys as _sys
+            if 'J:/Under Development/AI Surveyor' not in _sys.path:
+                _sys.path.insert(0, 'J:/Under Development/AI Surveyor')
+            from brain.pipeline import start_orchestrator
+            start_orchestrator(poll_interval_sec=300)  # checks every 5 min
+            print("[brain] ✓ Pipeline orchestrator started", flush=True)
+        except Exception as _be:
+            print(f"[brain] Pipeline orchestrator failed: {_be}", flush=True)
+
+    _thr.Thread(target=_start_pipeline, daemon=True).start()
+
     # Cabinet index already initialized at module-import time (see above).
     # No need to re-init here — this ensures desktop_app.py and direct
     # `python app.py` launches both have the cabinet index loaded.

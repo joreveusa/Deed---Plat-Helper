@@ -10,9 +10,33 @@ subsystem is missing — the app never crashes from AI issues.
 
 from flask import Blueprint, request, jsonify
 from loguru import logger
-
+import json
+import os
+from datetime import datetime
+from pathlib import Path
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/api/ai')
+
+MERGE_LOG = Path(__file__).parent.parent / 'data' / 'ai' / 'merge_audit_log.jsonl'
+
+
+def _log_merge(keep_id, keep_name, merge_id, merge_name, similarity, trigger):
+    """Append one merge event to the audit log."""
+    try:
+        MERGE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            'ts':         datetime.now().isoformat(),
+            'trigger':    trigger,
+            'keep_id':    keep_id,
+            'keep_name':  keep_name,
+            'merge_id':   merge_id,
+            'merge_name': merge_name,
+            'similarity': round(float(similarity), 4) if similarity is not None else None,
+        }
+        with open(MERGE_LOG, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry) + '\n')
+    except Exception as e:
+        logger.warning(f'Could not write merge audit log: {e}')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -566,8 +590,8 @@ def ai_graph_duplicates():
 def ai_graph_merge():
     """Merge duplicate person nodes (entity resolution).
 
-    Body: { "pairs": [{"keep": node_id, "merge": node_id}, ...] }
-    OR:   { "auto": true, "threshold": 0.92 }  — auto-merge high-confidence dupes.
+    Body: { "pairs": [{"keep": node_id, "merge": node_id, "similarity": float, "name_a": str, "name_b": str}] }
+    OR:   { "auto": true, "threshold": 0.92 }  -- auto-merge high-confidence dupes.
 
     Returns: { merged: int, skipped: int, graph_nodes: int, graph_edges: int }
     """
@@ -580,39 +604,70 @@ def ai_graph_merge():
     data = request.get_json(silent=True) or {}
     merged = 0
     skipped = 0
+    trigger = 'auto' if data.get('auto') else 'ui'
 
-    if data.get("auto"):
+    if data.get('auto'):
         # Auto-merge: find all pairs above threshold and merge them
-        threshold = float(data.get("threshold", 0.92))
+        threshold = float(data.get('threshold', 0.92))
         pairs = kg.find_duplicates(threshold=threshold, limit=500)
     else:
-        pairs = data.get("pairs", [])
+        pairs = data.get('pairs', [])
 
     for pair in pairs:
-        keep_id = pair.get("keep", "")
-        merge_id = pair.get("merge", "")
+        keep_id  = pair.get('keep', '')
+        merge_id = pair.get('merge', '')
         if not keep_id or not merge_id or keep_id == merge_id:
             skipped += 1
             continue
         try:
+            # Capture names before merge (merge node will be deleted)
+            keep_name  = (kg.G.nodes[keep_id].get('name', keep_id)
+                          if kg.G.has_node(keep_id) else keep_id)
+            merge_name = (kg.G.nodes[merge_id].get('name', merge_id)
+                          if kg.G.has_node(merge_id) else merge_id)
+            similarity = pair.get('similarity') or pair.get('score')
+
             ok = kg.merge_duplicates(keep_id, merge_id)
             if ok:
+                _log_merge(keep_id, keep_name, merge_id, merge_name, similarity, trigger)
                 merged += 1
             else:
                 skipped += 1
         except Exception as e:
-            logger.warning(f"Merge failed ({keep_id} ← {merge_id}): {e}")
+            logger.warning(f'Merge failed ({keep_id} <- {merge_id}): {e}')
             skipped += 1
 
     if merged > 0:
         kg.save()
 
     return jsonify({
-        "merged": merged,
-        "skipped": skipped,
-        "graph_nodes": kg.G.number_of_nodes(),
-        "graph_edges": kg.G.number_of_edges(),
+        'merged':      merged,
+        'skipped':     skipped,
+        'graph_nodes': kg.G.number_of_nodes(),
+        'graph_edges': kg.G.number_of_edges(),
     })
+
+
+@ai_bp.route('/graph/merge-log', methods=['GET'])
+def ai_graph_merge_log():
+    """Return the merge audit log. Query params: limit (default 100), offset (default 0)."""
+    limit  = int(request.args.get('limit',  100))
+    offset = int(request.args.get('offset', 0))
+    if not MERGE_LOG.exists():
+        return jsonify({'entries': [], 'total': 0})
+    entries = []
+    with open(MERGE_LOG, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except Exception:
+                    pass
+    total = len(entries)
+    page  = entries[offset: offset + limit]
+    return jsonify({'entries': page, 'total': total})
+
 
 
 @ai_bp.route('/graph/visualize', methods=['GET'])
@@ -962,3 +1017,604 @@ def ai_graph_visualize():
             <h2>⚠️ Visualization Error</h2><pre>{traceback.format_exc()}</pre></body></html>"""
 
 
+
+
+@ai_bp.route('/graph/entity-review', methods=['GET'])
+def ai_graph_entity_review():
+    """Full-page entity resolution review UI - Deep Space theme."""
+    return open(__file__.replace('routes.py', 'entity_review.html'), encoding='utf-8').read()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GAP 7: ML PERFORMANCE METRICS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@ai_bp.route('/performance', methods=['GET'])
+def ai_performance():
+    """
+    ML performance metrics — model accuracy trends, training history, drift events.
+
+    Reads:
+      - J:/Under Development/AI Surveyor/data/models/training_history.json
+      - data/ai/prediction_accuracy.jsonl
+      - J:/Under Development/AI Surveyor/data/ml_accuracy_report.json (if run)
+
+    Returns: {
+      training_history: [...],
+      accuracy: { overall_mae, recent_mae, trend, improving, by_job_type },
+      models: { adj: {...}, cabinet: {...} },
+      drift_events: [...],
+      predictions_logged: int,
+    }
+    """
+    result = {
+        "available": True,
+        "generated": datetime.now().isoformat(),
+        "training_history": [],
+        "accuracy": {},
+        "models": {},
+        "drift_events": [],
+        "predictions_logged": 0,
+    }
+
+    # ── Training history (from AI Surveyor models) ────────────────────────
+    history_paths = [
+        Path("J:/Under Development/AI Surveyor/data/models/training_history.json"),
+        Path(__file__).parent.parent / "data" / "models" / "training_history.json",
+    ]
+    for hp in history_paths:
+        if hp.exists():
+            try:
+                history = json.loads(hp.read_text(encoding="utf-8"))
+                result["training_history"] = history[-50:]  # last 50 runs
+                # Extract latest model metrics
+                if history:
+                    latest = history[-1]
+                    result["models"] = latest.get("metrics", {})
+                    # Collect drift events
+                    result["drift_events"] = [
+                        h for h in history
+                        if h.get("drift", {}).get("drifted")
+                    ][-10:]
+            except Exception as e:
+                logger.debug(f"[performance] training history read error: {e}")
+            break
+
+    # ── Accuracy report (from weekend_learn) ─────────────────────────────
+    acc_report_paths = [
+        Path("J:/Under Development/AI Surveyor/data/ml_accuracy_report.json"),
+        Path(__file__).parent.parent / "data" / "ml_accuracy_report.json",
+    ]
+    for arp in acc_report_paths:
+        if arp.exists():
+            try:
+                result["accuracy"] = json.loads(arp.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+            break
+
+    # ── Raw prediction accuracy log ───────────────────────────────────────
+    acc_log = Path(__file__).parent.parent / "data" / "ai" / "prediction_accuracy.jsonl"
+    if acc_log.exists():
+        try:
+            entries = []
+            with open(acc_log, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            entries.append(json.loads(line))
+                        except Exception:
+                            pass
+            result["predictions_logged"] = len(entries)
+
+            # If accuracy report doesn't exist yet, compute inline
+            if not result["accuracy"] and entries:
+                errors = [e.get("error", 0) for e in entries]
+                overall_mae = round(sum(errors) / len(errors), 3) if errors else 0
+                recent = errors[-30:]
+                recent_mae = round(sum(recent) / len(recent), 3) if recent else 0
+                result["accuracy"] = {
+                    "total_predictions": len(entries),
+                    "overall_mae": overall_mae,
+                    "recent_mae": recent_mae,
+                    "note": "MAE = mean abs error in predicted vs actual adjoiners",
+                }
+        except Exception as e:
+            logger.debug(f"[performance] accuracy log read error: {e}")
+
+    return jsonify(result)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CORRECTION FEEDBACK LOOP
+# ══════════════════════════════════════════════════════════════════════════════
+
+CORRECTION_LOG = Path(__file__).parent.parent / 'data' / 'ai' / 'survey_corrections.jsonl'
+
+@ai_bp.route('/correction', methods=['POST'])
+def ai_log_correction():
+    """
+    Record a surveyor correction — what the AI produced vs. what was correct.
+
+    Purpose: Every correction becomes a high-weight training example.
+    The system learns from its mistakes automatically via weekend_learn.py.
+
+    POST body (JSON):
+    {
+        "job_number":      "2942",
+        "correction_type": "bearing|area|adjoiner_count|monument|closure|other",
+        "field":           "call_3_bearing",       # which specific field was wrong
+        "ai_value":        "N45°30'00\"E",          # what the AI said
+        "correct_value":   "N44°58'32\"E",          # what was actually correct
+        "magnitude":       "0.026",                 # magnitude of error (optional)
+        "notes":           "Off by 1'28\" — old deed uses astronomic north",
+        "job_type":        "BDY",
+        "client_name":     "Garcia Sandoval",
+        "surveyor":        "Tina"
+    }
+    """
+    try:
+        data = request.get_json(force=True) or {}
+        required = ("job_number", "correction_type", "correct_value")
+        missing  = [f for f in required if not data.get(f)]
+        if missing:
+            return jsonify({"success": False, "error": f"Missing: {missing}"}), 400
+
+        entry = {
+            "ts":              datetime.now().isoformat(),
+            "job_number":      str(data.get("job_number", "")),
+            "correction_type": data.get("correction_type", "other"),
+            "field":           data.get("field", ""),
+            "ai_value":        str(data.get("ai_value", "")),
+            "correct_value":   str(data.get("correct_value", "")),
+            "magnitude":       data.get("magnitude"),
+            "notes":           data.get("notes", ""),
+            "job_type":        data.get("job_type", ""),
+            "client_name":     data.get("client_name", ""),
+            "surveyor":        data.get("surveyor", ""),
+            # Weight: surveyor-confirmed corrections are 5× normal training data
+            "training_weight": 5.0,
+        }
+
+        CORRECTION_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(CORRECTION_LOG, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry) + '\n')
+
+        logger.info(
+            f"[correction] job={entry['job_number']}  "
+            f"type={entry['correction_type']}  "
+            f"was={entry['ai_value']!r}  correct={entry['correct_value']!r}"
+        )
+        return jsonify({"success": True, "logged": True, "entry": entry})
+
+    except Exception as e:
+        logger.error(f"[correction] {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@ai_bp.route('/corrections/summary', methods=['GET'])
+def ai_corrections_summary():
+    """
+    Summary of all logged corrections — for the dashboard.
+
+    Returns: {
+        total, by_type, by_job_type, recent: [...last 20],
+        most_common_error, trend_improving: bool
+    }
+    """
+    try:
+        if not CORRECTION_LOG.exists():
+            return jsonify({"total": 0, "by_type": {}, "recent": [],
+                            "available": True, "note": "No corrections logged yet"})
+
+        corrections = []
+        with open(CORRECTION_LOG, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        corrections.append(json.loads(line))
+                    except Exception:
+                        pass
+
+        if not corrections:
+            return jsonify({"total": 0, "by_type": {}, "recent": [], "available": True})
+
+        from collections import Counter
+        by_type     = dict(Counter(c.get("correction_type", "other") for c in corrections))
+        by_job_type = dict(Counter(c.get("job_type", "?") for c in corrections))
+
+        # Trend: is the rate of corrections decreasing over time?
+        half = len(corrections) // 2
+        trend_improving = len(corrections[:half]) > len(corrections[half:]) if half > 0 else None
+
+        # Most common error field
+        fields       = [c.get("field") for c in corrections if c.get("field")]
+        most_common  = Counter(fields).most_common(1)[0] if fields else ("none", 0)
+
+        return jsonify({
+            "available":       True,
+            "total":           len(corrections),
+            "by_type":         by_type,
+            "by_job_type":     by_job_type,
+            "most_common_error": {"field": most_common[0], "count": most_common[1]},
+            "trend_improving": trend_improving,
+            "recent":          corrections[-20:][::-1],  # newest first
+        })
+
+    except Exception as e:
+        logger.error(f"[corrections/summary] {e}")
+        return jsonify({"available": False, "error": str(e)}), 500
+
+
+@ai_bp.route('/monuments/nearby', methods=['GET'])
+def ai_monuments_nearby():
+    """
+    Query the monument database for monuments near a lat/lon or State Plane coordinate.
+
+    GET params:
+        lat, lon         — WGS84 (preferred)
+        x_sp, y_sp       — NM State Plane West ftUS (alternative)
+        radius_ft        — search radius in feet (default 200)
+        limit            — max results (default 20)
+    """
+    try:
+        import sys as _sys
+        surveyor_path = 'J:/Under Development/AI Surveyor'
+        if surveyor_path not in _sys.path:
+            _sys.path.insert(0, surveyor_path)
+        from plat.monuments import MonumentDB
+
+        db = MonumentDB()
+        radius_ft = float(request.args.get('radius_ft', 200))
+        limit     = int(request.args.get('limit', 20))
+
+        lat  = request.args.get('lat')
+        lon  = request.args.get('lon')
+        x_sp = request.args.get('x_sp')
+        y_sp = request.args.get('y_sp')
+
+        if lat and lon:
+            results = db.find_near_latlon(float(lat), float(lon), radius_ft, limit)
+        elif x_sp and y_sp:
+            results = db.find_near(float(x_sp), float(y_sp), radius_ft, limit)
+        else:
+            return jsonify({"error": "Provide lat/lon or x_sp/y_sp"}), 400
+
+        return jsonify({
+            "available": True,
+            "count":     len(results),
+            "radius_ft": radius_ft,
+            "monuments": results,
+        })
+
+    except Exception as e:
+        logger.error(f"[monuments/nearby] {e}")
+        return jsonify({"available": False, "error": str(e)}), 500
+
+
+@ai_bp.route('/monuments/stats', methods=['GET'])
+def ai_monuments_stats():
+    """Monument database statistics."""
+    try:
+        import sys as _sys
+        if 'J:/Under Development/AI Surveyor' not in _sys.path:
+            _sys.path.insert(0, 'J:/Under Development/AI Surveyor')
+        from plat.monuments import MonumentDB
+        return jsonify({"available": True, **MonumentDB().stats()})
+    except Exception as e:
+        return jsonify({"available": False, "error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIELD DATA INGEST
+# ══════════════════════════════════════════════════════════════════════════════
+
+@ai_bp.route('/field-data/ingest', methods=['POST'])
+def ai_field_data_ingest():
+    """
+    Ingest raw field data from a total station or GPS data collector.
+
+    Accepts:
+      • multipart/form-data  with file= field (RW5, CSV, GSI, SDR)
+      • application/json     with { text, fmt, job_number, job_type, job_date }
+      • text/plain           raw file content
+
+    Returns:
+    {
+        success: bool,
+        format_detected: str,
+        total_points: int,
+        monuments: int,         # set + found
+        topo: int,
+        control: int,
+        ingested_to_db: int,    # monument records added to DB
+        traverse_closure: { precision, error_ft, ok },
+        desc_counts: { CODE: count, ... },
+        points: [ { pt, n, e, z, desc, desc_full, mon_type, condition }, ... ]
+    }
+    """
+    try:
+        import sys as _sys
+        if 'J:/Under Development/AI Surveyor' not in _sys.path:
+            _sys.path.insert(0, 'J:/Under Development/AI Surveyor')
+
+        from plat.field_ingest import (
+            parse_field_data, detect_format,
+            ingest_monuments_from_field_points,
+            compute_traverse_closure, ingest_report,
+        )
+
+        # ── Extract raw text from request ────────────────────────────────
+        text       = ""
+        job_number = ""
+        job_type   = ""
+        job_date   = ""
+        fmt        = "auto"
+
+        ct = request.content_type or ""
+        if "multipart" in ct:
+            f = request.files.get("file")
+            if not f:
+                return jsonify({"success": False, "error": "No file in request"}), 400
+            text = f.read().decode("utf-8", errors="replace")
+            # Hint from filename extension
+            ext = Path(f.filename).suffix.lower()
+            if ext in (".rw5", ".raw", ".r5"):   fmt = "rw5"
+            elif ext == ".gsi":                   fmt = "gsi"
+            elif ext == ".sdr":                   fmt = "sdr"
+            elif ext in (".csv", ".txt"):         fmt = "csv"
+            job_number = request.form.get("job_number", "")
+            job_type   = request.form.get("job_type",   "")
+            job_date   = request.form.get("job_date",   "")
+        elif "json" in ct:
+            body       = request.get_json(force=True) or {}
+            text       = body.get("text", "")
+            fmt        = body.get("fmt",  "auto")
+            job_number = str(body.get("job_number", ""))
+            job_type   = body.get("job_type",  "")
+            job_date   = body.get("job_date",  "")
+        else:
+            # Plain text body
+            text = request.get_data(as_text=True)
+
+        if not text.strip():
+            return jsonify({"success": False, "error": "No field data content"}), 400
+
+        # ── Parse ────────────────────────────────────────────────────────
+        fmt_detected = fmt if fmt != "auto" else detect_format(text)
+        points = parse_field_data(text=text, fmt=fmt_detected)
+
+        if not points:
+            return jsonify({
+                "success": False,
+                "error": f"No points parsed from {fmt_detected.upper()} data",
+                "format_detected": fmt_detected,
+            }), 422
+
+        # ── Monument DB ingest ───────────────────────────────────────────
+        ingested = 0
+        if job_number:
+            ingested = ingest_monuments_from_field_points(
+                points, job_number=job_number,
+                job_type=job_type, survey_date=job_date,
+            )
+
+        # ── Reports ──────────────────────────────────────────────────────
+        rep      = ingest_report(points)
+        closure  = compute_traverse_closure(points)
+
+        logger.info(
+            f"[field-data/ingest] job={job_number or '?'}  fmt={fmt_detected}  "
+            f"pts={rep['total']}  monuments={rep['monuments']}  "
+            f"ingested={ingested}"
+        )
+
+        return jsonify({
+            "success":          True,
+            "format_detected":  fmt_detected,
+            "job_number":       job_number,
+            "total_points":     rep["total"],
+            "monuments":        rep["monuments"],
+            "set":              rep["set"],
+            "found":            rep["found"],
+            "not_found":        rep["not_found"],
+            "topo":             rep["topo"],
+            "control":          rep["control"],
+            "ingested_to_db":   ingested,
+            "elev_range":       rep["elev_range"],
+            "traverse_closure": closure,
+            "desc_counts":      rep["desc_counts"],
+            "points": [p.to_dict() for p in points[:500]],  # cap for payload size
+        })
+
+    except Exception as e:
+        logger.error(f"[field-data/ingest] {e}")
+        import traceback as _tb
+        return jsonify({"success": False, "error": str(e),
+                        "traceback": _tb.format_exc()[-500:]}), 500
+
+
+@ai_bp.route('/field-data/desc-codes', methods=['GET'])
+def ai_field_desc_codes():
+    """Return the description code registry for the UI autocomplete."""
+    try:
+        import sys as _sys
+        if 'J:/Under Development/AI Surveyor' not in _sys.path:
+            _sys.path.insert(0, 'J:/Under Development/AI Surveyor')
+        from plat.field_ingest import DESC_CODES, MONUMENT_CODES, TOPO_CODES, CONTROL_CODES
+        return jsonify({
+            "available":     True,
+            "codes":         DESC_CODES,
+            "monument_codes": list(MONUMENT_CODES),
+            "topo_codes":    list(TOPO_CODES),
+            "control_codes": list(CONTROL_CODES),
+        })
+    except Exception as e:
+        return jsonify({"available": False, "error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BRAIN — Pipeline Orchestrator, QC, AI Decision Log
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _brain_path():
+    import sys as _sys
+    p = 'J:/Under Development/AI Surveyor'
+    if p not in _sys.path:
+        _sys.path.insert(0, p)
+
+
+@ai_bp.route('/pipeline/status', methods=['GET'])
+def ai_pipeline_status():
+    """GET /api/ai/pipeline/status — all active jobs and their pipeline stage."""
+    try:
+        _brain_path()
+        from brain.pipeline import pipeline_status, start_orchestrator
+        start_orchestrator(poll_interval_sec=300)
+        return jsonify({"success": True, **pipeline_status()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@ai_bp.route('/pipeline/job/<job_number>', methods=['GET'])
+def ai_pipeline_job(job_number):
+    """GET /api/ai/pipeline/job/<n> — state + AI timeline for one job."""
+    try:
+        _brain_path()
+        from brain.pipeline import get_job
+        from brain.ai_log import job_timeline
+        return jsonify({
+            "success":  True,
+            "job":      get_job(str(job_number)),
+            "timeline": job_timeline(str(job_number)),
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@ai_bp.route('/pipeline/register', methods=['POST'])
+def ai_pipeline_register():
+    """POST /api/ai/pipeline/register — register inquiry with orchestrator."""
+    try:
+        _brain_path()
+        body = request.get_json(force=True) or {}
+        from brain.pipeline import register_inquiry, start_orchestrator
+        start_orchestrator(poll_interval_sec=300)
+        job = register_inquiry(
+            job_number   = str(body.get("job_number", "")),
+            client_name  = body.get("client_name", ""),
+            job_type     = body.get("job_type", ""),
+            inquiry_text = body.get("inquiry_text", ""),
+            inquiry_id   = body.get("inquiry_id", ""),
+            upc          = body.get("upc", ""),
+            job_date     = body.get("job_date", ""),
+        )
+        return jsonify({"success": True, "job": job})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@ai_bp.route('/pipeline/advance', methods=['POST'])
+def ai_pipeline_advance():
+    """POST /api/ai/pipeline/advance — manually advance a job stage."""
+    try:
+        _brain_path()
+        body       = request.get_json(force=True) or {}
+        job_number = str(body.get("job_number", ""))
+        stage      = body.get("stage", "")
+        note       = body.get("note", "Manual override")
+        if not job_number or not stage:
+            return jsonify({"success": False, "error": "job_number and stage required"}), 400
+        from brain.pipeline import advance_stage, get_job
+        advance_stage(job_number, stage, note)
+        return jsonify({"success": True, "job": get_job(job_number)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@ai_bp.route('/ai-decisions', methods=['GET'])
+def ai_decisions_log():
+    """GET /api/ai/ai-decisions?job=2942&stage=qc_check&limit=50"""
+    try:
+        _brain_path()
+        from brain.ai_log import get_decisions, stage_summary
+        job_number  = request.args.get("job", "")
+        stage       = request.args.get("stage", "")
+        limit       = int(request.args.get("limit", 100))
+        errors_only = request.args.get("errors", "").lower() == "true"
+        summary_hrs = float(request.args.get("summary_hours", 0))
+        if summary_hrs:
+            return jsonify({"success": True, "summary": stage_summary(summary_hrs)})
+        decisions = get_decisions(job_number=job_number, stage=stage,
+                                  limit=limit, errors_only=errors_only)
+        return jsonify({"success": True, "count": len(decisions), "decisions": decisions})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@ai_bp.route('/qc/<job_number>', methods=['GET', 'POST'])
+def ai_run_qc(job_number):
+    """GET last QC report / POST to run QC now for a job."""
+    try:
+        _brain_path()
+        from brain.quality_check import run_qc
+        from brain.pipeline import get_job, update_job
+        job = get_job(str(job_number))
+
+        if request.method == 'GET':
+            qc = job.get("qc_report")
+            if qc:
+                return jsonify({"success": True, "qc": qc})
+            return jsonify({"success": False, "error": "No QC report yet"})
+
+        body        = request.get_json(force=True) or {}
+        job_type    = body.get("job_type", job.get("job_type", "BDY"))
+        client_name = body.get("client_name", job.get("client_name", ""))
+        qc = run_qc(
+            job_number      = str(job_number),
+            job_type        = job_type,
+            client_name     = client_name,
+            closure_results = body.get("closure", []),
+            area_results    = body.get("area", []),
+            adjoiner_report = body.get("adjoiner_report", {}),
+            field_closure   = body.get("field_closure", {}),
+            job_date        = body.get("job_date", ""),
+        )
+        update_job(str(job_number), qc_report=qc.to_dict(), qc_score=qc.score)
+        return jsonify({"success": True, "passed": qc.passed, "score": qc.score,
+                        "qc": qc.to_dict(), "summary": qc.summary_text()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@ai_bp.route('/reconcile', methods=['POST'])
+def ai_reconcile():
+    """POST /api/ai/reconcile — compare field monuments to deed endpoints."""
+    try:
+        _brain_path()
+        body       = request.get_json(force=True) or {}
+        job_number = str(body.get("job_number", ""))
+        calls      = body.get("calls", [])
+        coords     = body.get("coords", [])
+        raw_pts    = body.get("field_points", [])
+        if not calls or not coords or not raw_pts:
+            return jsonify({"success": False,
+                            "error": "calls, coords, and field_points required"}), 400
+        from plat.field_ingest import _make_point
+        pts = []
+        for p in raw_pts:
+            try:
+                pts.append(_make_point(str(p.get("pt","")), float(p.get("n",0)),
+                                       float(p.get("e",0)), float(p.get("z",0)),
+                                       str(p.get("desc",""))))
+            except Exception:
+                pass
+        from brain.reconcile import reconcile
+        rep = reconcile(calls=calls, field_points=pts, deed_coords=coords,
+                        job_number=job_number)
+        return jsonify({"success": True, "overall_ok": rep.overall_ok,
+                        "summary": rep.summary(), "report": rep.to_dict()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500

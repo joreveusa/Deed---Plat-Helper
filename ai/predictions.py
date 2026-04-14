@@ -38,9 +38,19 @@ except ImportError:
 # ── Config ──────────────────────────────────────────────────────────────────
 
 _AI_CFG = load_ai_config()
-_MODELS_DIR = AI_DATA_DIR / "models"
-_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 _MIN_TRAINING_JOBS = _AI_CFG.get("min_training_jobs", 30)
+
+# ── Model directory: prefer AI Surveyor's models (single source of truth) ──
+# AI Surveyor's nightly retrain updates data/models/ — we use those.
+# Falls back to our own data/ai/models/ if AI Surveyor isn't present.
+def _resolve_models_dir() -> Path:
+    ai_surveyor_models = Path("J:/Under Development/AI Surveyor/data/models")
+    if ai_surveyor_models.exists():
+        return ai_surveyor_models
+    return AI_DATA_DIR / "models"
+
+_MODELS_DIR = _resolve_models_dir()
+_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ── Job type encoding ──────────────────────────────────────────────────────
