@@ -761,6 +761,60 @@ def ai_brain_dashboard():
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
 
+
+@app.route("/api/nova/law", methods=["POST"])
+def api_nova_law():
+    """Surveying law lookup — bypasses LLM, uses brain/surveying_law.py directly.
+
+    Body:     { "query": "what monument do I need to set" }
+    Response: { "success": bool, "answer": str, "law_source": true }
+    """
+    try:
+        data     = request.get_json(silent=True) or {}
+        question = (data.get("query") or data.get("text") or "").strip()
+        if not question:
+            return jsonify({"success": False, "error": "query is required"}), 400
+        import sys as _sys
+        if "J:/Under Development/AI Surveyor" not in _sys.path:
+            _sys.path.insert(0, "J:/Under Development/AI Surveyor")
+        from brain.surveying_law import law as _law_kb
+        answer = _law_kb.query(question)
+        return jsonify({
+            "success":    True,
+            "query":      question,
+            "answer":     answer,
+            "law_source": True,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/nova/law/briefing", methods=["GET"])
+def api_nova_law_briefing():
+    """Full NM surveying law briefing."""
+    try:
+        import sys as _sys
+        if "J:/Under Development/AI Surveyor" not in _sys.path:
+            _sys.path.insert(0, "J:/Under Development/AI Surveyor")
+        from brain.surveying_law import law as _law_kb
+        return jsonify({"success": True, "briefing": _law_kb.full_nm_briefing()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/nova/law/priority-of-calls", methods=["GET"])
+def api_nova_priority_of_calls():
+    """Priority of calls evidence hierarchy."""
+    try:
+        import sys as _sys
+        if "J:/Under Development/AI Surveyor" not in _sys.path:
+            _sys.path.insert(0, "J:/Under Development/AI Surveyor")
+        from brain.surveying_law import law as _law_kb
+        return jsonify({"success": True, "priority_of_calls": _law_kb.priority_of_calls()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route("/app.js")
 def serve_appjs():
     # No-cache headers are applied by the @after_request hook below
